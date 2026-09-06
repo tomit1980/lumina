@@ -18,3 +18,35 @@ export async function seedRoles(): Promise<void> {
   );
   if (error) throw new Error(`seedRoles failed: ${error.message}`);
 }
+
+/** Creates the conversations row and its channel row together. */
+export async function createChannel(opts: {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  createdBy: string;
+}): Promise<void> {
+  const conv = await serviceClient
+    .from("conversations").insert({ id: opts.id, kind: "channel" });
+  if (conv.error) throw new Error(`createChannel conversation failed: ${conv.error.message}`);
+
+  const channel = await serviceClient.from("channels").insert({
+    id: opts.id,
+    name: opts.name,
+    description: "",
+    is_private: opts.isPrivate,
+    is_team: false,
+    created_by: opts.createdBy,
+  });
+  if (channel.error) throw new Error(`createChannel failed: ${channel.error.message}`);
+}
+
+export async function addChannelMember(
+  channelId: string,
+  userId: string,
+  level: "viewer" | "editor"
+): Promise<void> {
+  const { error } = await serviceClient
+    .from("channel_members").insert({ channel_id: channelId, user_id: userId, level });
+  if (error) throw new Error(`addChannelMember failed: ${error.message}`);
+}

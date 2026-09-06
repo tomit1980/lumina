@@ -39,6 +39,194 @@ export type Database = {
   }
   public: {
     Tables: {
+      channel_members: {
+        Row: {
+          channel_id: string
+          level: string
+          user_id: string
+        }
+        Insert: {
+          channel_id: string
+          level?: string
+          user_id: string
+        }
+        Update: {
+          channel_id?: string
+          level?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "channel_members_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "channel_members_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      channels: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          description: string
+          id: string
+          is_private: boolean
+          is_team: boolean
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          id: string
+          is_private?: boolean
+          is_team?: boolean
+          name: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          id?: string
+          is_private?: boolean
+          is_team?: boolean
+          name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "channels_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "channels_id_fkey"
+            columns: ["id"]
+            isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversations: {
+        Row: {
+          id: string
+          kind: string
+        }
+        Insert: {
+          id: string
+          kind: string
+        }
+        Update: {
+          id?: string
+          kind?: string
+        }
+        Relationships: []
+      }
+      dm_members: {
+        Row: {
+          dm_id: string
+          user_id: string
+        }
+        Insert: {
+          dm_id: string
+          user_id: string
+        }
+        Update: {
+          dm_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dm_members_dm_id_fkey"
+            columns: ["dm_id"]
+            isOneToOne: false
+            referencedRelation: "dms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dm_members_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dms: {
+        Row: {
+          created_at: string
+          id: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dms_id_fkey"
+            columns: ["id"]
+            isOneToOne: true
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      messages: {
+        Row: {
+          author_id: string | null
+          content: string
+          conversation_id: string
+          created_at: string
+          edited_at: string | null
+          id: string
+        }
+        Insert: {
+          author_id?: string | null
+          content?: string
+          conversation_id: string
+          created_at?: string
+          edited_at?: string | null
+          id: string
+        }
+        Update: {
+          author_id?: string | null
+          content?: string
+          conversation_id?: string
+          created_at?: string
+          edited_at?: string | null
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "messages_author_id_fkey"
+            columns: ["author_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           color: string
@@ -80,6 +268,39 @@ export type Database = {
           },
         ]
       }
+      reactions: {
+        Row: {
+          emoji: string
+          message_id: string
+          user_id: string
+        }
+        Insert: {
+          emoji: string
+          message_id: string
+          user_id: string
+        }
+        Update: {
+          emoji?: string
+          message_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reactions_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reactions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       roles: {
         Row: {
           color: string
@@ -115,6 +336,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      can_see_conversation: { Args: { conv_id: string }; Returns: boolean }
       has_permission: { Args: { perm: string }; Returns: boolean }
       my_role_id: { Args: never; Returns: string }
     }
