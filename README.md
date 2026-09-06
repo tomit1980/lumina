@@ -43,7 +43,13 @@ Roles are **first-class, admin-editable entities** — not hardcoded strings:
 - **Audit trail**: every role/permission change lands in the activity feed.
 - **Delete channels & projects**: anyone with the permission (admins by default) gets a hover **⋯ → Delete** on each sidebar channel/project row — plus the existing chat-header and project-page menus. Deletes are confirmed first and cascade (a channel takes its messages, a project takes its tasks). `#general` is protected.
 
-#### 📎 Files & sharing
+#### 📝 Documents — edit in place
+- **Open any project file** by clicking its name on the Files tab (or from a shared card in chat). Markdown/text files get a **Markdown editor with live preview**; `.xlsx`/`.csv` open as an **editable spreadsheet grid** (sheets, cells, add rows/columns, formulas kept); `.docx` opens in a **Word-style editor** (headings, bold/italic/underline, lists, tables, links). PDFs and images open in a viewer.
+- **New document / New spreadsheet** buttons create files from scratch. Save with the button or ⌘S / Ctrl+S; the activity feed logs "updated X".
+- **Fidelity is basic by design** — there's no document server. Excel keeps values, sheet names and untouched formulas (styles/charts are dropped); Word keeps text, headings, lists, tables and links (images, fonts, page layout, comments and tracked changes are dropped). Download the original if you need those.
+- Same permissions as files: "manage projects" + not view-only to save; everyone who can see the project can open read-only.
+
+### 📎 Files & sharing
 - **Project files** — every project has a **Files** tab (briefs, mockups, reference docs; 3 MB per file, stored in your browser). Task dialogs have the same attachment field.
 - **Share to chat** — hover a project file → **Share** → pick a channel or a person, add an optional note, and it lands in that conversation as a downloadable attachment (images preview inline) with a "from 🎨 Project" link back. Shared files are *references*, not copies: nothing is stored twice, and if the file is later removed from the project the message says so.
 - **Attach in the composer** — the 📎 button in any channel or DM attaches files directly to a message (no text required). Viewer-only members can download but not post.

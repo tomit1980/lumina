@@ -199,6 +199,9 @@ export interface Attachment {
   dataUrl: string;
   uploadedBy: string;
   uploadedAt: number;
+  /** Set when the file was last saved from Lumina's in-app editor. */
+  editedBy?: string;
+  editedAt?: number;
 }
 
 /** A file on a message. Uploaded in the composer → a full Attachment (dataUrl

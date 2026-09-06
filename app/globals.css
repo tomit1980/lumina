@@ -128,3 +128,63 @@
     @apply font-sans;
   }
 }
+
+/* Rendered documents: Markdown preview and the Word editor. */
+.doc-prose {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--foreground);
+}
+.doc-prose > * + * { margin-top: 0.75em; }
+.doc-prose h1 { font-size: 1.75em; font-weight: 700; line-height: 1.2; margin-top: 1.2em; }
+.doc-prose h2 { font-size: 1.4em; font-weight: 650; line-height: 1.25; margin-top: 1.2em; }
+.doc-prose h3 { font-size: 1.15em; font-weight: 600; margin-top: 1em; }
+.doc-prose h4, .doc-prose h5, .doc-prose h6 { font-weight: 600; }
+.doc-prose p { margin: 0; }
+.doc-prose p + p { margin-top: 0.75em; }
+.doc-prose a { color: var(--primary); text-decoration: underline; }
+.doc-prose strong { font-weight: 650; }
+.doc-prose ul, .doc-prose ol { padding-left: 1.5em; }
+.doc-prose ul { list-style: disc; }
+.doc-prose ol { list-style: decimal; }
+.doc-prose li + li { margin-top: 0.25em; }
+.doc-prose blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+.doc-prose code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+  background: var(--muted);
+  padding: 0.1em 0.35em;
+  border-radius: 0.3em;
+}
+.doc-prose pre {
+  background: var(--muted);
+  padding: 0.75em 1em;
+  border-radius: 0.5em;
+  overflow-x: auto;
+}
+.doc-prose pre code { background: none; padding: 0; }
+.doc-prose hr { border: 0; border-top: 1px solid var(--border); }
+.doc-prose img { max-width: 100%; border-radius: 0.5em; }
+.doc-prose table { border-collapse: collapse; width: 100%; }
+.doc-prose th, .doc-prose td {
+  border: 1px solid var(--border);
+  padding: 0.35em 0.6em;
+  text-align: left;
+  vertical-align: top;
+  min-width: 4em;
+  position: relative;
+}
+.doc-prose th { background: var(--muted); font-weight: 600; }
+.doc-prose .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  pointer-events: none;
+}
+.ProseMirror:focus { outline: none; }

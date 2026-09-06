@@ -855,12 +855,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         if (!prev) return s;
         const renamed =
           patch.name !== undefined && patch.name !== prev.name;
-        const attachmentNote =
-          patch.attachments && patch.attachments.length !== prev.attachments.length
-            ? patch.attachments.length > prev.attachments.length
-              ? `attached a file to “${prev.name}”`
-              : `removed an attachment from “${prev.name}”`
-            : null;
+        const edited = patch.attachments?.find((a) => {
+          const before = prev.attachments.find((b) => b.id === a.id);
+          return before !== undefined && before.dataUrl !== a.dataUrl;
+        });
+        const attachmentNote = !patch.attachments
+          ? null
+          : patch.attachments.length > prev.attachments.length
+            ? `attached a file to “${prev.name}”`
+            : patch.attachments.length < prev.attachments.length
+              ? `removed an attachment from “${prev.name}”`
+              : edited
+                ? `updated “${edited.name}” in “${prev.name}”`
+                : null;
         return {
           ...s,
           projects: s.projects.map((p) =>

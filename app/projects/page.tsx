@@ -3,11 +3,21 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Flag, FolderKanban, ListFilter, Lock, Paperclip, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { FilePlus2, FileSpreadsheet, Flag, FolderKanban, ListFilter, Lock, Paperclip, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,11 +34,14 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AttachmentsField } from "@/components/attachments";
+import { DocumentPage } from "@/components/documents/document-page";
 import { Board } from "@/components/kanban/board";
 import { ListView } from "@/components/kanban/list-view";
 import { useUI } from "@/components/ui-context";
-import { useStore } from "@/lib/store";
-import { PRIORITIES, PRIORITY_META, type Priority } from "@/lib/types";
+import { emptySpreadsheetDataUrl, dataUrlByteLength, MIME, textToDataUrl, withExtension } from "@/lib/documents";
+import { fileHref } from "@/lib/routes";
+import { uid, useStore } from "@/lib/store";
+import { PRIORITIES, PRIORITY_META, type Attachment, type Priority } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function EmptyState({
@@ -66,9 +79,11 @@ export default function ProjectPage() {
 }
 
 function ProjectPageInner() {
-  const projectId = useSearchParams().get("id");
+  const params = useSearchParams();
+  const projectId = params.get("id");
+  const fileId = params.get("file");
   const router = useRouter();
-  const { state, can, canSeeProject, projectAccessLevel, updateProject, deleteProject } =
+  const { state, can, canSeeProject, projectAccessLevel, updateProject, deleteProject, currentUser } =
     useStore();
   const { openTaskDialog, openProjectDialog, openAccessDialog, openShareFileDialog } =
     useUI();
@@ -77,6 +92,7 @@ function ProjectPageInner() {
   const [view, setView] = React.useState<"board" | "list" | "files">("board");
   const [assigneeFilter, setAssigneeFilter] = React.useState("all");
   const [priorityFilter, setPriorityFilter] = React.useState("all");
+  const [newFile, setNewFile] = React.useState<"markdown" | "spreadsheet" | null>(null);
 
   const project = state.projects.find((p) => p.id === projectId);
 
@@ -102,6 +118,32 @@ function ProjectPageInner() {
 
   const viewerOnly = projectAccessLevel(project) === "viewer";
   const canManageFiles = canEditProject && !viewerOnly;
+
+  // `?file=` swaps the whole page for the document editor/viewer.
+  if (fileId) {
+    return <DocumentPage project={project} fileId={fileId} canManageFiles={canManageFiles} />;
+  }
+
+  const createFile = async (name: string) => {
+    if (!newFile) return;
+    const isSheet = newFile === "spreadsheet";
+    const fullName = withExtension(name, isSheet ? "xlsx" : "md");
+    const dataUrl = isSheet
+      ? await emptySpreadsheetDataUrl()
+      : textToDataUrl(`# ${fullName.replace(/\.md$/, "")}\n\n`, MIME.md);
+    const attachment: Attachment = {
+      id: uid("att"),
+      name: fullName,
+      size: dataUrlByteLength(dataUrl),
+      type: isSheet ? MIME.xlsx : MIME.md,
+      dataUrl,
+      uploadedBy: currentUser.id,
+      uploadedAt: Date.now(),
+    };
+    updateProject(project.id, { attachments: [...project.attachments, attachment] });
+    setNewFile(null);
+    router.push(fileHref(project.id, attachment.id));
+  };
   const allTasks = state.tasks.filter((t) => t.projectId === project.id);
   const tasks = allTasks.filter(
     (t) =>
@@ -312,13 +354,29 @@ function ProjectPageInner() {
                 <Paperclip className="size-5 text-muted-foreground" />
                 <p className="text-sm font-medium">No files yet</p>
                 <p className="text-xs text-muted-foreground">
-                  Attach briefs, mockups, or reference docs for the whole project.
+                  Attach briefs, mockups, or reference docs — or write one right here.
                 </p>
               </div>
             )}
+            {canManageFiles && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={() => setNewFile("markdown")}>
+                  <FilePlus2 className="size-3.5" /> New document
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={() => setNewFile("spreadsheet")}>
+                  <FileSpreadsheet className="size-3.5" /> New spreadsheet
+                </Button>
+              </div>
+            )}
+            <NewFileDialog
+              kind={newFile}
+              onClose={() => setNewFile(null)}
+              onCreate={createFile}
+            />
             <AttachmentsField
               attachments={project.attachments}
               disabled={!canManageFiles}
+              onOpen={(id) => router.push(fileHref(project.id, id))}
               onShare={
                 can("message.send")
                   ? (id) => openShareFileDialog(project.id, id)
@@ -339,5 +397,70 @@ function ProjectPageInner() {
         )}
       </div>
     </div>
+  );
+}
+
+/** Name prompt for "New document" / "New spreadsheet". */
+function NewFileDialog({
+  kind,
+  onClose,
+  onCreate,
+}: {
+  kind: "markdown" | "spreadsheet" | null;
+  onClose: () => void;
+  onCreate: (name: string) => Promise<void>;
+}) {
+  const [name, setName] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  React.useEffect(() => {
+    if (kind) setName(kind === "spreadsheet" ? "Untitled.xlsx" : "Untitled.md");
+  }, [kind]);
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onCreate(name);
+    } catch (err) {
+      toast.error("Couldn't create the file", { description: String(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open={kind !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{kind === "spreadsheet" ? "New spreadsheet" : "New document"}</DialogTitle>
+          <DialogDescription>
+            {kind === "spreadsheet"
+              ? "An empty .xlsx you can edit right here."
+              : "A Markdown document with live preview."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-1.5">
+          <Label htmlFor="new-file-name">File name</Label>
+          <Input
+            id="new-file-name"
+            value={name}
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} disabled={busy || !name.trim()}>
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

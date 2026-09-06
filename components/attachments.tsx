@@ -2,31 +2,63 @@
 
 import * as React from "react";
 import { formatDistanceToNow } from "date-fns";
-import { FileText, Paperclip, Share2, Trash2, Upload } from "lucide-react";
+import { Download, FileCode2, FileImage, FileSpreadsheet, FileText, Paperclip, Share2, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user-avatar";
 import { formatBytes, MAX_ATTACHMENT_BYTES, readFileAsAttachment } from "@/lib/attachments";
+import { canOpen, documentKind, type DocumentKind } from "@/lib/documents";
 import { useStore } from "@/lib/store";
 import type { Attachment } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/** Icon for a file kind (images get a thumbnail instead). */
+export function KindIcon({ kind, className }: { kind: DocumentKind; className?: string }) {
+  const Icon =
+    kind === "spreadsheet"
+      ? FileSpreadsheet
+      : kind === "image"
+        ? FileImage
+        : kind === "text"
+          ? FileCode2
+          : FileText;
+  return <Icon className={className} />;
+}
 
 function AttachmentRow({
   attachment,
   disabled,
   onRemove,
   onShare,
+  onOpen,
 }: {
   attachment: Attachment;
   disabled: boolean;
   onRemove: () => void;
   onShare?: () => void;
+  onOpen?: () => void;
 }) {
   const { state } = useStore();
   const uploader = state.users.find((u) => u.id === attachment.uploadedBy);
   const isImage = attachment.type.startsWith("image/");
+  const kind = documentKind(attachment);
+  const openable = onOpen !== undefined && canOpen(kind);
+  const meta = (
+    <div className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
+      <span>{formatBytes(attachment.size)}</span>
+      {uploader && (
+        <>
+          <span>·</span>
+          <UserAvatar user={uploader} size="xs" />
+          <span className="truncate">{uploader.name}</span>
+        </>
+      )}
+      <span>·</span>
+      <span>{formatDistanceToNow(attachment.editedAt ?? attachment.uploadedAt, { addSuffix: true })}</span>
+    </div>
+  );
 
   return (
     <div className="flex items-center gap-2.5 rounded-lg border bg-card px-2.5 py-2">
@@ -39,29 +71,42 @@ function AttachmentRow({
         />
       ) : (
         <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
-          <FileText className="size-4 text-muted-foreground" />
+          <KindIcon kind={kind} className="size-4 text-muted-foreground" />
         </div>
       )}
-      <a
-        href={attachment.dataUrl}
-        download={attachment.name}
-        className="min-w-0 flex-1 hover:underline"
-        title="Download"
-      >
-        <div className="truncate text-[13px] font-medium">{attachment.name}</div>
-        <div className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
-          <span>{formatBytes(attachment.size)}</span>
-          {uploader && (
-            <>
-              <span>·</span>
-              <UserAvatar user={uploader} size="xs" />
-              <span className="truncate">{uploader.name}</span>
-            </>
-          )}
-          <span>·</span>
-          <span>{formatDistanceToNow(attachment.uploadedAt, { addSuffix: true })}</span>
-        </div>
-      </a>
+      {openable ? (
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 text-left hover:underline"
+          title="Open"
+        >
+          <div className="truncate text-[13px] font-medium">{attachment.name}</div>
+          {meta}
+        </button>
+      ) : (
+        <a
+          href={attachment.dataUrl}
+          download={attachment.name}
+          className="min-w-0 flex-1 hover:underline"
+          title="Download"
+        >
+          <div className="truncate text-[13px] font-medium">{attachment.name}</div>
+          {meta}
+        </a>
+      )}
+      {openable && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button asChild variant="ghost" size="icon" className="size-7 shrink-0 text-muted-foreground">
+              <a href={attachment.dataUrl} download={attachment.name} aria-label={`Download ${attachment.name}`}>
+                <Download className="size-3.5" />
+              </a>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Download</TooltipContent>
+        </Tooltip>
+      )}
       {onShare && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -103,6 +148,7 @@ export function AttachmentsField({
   onAdd,
   onRemove,
   onShare,
+  onOpen,
   disabled = false,
 }: {
   attachments: Attachment[];
@@ -111,6 +157,8 @@ export function AttachmentsField({
   onRemove: (attachmentId: string) => void;
   /** When provided, each row gets a "Share to chat" button (works even when disabled). */
   onShare?: (attachmentId: string) => void;
+  /** When provided, openable files (docs, sheets, PDFs, images) open in the editor/viewer. */
+  onOpen?: (attachmentId: string) => void;
   disabled?: boolean;
 }) {
   const { currentUser } = useStore();
@@ -144,6 +192,7 @@ export function AttachmentsField({
               disabled={disabled}
               onRemove={() => onRemove(a.id)}
               onShare={onShare ? () => onShare(a.id) : undefined}
+              onOpen={onOpen ? () => onOpen(a.id) : undefined}
             />
           ))}
         </div>

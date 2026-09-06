@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Download, FileText, FileX2 } from "lucide-react";
+import { Download, FileX2 } from "lucide-react";
+
+import { KindIcon } from "@/components/attachments";
 
 import { formatBytes, resolveMessageAttachment } from "@/lib/attachments";
-import { projectHref } from "@/lib/routes";
+import { canOpen, documentKind } from "@/lib/documents";
+import { fileHref, projectHref } from "@/lib/routes";
 import { useStore } from "@/lib/store";
 import type { MessageAttachment } from "@/lib/types";
 
@@ -71,16 +74,14 @@ export function MessageAttachments({ attachments }: { attachments: MessageAttach
           );
         }
 
-        return (
-          <a
-            key={att.id}
-            href={file.dataUrl}
-            download={file.name}
-            title="Download"
-            className="group flex max-w-xs items-center gap-2.5 rounded-lg border bg-card px-2.5 py-2 transition-colors hover:bg-muted/60"
-          >
+        const kind = documentKind(file);
+        // Files that live on a project open in Lumina's editor/viewer.
+        const openHref =
+          att.sourceProjectId && canOpen(kind) ? fileHref(att.sourceProjectId, file.id) : null;
+        const body = (
+          <>
             <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
-              <FileText className="size-4 text-muted-foreground" />
+              <KindIcon kind={kind} className="size-4 text-muted-foreground" />
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-medium group-hover:underline">
@@ -96,6 +97,32 @@ export function MessageAttachments({ attachments }: { attachments: MessageAttach
                 )}
               </div>
             </div>
+          </>
+        );
+        const cardClass =
+          "group flex max-w-xs items-center gap-2.5 rounded-lg border bg-card px-2.5 py-2 transition-colors hover:bg-muted/60";
+        return openHref ? (
+          <div key={att.id} className={cardClass}>
+            <Link
+              href={openHref}
+              title="Open in Lumina"
+              className="flex min-w-0 flex-1 items-center gap-2.5"
+            >
+              {body}
+            </Link>
+            <a
+              href={file.dataUrl}
+              download={file.name}
+              title="Download"
+              aria-label={`Download ${file.name}`}
+              className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Download className="size-3.5" />
+            </a>
+          </div>
+        ) : (
+          <a key={att.id} href={file.dataUrl} download={file.name} title="Download" className={cardClass}>
+            {body}
             <Download className="size-3.5 shrink-0 text-muted-foreground" />
           </a>
         );

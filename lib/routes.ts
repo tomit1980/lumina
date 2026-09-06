@@ -11,14 +11,17 @@ import { usePathname, useSearchParams } from "next/navigation";
 export const chatHref = (id: string) => `/chat?id=${encodeURIComponent(id)}`;
 export const dmHref = (id: string) => `/dm?id=${encodeURIComponent(id)}`;
 export const projectHref = (id: string) => `/projects?id=${encodeURIComponent(id)}`;
+/** Full-page editor/viewer for one of a project's files. */
+export const fileHref = (projectId: string, attachmentId: string) =>
+  `${projectHref(projectId)}&file=${encodeURIComponent(attachmentId)}`;
 
 /** The page (`/chat`, `/dm`, `/projects`, …) and `?id=` the URL currently points at. */
-export function useCurrentRoute(): { pathname: string; id: string | null } {
+export function useCurrentRoute(): { pathname: string; id: string | null; file: string | null } {
   const raw = usePathname();
   const params = useSearchParams();
   // Normalise `/chat/` (trailingSlash export) and `/chat` to the same key.
   const pathname = raw.length > 1 && raw.endsWith("/") ? raw.slice(0, -1) : raw;
-  return { pathname, id: params.get("id") };
+  return { pathname, id: params.get("id"), file: params.get("file") };
 }
 
 /** Returns a predicate: true when the current URL is `path?id=<resourceId>`. */
