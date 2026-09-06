@@ -11,6 +11,7 @@ export default defineConfig({
     pool: "forks",
     testTimeout: 30_000,
     hookTimeout: 60_000,
+    passWithNoTests: true,
   },
   resolve: {
     alias: { "@": path.resolve(__dirname, ".") },

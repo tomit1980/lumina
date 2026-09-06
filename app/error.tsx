@@ -19,7 +19,7 @@ export default function Error({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       <div className="flex size-12 items-center justify-center rounded-2xl bg-muted">
-        <TriangleAlert className="size-6 text-amber-600 dark:text-amber-400" />
+        <TriangleAlert aria-hidden="true" className="size-6 text-amber-600 dark:text-amber-400" />
       </div>
       <div>
         <h2 className="text-base font-semibold">Something went wrong</h2>
