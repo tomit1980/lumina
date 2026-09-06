@@ -162,6 +162,20 @@ touching anything structural:
 
 ### Phase 1 — foundation
 
+0. **Before a single store action is converted** (added after the Phase 0 review):
+   - **Characterisation tests over the current synchronous store.** Render `StoreProvider`
+     and drive real actions against the existing localStorage path, capturing today's
+     behaviour as executable expectations. Without these, a sync→async rewrite that drops a
+     `setState`, double-applies an optimistic update, or reorders two writes passes
+     typecheck, lint, and the whole Phase 0 suite unnoticed. `lib/store.tsx` is 1,148 lines
+     and roughly 30 actions; the compiler catches signature breakage, nothing catches
+     behavioural drift.
+   - **A global `unhandledrejection` handler** surfacing failures through the existing
+     `toast` mechanism. React error boundaries catch render and lifecycle throws only.
+     Every converted action runs from an event handler, so a rejected Supabase call becomes
+     an unhandled rejection: the boundary never mounts and the user sees a silently dead
+     button. This is the single most likely Phase 1 failure mode and Phase 0's boundaries
+     do not cover it.
 1. Supabase project; migrations for the schema; RLS policies; `has_permission`; the four
    invariant functions.
 2. `lib/supabase.ts` — typed client built from generated database types.

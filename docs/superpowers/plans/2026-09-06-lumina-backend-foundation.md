@@ -2234,3 +2234,16 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ## What this plan deliberately does not do
 
 Plan 2 swaps `lib/auth.tsx` and `lib/store.tsx` onto Supabase and strips the demo affordances. Plan 3 adds Realtime, presence, and Storage. Plan 4 is the production cutover. Until Plan 2 lands, the schema built here is exercised only by tests — that is intentional, so a policy mistake is caught before any real data depends on it.
+
+## Binding precondition on Plan 2
+
+The Phase 0 whole-branch review established that this plan's safety net is narrower than
+it looks. The CI gates are real — under `strict`, changing an action's return type to
+`Promise<T>` breaks every caller, and that is a meaningful share of Plan 2's risk. But the
+test suite executes no application logic, and the error boundaries catch render throws
+while Plan 2's actual risk is async rejection from event handlers.
+
+So **Plan 2 must open with a Task 0**, before any action is converted: characterisation
+tests over the current synchronous store, and a global `unhandledrejection` handler wired
+to the existing `toast` mechanism. Starting Plan 2 with the rewrite instead leaves Phase
+0's stated purpose unmet. See the spec's Phase 1, item 0.
