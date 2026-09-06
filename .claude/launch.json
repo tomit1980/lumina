@@ -4,8 +4,20 @@
     {
       "name": "lumina-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000
+    },
+    {
+      "name": "lumina-static",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/serve-static.mjs",
+        "3001"
+      ],
+      "port": 3001
     }
   ]
 }

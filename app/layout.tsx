@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
@@ -28,7 +29,10 @@ export default function RootLayout({
     >
       <body className="antialiased">
         <Providers>
-          <AppShell>{children}</AppShell>
+          {/* AppShell reads the URL (useSearchParams), which static export requires under Suspense. */}
+          <Suspense fallback={null}>
+            <AppShell>{children}</AppShell>
+          </Suspense>
         </Providers>
       </body>
     </html>

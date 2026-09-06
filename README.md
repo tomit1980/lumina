@@ -1,5 +1,7 @@
 # ✨ Lumina
 
+**Live demo:** https://tomit1980.github.io/lumina/ — sign in as `vlad` / `lumina24`. Everything is stored in your browser (localStorage), so the demo is per-browser, not shared.
+
 **Where work flows.** A beautiful internal collaboration platform that blends Slack-style real-time chat with modern project management — wrapped in enterprise-grade role-based permissions.
 
 Built as a delightful daily driver for small-to-medium teams: fast, obvious, premium.
@@ -90,7 +92,19 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The app boots with a realistic seeded workspace (6 people, 5 channels, 2 projects, 21 tasks). Everything you do persists to localStorage — use the sidebar user menu → **Reset demo data** to start fresh.
+Open [http://localhost:3000/lumina](http://localhost:3000/lumina) (the app is served under the `/lumina` base path, matching the hosted site). The app boots with a realistic seeded workspace (6 people, 5 channels, 2 projects, 21 tasks). Everything you do persists to localStorage — use the sidebar user menu → **Reset demo data** to start fresh.
+
+## Deploying
+
+The app is a fully static export (`output: "export"`, `basePath: "/lumina"`) hosted on **GitHub Pages**. Every push to `main` runs `.github/workflows/deploy.yml`, which builds `out/` and publishes it to https://tomit1980.github.io/lumina/.
+
+Preview the exact production build locally:
+
+```bash
+npm run build && npm start   # serves out/ at http://localhost:3000/lumina/
+```
+
+Because there is no server, resources are addressed as static pages plus a query (`/chat?id=…`, `/dm?id=…`, `/projects?id=…`) — build links with the helpers in `lib/routes.ts`.
 
 ## Keyboard shortcuts
 

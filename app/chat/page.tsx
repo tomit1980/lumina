@@ -1,7 +1,8 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Hash, Lock } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -9,10 +10,22 @@ import { ChatView } from "@/components/chat/chat-view";
 import { useStore } from "@/lib/store";
 
 export default function ChannelPage() {
-  const { channelId } = useParams<{ channelId: string }>();
+  // useSearchParams needs a Suspense boundary for static export.
+  return (
+    <React.Suspense fallback={null}>
+      <ChannelPageInner />
+    </React.Suspense>
+  );
+}
+
+function ChannelPageInner() {
+  const channelId = useSearchParams().get("id");
   const { state, canSeeChannel } = useStore();
 
-  const channel = state.channels.find((c) => c.id === channelId);
+  // `/chat` with no id lands on the whole-team room.
+  const channel = channelId
+    ? state.channels.find((c) => c.id === channelId)
+    : state.channels.find((c) => c.isTeam);
 
   if (!channel) {
     return (

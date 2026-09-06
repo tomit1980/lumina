@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { useStore } from "@/lib/store";
+import { dmHref } from "@/lib/routes";
 
 /** "New message" picker — search a teammate, jump into the conversation. */
 export function DmDialog() {
@@ -42,7 +43,7 @@ export function DmDialog() {
                   onSelect={() => {
                     const dm = openDm(user.id);
                     setDmDialogOpen(false);
-                    router.push(`/dm/${dm.id}`);
+                    router.push(dmHref(dm.id));
                   }}
                 >
                   <UserAvatar user={user} size="sm" showPresence />

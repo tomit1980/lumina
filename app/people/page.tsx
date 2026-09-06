@@ -48,6 +48,7 @@ import {
 import { useStore } from "@/lib/store";
 import type { Permission, RoleDef } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { dmHref } from "@/lib/routes";
 
 const TWO_FACTOR_META: Record<
   TwoFactorStatus,
@@ -227,7 +228,7 @@ export default function PeoplePage() {
 
   const messageUser = (userId: string) => {
     const dm = openDm(userId);
-    router.push(`/dm/${dm.id}`);
+    router.push(dmHref(dm.id));
   };
 
   const togglePermission = (role: RoleDef, permission: Permission, enabled: boolean) => {

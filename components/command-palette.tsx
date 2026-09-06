@@ -35,6 +35,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
 import { useStore } from "@/lib/store";
+import { chatHref, dmHref, projectHref } from "@/lib/routes";
 
 export function CommandPalette() {
   const router = useRouter();
@@ -92,7 +93,7 @@ export function CommandPalette() {
                 <CommandItem
                   key={c.id}
                   value={`team everyone all hands ${c.name}`}
-                  onSelect={() => run(() => router.push(`/chat/${c.id}`))}
+                  onSelect={() => run(() => router.push(chatHref(c.id)))}
                 >
                   <Megaphone />
                   Team
@@ -102,7 +103,7 @@ export function CommandPalette() {
                 <CommandItem
                   key={c.id}
                   value={`channel ${c.name}`}
-                  onSelect={() => run(() => router.push(`/chat/${c.id}`))}
+                  onSelect={() => run(() => router.push(chatHref(c.id)))}
                 >
                   {c.isPrivate ? <Lock /> : <Hash />}
                   {c.name}
@@ -113,7 +114,7 @@ export function CommandPalette() {
               <CommandItem
                 key={p.id}
                 value={`project ${p.name}`}
-                onSelect={() => run(() => router.push(`/projects/${p.id}`))}
+                onSelect={() => run(() => router.push(projectHref(p.id)))}
               >
                 <FolderKanban />
                 {p.name}
@@ -128,7 +129,7 @@ export function CommandPalette() {
             {teamChannel && (
               <CommandItem
                 value="message the entire team everyone all hands"
-                onSelect={() => run(() => router.push(`/chat/${teamChannel.id}`))}
+                onSelect={() => run(() => router.push(chatHref(teamChannel.id)))}
               >
                 <Megaphone />
                 The entire team
@@ -146,7 +147,7 @@ export function CommandPalette() {
                   onSelect={() =>
                     run(() => {
                       const dm = openDm(u.id);
-                      router.push(`/dm/${dm.id}`);
+                      router.push(dmHref(dm.id));
                     })
                   }
                 >

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Flag, FolderKanban, ListFilter, Lock, Paperclip, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -57,7 +57,16 @@ function EmptyState({
 }
 
 export default function ProjectPage() {
-  const { projectId } = useParams<{ projectId: string }>();
+  // useSearchParams needs a Suspense boundary for static export.
+  return (
+    <React.Suspense fallback={null}>
+      <ProjectPageInner />
+    </React.Suspense>
+  );
+}
+
+function ProjectPageInner() {
+  const projectId = useSearchParams().get("id");
   const router = useRouter();
   const { state, can, canSeeProject, projectAccessLevel, updateProject, deleteProject } =
     useStore();

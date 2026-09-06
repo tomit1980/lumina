@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   Bell,
@@ -57,6 +57,7 @@ import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
 import { getUnreadCount, useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { chatHref, dmHref, projectHref, useCurrentRoute, useIsViewing } from "@/lib/routes";
 
 function NavLink({
   href,
@@ -169,7 +170,8 @@ function SectionHeader({
 }
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
-  const pathname = usePathname();
+  const { pathname } = useCurrentRoute();
+  const viewing = useIsViewing();
   const router = useRouter();
   const { setTheme, resolvedTheme } = useTheme();
   const {
@@ -261,10 +263,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
   const runDelete = () => {
     if (!confirm) return;
-    const viewing =
+    const viewingIt =
       confirm.kind === "channel"
-        ? pathname === `/chat/${confirm.id}`
-        : pathname === `/projects/${confirm.id}`;
+        ? viewing("/chat", confirm.id)
+        : viewing("/projects", confirm.id);
     if (confirm.kind === "channel") {
       deleteChannel(confirm.id);
       toast.success(`Channel #${confirm.name} deleted`);
@@ -272,7 +274,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       deleteProject(confirm.id);
       toast.success(`Project “${confirm.name}” deleted`);
     }
-    if (viewing) router.push("/");
+    if (viewingIt) router.push("/");
   };
 
   const teamChannel = state.channels.find((c) => c.isTeam);
@@ -343,8 +345,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           </NavLink>
           {teamChannel && (
             <NavLink
-              href={`/chat/${teamChannel.id}`}
-              active={pathname === `/chat/${teamChannel.id}`}
+              href={chatHref(teamChannel.id)}
+              active={viewing("/chat", teamChannel.id)}
               onNavigate={onNavigate}
             >
               <Megaphone className="size-4 shrink-0" />
@@ -355,7 +357,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                     const unread = getUnreadCount(state, currentUser.id, teamChannel.id);
                     return (
                       unread > 0 &&
-                      pathname !== `/chat/${teamChannel.id}` &&
+                      !viewing("/chat", teamChannel.id) &&
                       "font-semibold text-foreground"
                     );
                   })()
@@ -365,7 +367,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               </span>
               {(() => {
                 const unread = getUnreadCount(state, currentUser.id, teamChannel.id);
-                const active = pathname === `/chat/${teamChannel.id}`;
+                const active = viewing("/chat", teamChannel.id);
                 return unread > 0 && !active ? (
                   <Badge className="ml-auto h-4.5 min-w-4.5 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
                     {unread}
@@ -392,13 +394,13 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <nav className="flex flex-col gap-0.5">
           {channels.map((channel) => {
             const unread = getUnreadCount(state, currentUser.id, channel.id);
-            const active = pathname === `/chat/${channel.id}`;
+            const active = viewing("/chat", channel.id);
             const manageable = canDeleteChannel(channel);
             const deletable = manageable && channel.name !== "general";
             return (
               <div key={channel.id} className="group/row relative">
                 <NavLink
-                  href={`/chat/${channel.id}`}
+                  href={chatHref(channel.id)}
                   active={active}
                   onNavigate={onNavigate}
                 >
@@ -458,11 +460,11 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <nav className="flex flex-col gap-0.5">
           {myDms.map(({ dm, other }) => {
             const unread = getUnreadCount(state, currentUser.id, dm.id);
-            const active = pathname === `/dm/${dm.id}`;
+            const active = viewing("/dm", dm.id);
             return (
               <NavLink
                 key={dm.id}
-                href={`/dm/${dm.id}`}
+                href={dmHref(dm.id)}
                 active={active}
                 onNavigate={onNavigate}
               >
@@ -504,8 +506,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           {visibleProjects.map((project) => (
             <div key={project.id} className="group/row relative">
               <NavLink
-                href={`/projects/${project.id}`}
-                active={pathname === `/projects/${project.id}`}
+                href={projectHref(project.id)}
+                active={viewing("/projects", project.id)}
                 onNavigate={onNavigate}
               >
                 <span
@@ -702,7 +704,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const pathname = usePathname();
+  const { pathname, id: routeId } = useCurrentRoute();
 
   return (
     <div className="flex h-svh overflow-hidden">
@@ -733,7 +735,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main key={pathname} className="min-h-0 flex-1">
+        <main key={`${pathname}?${routeId ?? ""}`} className="min-h-0 flex-1">
           {children}
         </main>
       </div>

@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useUI } from "@/components/ui-context";
 import { useStore } from "@/lib/store";
+import { chatHref } from "@/lib/routes";
 
 export function ChannelDialog() {
   const router = useRouter();
@@ -60,7 +61,7 @@ export function ChannelDialog() {
     if (!channel) return;
     setChannelDialogOpen(false);
     toast.success(`Channel #${slug} created`);
-    router.push(`/chat/${channel.id}`);
+    router.push(chatHref(channel.id));
   };
 
   return (

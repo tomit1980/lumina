@@ -29,6 +29,7 @@ import { useUI } from "@/components/ui-context";
 import { getUnreadCount, useStore } from "@/lib/store";
 import { PRIORITY_META, type ActivityKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { chatHref, projectHref } from "@/lib/routes";
 
 const ACTIVITY_ICON: Record<ActivityKind, React.ReactNode> = {
   task: <CheckSquare className="size-3" />,
@@ -119,7 +120,7 @@ export default function HomePage() {
           <div className="flex gap-2">
             {teamChannel && (
               <Button size="sm" variant="outline" asChild>
-                <Link href={`/chat/${teamChannel.id}`}>
+                <Link href={chatHref(teamChannel.id)}>
                   <Megaphone className="size-3.5" />
                   Message the team
                 </Link>
@@ -248,7 +249,7 @@ export default function HomePage() {
                       )}
                       {project && (
                         <Link
-                          href={`/projects/${project.id}`}
+                          href={projectHref(project.id)}
                           className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
                         >
                           {project.emoji} {project.name}

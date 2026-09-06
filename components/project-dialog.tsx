@@ -27,6 +27,7 @@ import { useUI } from "@/components/ui-context";
 import { useStore } from "@/lib/store";
 import { PRIORITIES, PRIORITY_META, type Priority } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { projectHref } from "@/lib/routes";
 
 const EMOJIS = ["🚀", "🎨", "📱", "🧪", "📈", "🛠️", "🌱", "🎯", "📦", "✨"];
 const COLORS = [
@@ -101,7 +102,7 @@ export function ProjectDialog() {
     if (!project) return;
     closeProjectDialog();
     toast.success(`Project “${trimmed}” created`);
-    router.push(`/projects/${project.id}`);
+    router.push(projectHref(project.id));
   };
 
   return (

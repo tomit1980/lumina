@@ -12,6 +12,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { useStore } from "@/lib/store";
 import type { User } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { dmHref } from "@/lib/routes";
 
 const PRESENCE_LABEL = {
   online: "Online",
@@ -72,7 +73,7 @@ export function UserCard({
               onClick={() => {
                 const dm = openDm(user.id);
                 setOpen(false);
-                router.push(`/dm/${dm.id}`);
+                router.push(dmHref(dm.id));
               }}
             >
               <MessageCircle className="size-3.5" />
