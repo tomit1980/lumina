@@ -336,7 +336,12 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      can_join_dm: { Args: { target_dm_id: string }; Returns: boolean }
       can_see_conversation: { Args: { conv_id: string }; Returns: boolean }
+      channel_is_manageable: {
+        Args: { target_channel_id: string }
+        Returns: boolean
+      }
       has_permission: { Args: { perm: string }; Returns: boolean }
       my_role_id: { Args: never; Returns: string }
     }
