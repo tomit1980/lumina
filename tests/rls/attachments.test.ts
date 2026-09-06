@@ -2,9 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createTestUser, deleteTestUser, serviceClient, signInAs, TEST_PASSWORD,
 } from "../helpers/supabase";
-import { addChannelMember, createChannel, createProject, seedRoles } from "../helpers/workspace";
+import {
+  addChannelMember, addProjectMember, createChannel, createProject, seedRoles,
+} from "../helpers/workspace";
 
-// Supabase rate-limits sign-ins per project; this file needs three
+// Supabase rate-limits sign-ins per project; this file needs five
 // identities across many assertions. Memoize one signed-in client per
 // email and reuse it everywhere instead of calling signInAs per test — the
 // RLS behaviour under test depends on server-side data, not client-side
@@ -30,10 +32,20 @@ const msgAttachmentId = `att_msg_${stamp}`;
 const orphanAttachmentId = `att_orphan_${stamp}`;
 const linkedAttachmentId = `att_link_${stamp}`;
 
+// Fixtures for the task-7 review findings (revocation_probe.mjs).
+const revProject = `p_rev_att_${stamp}`;
+const revAttachmentId = `att_rev_${stamp}`;
+const revConv = `c_rev_att_${stamp}`;
+const revMsgId = `m_rev_att_${stamp}`;
+const revMsgAttachmentId = `att_rev_msg1_${stamp}`;
+const revMsgAttachmentId2 = `att_rev_msg2_${stamp}`;
+
 const emails = {
   owner: `aown-${stamp}@lumina.test`,
   outsider: `aout-${stamp}@lumina.test`,
   author: `aauth-${stamp}@lumina.test`,
+  leaver: `aleav-${stamp}@lumina.test`,
+  climber: `aclim-${stamp}@lumina.test`,
 };
 const ids: Record<string, string> = {};
 
@@ -50,6 +62,14 @@ beforeAll(async () => {
   ids.author = await createTestUser({
     email: emails.author, password: TEST_PASSWORD,
     name: "Amy", handle: `aamy${stamp}`, roleId: "member",
+  });
+  ids.leaver = await createTestUser({
+    email: emails.leaver, password: TEST_PASSWORD,
+    name: "Leo", handle: `aleo${stamp}`, roleId: "member",
+  });
+  ids.climber = await createTestUser({
+    email: emails.climber, password: TEST_PASSWORD,
+    name: "Cleo", handle: `acleo${stamp}`, roleId: "admin",
   });
 
   // A restricted project only its creator (owner) can see, plus one
@@ -78,6 +98,22 @@ beforeAll(async () => {
   // then loses membership — used by the Defect 2 regression below.
   await createChannel({ id: conv, name: "att-private", isPrivate: true, createdBy: ids.owner });
   await addChannelMember(conv, ids.author, "editor");
+
+  // Finding 1 fixture: a separate restricted project where `leaver` is an
+  // editor and uploads+links an attachment, then loses membership.
+  await createProject({ id: revProject, name: "Confidential", restricted: true, createdBy: ids.owner });
+  await addProjectMember(revProject, ids.leaver, "editor");
+  await serviceClient.from("attachments").insert({
+    id: revAttachmentId, storage_path: `projects/${revProject}/${revAttachmentId}`,
+    name: "leaver-file.pdf", size: 100, mime: "application/pdf", uploaded_by: ids.leaver,
+  });
+  await serviceClient.from("project_attachments")
+    .insert({ project_id: revProject, attachment_id: revAttachmentId });
+
+  // Finding 3 fixture: a private channel where `leaver` posts a message
+  // and links an attachment while still a member.
+  await createChannel({ id: revConv, name: "rev-att-private", isPrivate: true, createdBy: ids.owner });
+  await addChannelMember(revConv, ids.leaver, "editor");
 });
 
 afterAll(async () => {
@@ -86,10 +122,11 @@ afterAll(async () => {
   await serviceClient.from("attachments").delete().in("id", [
     attachmentId, taskAttachmentId, msgAttachmentId,
     orphanAttachmentId, linkedAttachmentId,
+    revAttachmentId, revMsgAttachmentId, revMsgAttachmentId2,
   ]);
   await serviceClient.from("tasks").delete().eq("id", taskId);
-  await serviceClient.from("projects").delete().eq("id", secretProject);
-  await serviceClient.from("conversations").delete().eq("id", conv);
+  await serviceClient.from("projects").delete().in("id", [secretProject, revProject]);
+  await serviceClient.from("conversations").delete().in("id", [conv, revConv]);
   for (const id of Object.values(ids)) await deleteTestUser(id);
 });
 
@@ -259,5 +296,112 @@ describe("Defect 3 — an inserted attachment cannot be linked to a target the c
     const { error: linkError } = await client.from("project_attachments")
       .insert({ project_id: secretProject, attachment_id: linkedAttachmentId });
     expect(linkError).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------
+// Task-7 review, Finding 1 — CONFIRMED, High: can_see_attachment's
+// uploader-fallback branch ("visible to its uploader before it is
+// linked") was unconditional, so it never stopped applying once the row
+// *was* linked — a user removed from a restricted project's membership
+// kept reading their own old attachment row (name, storage_path) forever.
+// Fixed by scoping the fallback to genuinely unlinked attachments.
+// ---------------------------------------------------------------------
+describe("Finding 1 — attachment access ends when project membership ends", () => {
+  it("positive control: while still a project editor, the uploader CAN see their attachment", async () => {
+    const client = await clientFor(emails.leaver);
+    const { data } = await client.from("attachments")
+      .select("id,name,storage_path").eq("id", revAttachmentId);
+    expect(data).toHaveLength(1);
+  });
+
+  it("denies the uploader once their project membership is revoked", async () => {
+    const del = await serviceClient.from("project_members")
+      .delete().eq("project_id", revProject).eq("user_id", ids.leaver);
+    expect(del.error).toBeNull();
+
+    const client = await clientFor(emails.leaver);
+    const { data } = await client.from("attachments")
+      .select("id,name,storage_path").eq("id", revAttachmentId);
+    expect(data).toHaveLength(0);
+  });
+
+  it("positive control: the project's creator still sees the same linked attachment", async () => {
+    const client = await clientFor(emails.owner);
+    const { data } = await client.from("attachments")
+      .select("id,name").eq("id", revAttachmentId);
+    expect(data).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Task-7 review, Finding 2 — CONFIRMED, Medium: attachments_update's
+// WITH CHECK was a bare has_permission('project.create'), so any holder
+// of that permission who could currently see an attachment could rewrite
+// uploaded_by to themselves, planting Finding 1's uploader fallback
+// permanently. Fixed with a BEFORE UPDATE trigger freezing the column
+// (mirrors freeze_created_by on projects/channels).
+// ---------------------------------------------------------------------
+describe("Finding 2 — uploaded_by is frozen after upload", () => {
+  it("denies a project.create holder rewriting uploaded_by on an attachment they can merely see", async () => {
+    const client = await clientFor(emails.climber);
+
+    // climber holds project.create and members.manage (admin role), so
+    // can_see_project's bypass lets them see attachmentId in the
+    // restricted secretProject without ever being a member of it.
+    const before = await client.from("attachments").select("id,uploaded_by").eq("id", attachmentId);
+    expect(before.data).toHaveLength(1);
+
+    const { error } = await client.from("attachments")
+      .update({ uploaded_by: ids.climber }).eq("id", attachmentId);
+    expect(error).not.toBeNull();
+
+    const { data: check } = await serviceClient.from("attachments")
+      .select("uploaded_by").eq("id", attachmentId).single();
+    expect(check?.uploaded_by).toBe(ids.owner);
+  });
+});
+
+// ---------------------------------------------------------------------
+// Task-7 review, Finding 3 — NOT reproduced against the seeded roles
+// (the reviewer's probe found a member who left a private channel was
+// already denied, 42501), fixed defensively: message_attachments_insert/
+// _update/_delete checked only m.author_id = auth.uid(), with no live
+// can_see_conversation check, unlike the task_attachments siblings which
+// AND in can_see_project. Brought into line with that sibling.
+// ---------------------------------------------------------------------
+describe("Finding 3 — message_attachments requires live conversation visibility, not just authorship", () => {
+  it("positive control: while still a channel member, the author CAN link an attachment to their message", async () => {
+    const client = await clientFor(emails.leaver);
+
+    const { error: msgError } = await client.from("messages").insert({
+      id: revMsgId, conversation_id: revConv, author_id: ids.leaver, content: "here's the file",
+    });
+    expect(msgError).toBeNull();
+
+    await serviceClient.from("attachments").insert({
+      id: revMsgAttachmentId, storage_path: `messages/${revMsgId}/${revMsgAttachmentId}`,
+      name: "first.txt", size: 1, mime: "text/plain", uploaded_by: ids.leaver,
+    });
+    const { error: linkError } = await client.from("message_attachments")
+      .insert({ message_id: revMsgId, attachment_id: revMsgAttachmentId });
+    expect(linkError).toBeNull();
+  });
+
+  it("denies the same author linking another attachment once they lose the channel's membership", async () => {
+    const del = await serviceClient.from("channel_members")
+      .delete().eq("channel_id", revConv).eq("user_id", ids.leaver);
+    expect(del.error).toBeNull();
+
+    await serviceClient.from("attachments").insert({
+      id: revMsgAttachmentId2, storage_path: `messages/${revMsgId}/${revMsgAttachmentId2}`,
+      name: "second.txt", size: 1, mime: "text/plain", uploaded_by: ids.leaver,
+    });
+
+    const client = await clientFor(emails.leaver);
+    const { error } = await client.from("message_attachments")
+      .insert({ message_id: revMsgId, attachment_id: revMsgAttachmentId2 });
+    expect(error).not.toBeNull();
+    expect(error?.code).toBe("42501");
   });
 });
