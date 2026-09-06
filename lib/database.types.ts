@@ -39,13 +39,84 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      profiles: {
+        Row: {
+          color: string
+          created_at: string
+          email: string
+          handle: string
+          id: string
+          name: string
+          role_id: string
+          title: string
+        }
+        Insert: {
+          color?: string
+          created_at?: string
+          email: string
+          handle: string
+          id: string
+          name: string
+          role_id: string
+          title?: string
+        }
+        Update: {
+          color?: string
+          created_at?: string
+          email?: string
+          handle?: string
+          id?: string
+          name?: string
+          role_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "profiles_role_id_fkey"
+            columns: ["role_id"]
+            isOneToOne: false
+            referencedRelation: "roles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      roles: {
+        Row: {
+          color: string
+          description: string
+          id: string
+          is_system: boolean
+          locked: boolean
+          name: string
+          permissions: string[]
+        }
+        Insert: {
+          color?: string
+          description?: string
+          id: string
+          is_system?: boolean
+          locked?: boolean
+          name: string
+          permissions?: string[]
+        }
+        Update: {
+          color?: string
+          description?: string
+          id?: string
+          is_system?: boolean
+          locked?: boolean
+          name?: string
+          permissions?: string[]
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_permission: { Args: { perm: string }; Returns: boolean }
+      my_role_id: { Args: never; Returns: string }
     }
     Enums: {
       [_ in never]: never
