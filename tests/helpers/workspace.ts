@@ -50,3 +50,32 @@ export async function addChannelMember(
     .from("channel_members").insert({ channel_id: channelId, user_id: userId, level });
   if (error) throw new Error(`addChannelMember failed: ${error.message}`);
 }
+
+export async function createProject(opts: {
+  id: string;
+  name: string;
+  restricted: boolean;
+  createdBy: string;
+}): Promise<void> {
+  const { error } = await serviceClient.from("projects").insert({
+    id: opts.id,
+    name: opts.name,
+    description: "",
+    emoji: "🎨",
+    color: "#7c3aed",
+    priority: "medium",
+    restricted: opts.restricted,
+    created_by: opts.createdBy,
+  });
+  if (error) throw new Error(`createProject failed: ${error.message}`);
+}
+
+export async function addProjectMember(
+  projectId: string,
+  userId: string,
+  level: "viewer" | "editor"
+): Promise<void> {
+  const { error } = await serviceClient
+    .from("project_members").insert({ project_id: projectId, user_id: userId, level });
+  if (error) throw new Error(`addProjectMember failed: ${error.message}`);
+}

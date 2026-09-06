@@ -268,6 +268,83 @@ export type Database = {
           },
         ]
       }
+      project_members: {
+        Row: {
+          level: string
+          project_id: string
+          user_id: string
+        }
+        Insert: {
+          level?: string
+          project_id: string
+          user_id: string
+        }
+        Update: {
+          level?: string
+          project_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_members_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_members_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      projects: {
+        Row: {
+          color: string
+          created_at: string
+          created_by: string | null
+          description: string
+          emoji: string
+          id: string
+          name: string
+          priority: string
+          restricted: boolean
+        }
+        Insert: {
+          color?: string
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          emoji?: string
+          id: string
+          name: string
+          priority?: string
+          restricted?: boolean
+        }
+        Update: {
+          color?: string
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          emoji?: string
+          id?: string
+          name?: string
+          priority?: string
+          restricted?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "projects_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       reactions: {
         Row: {
           emoji: string
@@ -331,6 +408,82 @@ export type Database = {
         }
         Relationships: []
       }
+      tasks: {
+        Row: {
+          assignee_id: string | null
+          created_at: string
+          created_by: string | null
+          description: string
+          due_date: string | null
+          duration_minutes: number | null
+          id: string
+          labels: string[]
+          position: number
+          priority: string
+          project_id: string
+          reminder_minutes: number | null
+          start_time: string | null
+          status: string
+          title: string
+        }
+        Insert: {
+          assignee_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          due_date?: string | null
+          duration_minutes?: number | null
+          id: string
+          labels?: string[]
+          position?: number
+          priority?: string
+          project_id: string
+          reminder_minutes?: number | null
+          start_time?: string | null
+          status?: string
+          title: string
+        }
+        Update: {
+          assignee_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          due_date?: string | null
+          duration_minutes?: number | null
+          id?: string
+          labels?: string[]
+          position?: number
+          priority?: string
+          project_id?: string
+          reminder_minutes?: number | null
+          start_time?: string | null
+          status?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tasks_assignee_id_fkey"
+            columns: ["assignee_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -338,12 +491,18 @@ export type Database = {
     Functions: {
       can_join_dm: { Args: { target_dm_id: string }; Returns: boolean }
       can_see_conversation: { Args: { conv_id: string }; Returns: boolean }
+      can_see_project: { Args: { proj_id: string }; Returns: boolean }
       channel_is_manageable: {
         Args: { target_channel_id: string }
         Returns: boolean
       }
       has_permission: { Args: { perm: string }; Returns: boolean }
       my_role_id: { Args: never; Returns: string }
+      project_is_manageable: {
+        Args: { target_project_id: string }
+        Returns: boolean
+      }
+      project_is_viewer_only: { Args: { proj_id: string }; Returns: boolean }
     }
     Enums: {
       [_ in never]: never
