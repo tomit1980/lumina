@@ -39,6 +39,89 @@ export type Database = {
   }
   public: {
     Tables: {
+      activities: {
+        Row: {
+          actor_id: string | null
+          id: string
+          kind: string
+          text: string
+          ts: string
+        }
+        Insert: {
+          actor_id?: string | null
+          id: string
+          kind: string
+          text: string
+          ts?: string
+        }
+        Update: {
+          actor_id?: string | null
+          id?: string
+          kind?: string
+          text?: string
+          ts?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "activities_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      attachments: {
+        Row: {
+          edited_at: string | null
+          edited_by: string | null
+          id: string
+          mime: string
+          name: string
+          size: number
+          storage_path: string
+          uploaded_at: string
+          uploaded_by: string | null
+        }
+        Insert: {
+          edited_at?: string | null
+          edited_by?: string | null
+          id: string
+          mime?: string
+          name: string
+          size?: number
+          storage_path: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Update: {
+          edited_at?: string | null
+          edited_by?: string | null
+          id?: string
+          mime?: string
+          name?: string
+          size?: number
+          storage_path?: string
+          uploaded_at?: string
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attachments_edited_by_fkey"
+            columns: ["edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attachments_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       channel_members: {
         Row: {
           channel_id: string
@@ -185,6 +268,46 @@ export type Database = {
           },
         ]
       }
+      message_attachments: {
+        Row: {
+          attachment_id: string
+          message_id: string
+          source_project_id: string | null
+        }
+        Insert: {
+          attachment_id: string
+          message_id: string
+          source_project_id?: string | null
+        }
+        Update: {
+          attachment_id?: string
+          message_id?: string
+          source_project_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "message_attachments_attachment_id_fkey"
+            columns: ["attachment_id"]
+            isOneToOne: false
+            referencedRelation: "attachments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_attachments_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "messages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "message_attachments_source_project_id_fkey"
+            columns: ["source_project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       messages: {
         Row: {
           author_id: string | null
@@ -264,6 +387,36 @@ export type Database = {
             columns: ["role_id"]
             isOneToOne: false
             referencedRelation: "roles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_attachments: {
+        Row: {
+          attachment_id: string
+          project_id: string
+        }
+        Insert: {
+          attachment_id: string
+          project_id: string
+        }
+        Update: {
+          attachment_id?: string
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_attachments_attachment_id_fkey"
+            columns: ["attachment_id"]
+            isOneToOne: false
+            referencedRelation: "attachments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_attachments_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           },
         ]
@@ -378,6 +531,39 @@ export type Database = {
           },
         ]
       }
+      read_state: {
+        Row: {
+          conversation_id: string
+          last_read_at: string
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          last_read_at?: string
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          last_read_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "read_state_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "read_state_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       roles: {
         Row: {
           color: string
@@ -407,6 +593,36 @@ export type Database = {
           permissions?: string[]
         }
         Relationships: []
+      }
+      task_attachments: {
+        Row: {
+          attachment_id: string
+          task_id: string
+        }
+        Insert: {
+          attachment_id: string
+          task_id: string
+        }
+        Update: {
+          attachment_id?: string
+          task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_attachments_attachment_id_fkey"
+            columns: ["attachment_id"]
+            isOneToOne: false
+            referencedRelation: "attachments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_attachments_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tasks: {
         Row: {
@@ -490,6 +706,7 @@ export type Database = {
     }
     Functions: {
       can_join_dm: { Args: { target_dm_id: string }; Returns: boolean }
+      can_see_attachment: { Args: { att_id: string }; Returns: boolean }
       can_see_conversation: { Args: { conv_id: string }; Returns: boolean }
       can_see_project: { Args: { proj_id: string }; Returns: boolean }
       channel_is_manageable: {
