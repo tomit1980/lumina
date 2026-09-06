@@ -14,6 +14,7 @@ import type {
   Channel,
   DM,
   Message,
+  MessageAttachment,
   Permission,
   Priority,
   Project,
@@ -98,7 +99,20 @@ interface StoreValue {
   deleteRole: (roleId: string) => boolean;
   resetDemo: () => void;
 
-  sendMessage: (conversationId: string, content: string) => void;
+  /** Post to a channel or DM. Empty content is allowed when files are attached.
+   *  Returns false when denied. */
+  sendMessage: (
+    conversationId: string,
+    content: string,
+    attachments?: MessageAttachment[]
+  ) => boolean;
+  /** Find-or-create the DM with `otherUserId` and post into it atomically
+   *  (safe to call right after picking a person, unlike openDm + sendMessage). */
+  sendToUser: (
+    otherUserId: string,
+    content: string,
+    attachments?: MessageAttachment[]
+  ) => DM | null;
   editMessage: (messageId: string, content: string) => void;
   deleteMessage: (messageId: string) => void;
   toggleReaction: (messageId: string, emoji: string) => void;
@@ -240,7 +254,11 @@ export function getUnreadCount(
 
 /** Legacy (pre-v4) persisted shapes we migrate from. */
 interface LegacyState
-  extends Omit<AppState, "roles" | "users" | "projects" | "tasks" | "channels"> {
+  extends Omit<
+    AppState,
+    "roles" | "users" | "projects" | "tasks" | "channels" | "messages"
+  > {
+  messages: Array<Omit<Message, "attachments"> & { attachments?: MessageAttachment[] }>;
   users: Array<Omit<User, "roleId"> & { roleId?: string; role?: string }>;
   roles?: RoleDef[];
   rolePermissions?: Record<string, Permission[]>;
@@ -299,7 +317,8 @@ function migrate(parsed: LegacyState): AppState {
       createdAt: c.createdAt,
     })),
     dms: parsed.dms ?? [],
-    messages: parsed.messages,
+    // Message attachments are new — older messages have none.
+    messages: parsed.messages.map((m) => ({ ...m, attachments: m.attachments ?? [] })),
     // Priority dropped the "urgent" tier — fold it into "high".
     // Project access-control is new — default fully open (unchanged behavior).
     projects: parsed.projects.map((p) => ({
@@ -543,40 +562,106 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setState(createSeed());
     };
 
-    const sendMessage = (conversationId: string, content: string) => {
+    /** Builds the activity line for a message that carries files. */
+    const shareNote = (
+      s: AppState,
+      attachments: MessageAttachment[],
+      channel: Channel | undefined,
+      otherUserId: string | undefined
+    ): string | null => {
+      if (attachments.length === 0) return null;
+      const extra = attachments.length > 1 ? ` +${attachments.length - 1} more` : "";
+      const other = otherUserId ? s.users.find((u) => u.id === otherUserId) : undefined;
+      const where = channel ? `in #${channel.name}` : other ? `with ${other.name}` : "";
+      return `shared “${attachments[0].name}”${extra} ${where}`.trim();
+    };
+
+    const appendMessage = (
+      st: AppState,
+      conversationId: string,
+      content: string,
+      attachments: MessageAttachment[],
+      note: string | null
+    ): AppState => ({
+      ...st,
+      messages: [
+        ...st.messages,
+        {
+          id: uid("m"),
+          channelId: conversationId,
+          authorId: st.currentUserId,
+          content,
+          createdAt: Date.now(),
+          reactions: [],
+          attachments,
+        },
+      ],
+      lastRead: {
+        ...st.lastRead,
+        [`${st.currentUserId}:${conversationId}`]: Date.now(),
+      },
+      activities: note ? activity(st, "message", note) : st.activities,
+    });
+
+    const sendMessage: StoreValue["sendMessage"] = (
+      conversationId,
+      content,
+      attachments = []
+    ) => {
       const s = stateRef.current;
-      if (!s) return;
+      if (!s) return false;
+      if (!content.trim() && attachments.length === 0) return false;
       // DMs are open to everyone (but only their two participants); posting
       // in channels is gated by a permission.
       const channel = s.channels.find((c) => c.id === conversationId);
+      let otherUserId: string | undefined;
       if (channel) {
-        if (!guard("message.send")) return;
+        if (!guard("message.send")) return false;
         if (channelIsViewerOnly(s, channel)) {
           deny("You have view-only access to this channel.");
-          return;
+          return false;
         }
       } else {
         const dm = s.dms.find((d) => d.id === conversationId);
-        if (!dm || !dm.memberIds.includes(s.currentUserId)) return;
+        if (!dm || !dm.memberIds.includes(s.currentUserId)) return false;
+        otherUserId = dm.memberIds.find((id) => id !== s.currentUserId);
       }
-      update((st) => ({
-        ...st,
-        messages: [
-          ...st.messages,
-          {
-            id: uid("m"),
-            channelId: conversationId,
-            authorId: st.currentUserId,
-            content,
-            createdAt: Date.now(),
-            reactions: [],
-          },
-        ],
-        lastRead: {
-          ...st.lastRead,
-          [`${st.currentUserId}:${conversationId}`]: Date.now(),
-        },
-      }));
+      const note = shareNote(s, attachments, channel, otherUserId);
+      update((st) => appendMessage(st, conversationId, content, attachments, note));
+      return true;
+    };
+
+    const sendToUser: StoreValue["sendToUser"] = (
+      otherUserId,
+      content,
+      attachments = []
+    ) => {
+      const s = stateRef.current;
+      if (!s) return null;
+      if (!content.trim() && attachments.length === 0) return null;
+      if (otherUserId === s.currentUserId || !s.users.some((u) => u.id === otherUserId)) {
+        return null;
+      }
+      const me = s.currentUserId;
+      const existing = s.dms.find(
+        (d) => d.memberIds.includes(me) && d.memberIds.includes(otherUserId)
+      );
+      const dm: DM = existing ?? {
+        id: uid("d"),
+        memberIds: [me, otherUserId],
+        createdAt: Date.now(),
+      };
+      const note = shareNote(s, attachments, undefined, otherUserId);
+      update((st) =>
+        appendMessage(
+          existing ? st : { ...st, dms: [...st.dms, dm] },
+          dm.id,
+          content,
+          attachments,
+          note
+        )
+      );
+      return dm;
     };
 
     const editMessage = (messageId: string, content: string) => {
@@ -756,6 +841,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const updateProject: StoreValue["updateProject"] = (projectId, patch) => {
       // Editing a project is part of the "manage projects" capability.
       if (!guard("project.create")) return;
+      if (patch.attachments) {
+        // Files follow the same per-project access rule as tasks.
+        const cur = stateRef.current;
+        const target = cur?.projects.find((p) => p.id === projectId);
+        if (cur && target && projectIsViewerOnly(cur, target)) {
+          deny("You have view-only access to this project.");
+          return;
+        }
+      }
       update((s) => {
         const prev = s.projects.find((p) => p.id === projectId);
         if (!prev) return s;
@@ -938,6 +1032,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       deleteRole,
       resetDemo,
       sendMessage,
+      sendToUser,
       editMessage,
       deleteMessage,
       toggleReaction,

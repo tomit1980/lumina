@@ -33,6 +33,10 @@ interface UIValue {
   /** Open the "Manage access" dialog for a specific channel or project. */
   openAccessDialog: (kind: "channel" | "project", id: string) => void;
   closeAccessDialog: () => void;
+  shareFileDialog: { open: boolean; projectId: string; attachmentId: string } | null;
+  /** Open the "Share to chat" dialog for one of a project's files. */
+  openShareFileDialog: (projectId: string, attachmentId: string) => void;
+  closeShareFileDialog: () => void;
 }
 
 const UIContext = React.createContext<UIValue | null>(null);
@@ -50,6 +54,8 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
   const [dmDialogOpen, setDmDialogOpen] = React.useState(false);
   const [securityDialogOpen, setSecurityDialogOpen] = React.useState(false);
   const [accessDialog, setAccessDialog] = React.useState<UIValue["accessDialog"]>(null);
+  const [shareFileDialog, setShareFileDialog] =
+    React.useState<UIValue["shareFileDialog"]>(null);
 
   const value = React.useMemo<UIValue>(
     () => ({
@@ -70,6 +76,11 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
       accessDialog,
       openAccessDialog: (kind, id) => setAccessDialog({ open: true, kind, id }),
       closeAccessDialog: () => setAccessDialog((d) => (d ? { ...d, open: false } : d)),
+      shareFileDialog,
+      openShareFileDialog: (projectId, attachmentId) =>
+        setShareFileDialog({ open: true, projectId, attachmentId }),
+      closeShareFileDialog: () =>
+        setShareFileDialog((d) => (d ? { ...d, open: false } : d)),
     }),
     [
       paletteOpen,
@@ -79,6 +90,7 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
       dmDialogOpen,
       securityDialogOpen,
       accessDialog,
+      shareFileDialog,
     ]
   );
 

@@ -70,7 +70,8 @@ function ProjectPageInner() {
   const router = useRouter();
   const { state, can, canSeeProject, projectAccessLevel, updateProject, deleteProject } =
     useStore();
-  const { openTaskDialog, openProjectDialog, openAccessDialog } = useUI();
+  const { openTaskDialog, openProjectDialog, openAccessDialog, openShareFileDialog } =
+    useUI();
   const canEditProject = can("project.create");
 
   const [view, setView] = React.useState<"board" | "list" | "files">("board");
@@ -318,8 +319,15 @@ function ProjectPageInner() {
             <AttachmentsField
               attachments={project.attachments}
               disabled={!canManageFiles}
-              onAdd={(a) =>
-                updateProject(project.id, { attachments: [...project.attachments, a] })
+              onShare={
+                can("message.send")
+                  ? (id) => openShareFileDialog(project.id, id)
+                  : undefined
+              }
+              onAdd={(added) =>
+                updateProject(project.id, {
+                  attachments: [...project.attachments, ...added],
+                })
               }
               onRemove={(id) =>
                 updateProject(project.id, {

@@ -1,7 +1,7 @@
 import { DEFAULT_ROLES } from "./permissions";
 import type { AppState, DM, Message, Task } from "./types";
 
-export const SEED_VERSION = 9;
+export const SEED_VERSION = 10;
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -144,6 +144,7 @@ export function createSeed(): AppState {
     content,
     createdAt: now - agoHours * HOUR,
     reactions,
+    attachments: [],
   });
 
   const messages: Message[] = [

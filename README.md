@@ -43,7 +43,12 @@ Roles are **first-class, admin-editable entities** — not hardcoded strings:
 - **Audit trail**: every role/permission change lands in the activity feed.
 - **Delete channels & projects**: anyone with the permission (admins by default) gets a hover **⋯ → Delete** on each sidebar channel/project row — plus the existing chat-header and project-page menus. Deletes are confirmed first and cascade (a channel takes its messages, a project takes its tasks). `#general` is protected.
 
-### 🔒 Per-resource access control
+#### 📎 Files & sharing
+- **Project files** — every project has a **Files** tab (briefs, mockups, reference docs; 3 MB per file, stored in your browser). Task dialogs have the same attachment field.
+- **Share to chat** — hover a project file → **Share** → pick a channel or a person, add an optional note, and it lands in that conversation as a downloadable attachment (images preview inline) with a "from 🎨 Project" link back. Shared files are *references*, not copies: nothing is stored twice, and if the file is later removed from the project the message says so.
+- **Attach in the composer** — the 📎 button in any channel or DM attaches files directly to a message (no text required). Viewer-only members can download but not post.
+
+## 🔒 Per-resource access control
 Beyond role-wide permissions, any channel or project can be **restricted to specific people at a specific level** — a finer grain than "Member vs Guest":
 
 - **Manage access** — from a channel's ⋯ menu or a project's ⋯ menu / sidebar row, flip "Restrict access" on and invite exactly who should see it, each as **Editor** (full access) or **Viewer** (read-only).

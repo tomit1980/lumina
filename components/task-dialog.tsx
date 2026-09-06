@@ -495,7 +495,7 @@ export function TaskDialog() {
             <AttachmentsField
               attachments={form.attachments}
               disabled={readOnly}
-              onAdd={(a) => set("attachments", [...form.attachments, a])}
+              onAdd={(added) => set("attachments", [...form.attachments, ...added])}
               onRemove={(id) =>
                 set(
                   "attachments",

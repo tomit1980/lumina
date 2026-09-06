@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user-avatar";
 import { UserCard } from "@/components/user-card";
+import { MessageAttachments } from "@/components/chat/message-attachments";
 import { RichText } from "@/components/chat/rich-text";
 import { canEditMessage } from "@/lib/permissions";
 import { useStore } from "@/lib/store";
@@ -145,7 +146,7 @@ export function MessageItem({
               </Button>
             </div>
           </div>
-        ) : (
+        ) : message.content.trim() ? (
           <p className="text-[13px] leading-relaxed text-foreground/90">
             <RichText
               content={message.content}
@@ -156,6 +157,10 @@ export function MessageItem({
               <span className="ml-1.5 text-[10px] text-muted-foreground">(edited)</span>
             )}
           </p>
+        ) : null}
+
+        {message.attachments.length > 0 && (
+          <MessageAttachments attachments={message.attachments} />
         )}
 
         {message.reactions.length > 0 && (

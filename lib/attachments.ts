@@ -1,5 +1,5 @@
 import { uid } from "./store";
-import type { Attachment } from "./types";
+import type { AppState, Attachment, MessageAttachment } from "./types";
 
 /** There's no backend — every file is base64-encoded straight into
  *  localStorage, so we cap individual uploads to keep the whole workspace
@@ -46,4 +46,16 @@ export function readFileAsAttachment(
     reader.onerror = () => resolve({ ok: false, error: `Couldn't read ${file.name}.` });
     reader.readAsDataURL(file);
   });
+}
+
+/** A message attachment shared from a project carries no bytes of its own —
+ *  look them up on the source project. Returns null if the file has since been
+ *  removed from that project. Composer uploads resolve to themselves. */
+export function resolveMessageAttachment(
+  state: Pick<AppState, "projects">,
+  att: MessageAttachment
+): Attachment | null {
+  if (!att.sourceProjectId) return att;
+  const project = state.projects.find((p) => p.id === att.sourceProjectId);
+  return project?.attachments.find((a) => a.id === att.id) ?? null;
 }

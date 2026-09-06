@@ -15,6 +15,7 @@ import { CommandPalette } from "@/components/command-palette";
 import { DmDialog } from "@/components/dm-dialog";
 import { ProjectDialog } from "@/components/project-dialog";
 import { Reminders } from "@/components/reminders";
+import { ShareFileDialog } from "@/components/share-file-dialog";
 import { TaskDialog } from "@/components/task-dialog";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -43,6 +44,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <ProjectDialog />
                 <DmDialog />
                 <AccessDialog />
+                <ShareFileDialog />
                 <SelfEnrollDialog />
                 <SwitchTwoFactorPrompt />
                 <Reminders />

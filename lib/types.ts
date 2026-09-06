@@ -80,6 +80,8 @@ export interface Message {
   createdAt: number;
   editedAt?: number;
   reactions: Reaction[];
+  /** Files on this message — uploaded in the composer, or shared from a project. */
+  attachments: MessageAttachment[];
 }
 
 export const TASK_STATUSES = [
@@ -197,4 +199,12 @@ export interface Attachment {
   dataUrl: string;
   uploadedBy: string;
   uploadedAt: number;
+}
+
+/** A file on a message. Uploaded in the composer → a full Attachment (dataUrl
+ *  inline). Shared from a project's Files tab → same id/name/size/type, but
+ *  dataUrl is "" and sourceProjectId is set: the bytes are resolved live from
+ *  that project so nothing is stored twice (localStorage is tight). */
+export interface MessageAttachment extends Attachment {
+  sourceProjectId?: string;
 }

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { formatDistanceToNow } from "date-fns";
-import { FileText, Paperclip, Trash2, Upload } from "lucide-react";
+import { FileText, Paperclip, Share2, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -17,10 +17,12 @@ function AttachmentRow({
   attachment,
   disabled,
   onRemove,
+  onShare,
 }: {
   attachment: Attachment;
   disabled: boolean;
   onRemove: () => void;
+  onShare?: () => void;
 }) {
   const { state } = useStore();
   const uploader = state.users.find((u) => u.id === attachment.uploadedBy);
@@ -60,6 +62,22 @@ function AttachmentRow({
           <span>{formatDistanceToNow(attachment.uploadedAt, { addSuffix: true })}</span>
         </div>
       </a>
+      {onShare && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0 text-muted-foreground"
+              onClick={onShare}
+              aria-label={`Share ${attachment.name} to chat`}
+            >
+              <Share2 className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Share to chat</TooltipContent>
+        </Tooltip>
+      )}
       {!disabled && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -84,11 +102,15 @@ export function AttachmentsField({
   attachments,
   onAdd,
   onRemove,
+  onShare,
   disabled = false,
 }: {
   attachments: Attachment[];
-  onAdd: (attachment: Attachment) => void;
+  /** Called once per upload batch with every file that was read successfully. */
+  onAdd: (attachments: Attachment[]) => void;
   onRemove: (attachmentId: string) => void;
+  /** When provided, each row gets a "Share to chat" button (works even when disabled). */
+  onShare?: (attachmentId: string) => void;
   disabled?: boolean;
 }) {
   const { currentUser } = useStore();
@@ -98,11 +120,15 @@ export function AttachmentsField({
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setBusy(true);
+    // Read everything first, then hand the batch back in ONE call: a per-file
+    // callback would let the parent's stale closure overwrite earlier adds.
+    const added: Attachment[] = [];
     for (const file of Array.from(files)) {
       const result = await readFileAsAttachment(file, currentUser.id);
-      if (result.ok) onAdd(result.attachment);
+      if (result.ok) added.push(result.attachment);
       else toast.error(result.error);
     }
+    if (added.length > 0) onAdd(added);
     setBusy(false);
     if (inputRef.current) inputRef.current.value = "";
   };
@@ -117,6 +143,7 @@ export function AttachmentsField({
               attachment={a}
               disabled={disabled}
               onRemove={() => onRemove(a.id)}
+              onShare={onShare ? () => onShare(a.id) : undefined}
             />
           ))}
         </div>
