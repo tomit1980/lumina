@@ -205,11 +205,14 @@ add a weekly `pg_dump` to a GitHub Actions artifact, since the free tier has no 
 ## Verification
 
 1. `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build` green in CI.
-2. **RLS policy suite — non-negotiable.** Vitest against a local Supabase (`supabase
-   start`). Sign in as admin, member, and guest; for private channels, restricted projects,
-   DMs you are not part of, other users' `read_state`, and role mutation, assert both the
-   allowed and the denied outcome. A policy gap is a data leak, so absence of an error is
-   not evidence — assert each denial explicitly.
+2. **RLS policy suite — non-negotiable.** Vitest against a **dedicated dev Supabase
+   project** (the free tier allows two projects, so dev and prod are both free). The local
+   stack via `supabase start` is not an option here: it requires Docker, which is not
+   installed on this machine, and the CLI does not need it for remote `link`, `db push`, or
+   `gen types`. Sign in as admin, member, and guest; for private channels, restricted
+   projects, DMs you are not part of, other users' `read_state`, and role mutation, assert
+   both the allowed and the denied outcome. A policy gap is a data leak, so absence of an
+   error is not evidence — assert each denial explicitly.
 3. **Two-browser test.** Two profiles signed in as different users: a message sent in one
    appears in the other within ~2s; unread badges clear per-user; a task dragged in one
    moves in the other; a file uploaded in one downloads in the other.
