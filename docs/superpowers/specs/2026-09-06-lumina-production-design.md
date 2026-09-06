@@ -1,0 +1,232 @@
+# Lumina → production: real backend, real accounts, real multi-user
+
+**Date:** 2026-09-06
+**Status:** Approved, ready for implementation planning
+
+## Context
+
+Lumina is a complete collaboration app — chat, DMs, kanban projects, role-based
+permissions, file sharing, in-app document editing — spanning 79 files and ~13,200 lines.
+It runs entirely inside one browser: all application state in
+`localStorage["lumina:v1"]`, all credentials in `localStorage["lumina:auth"]`, deployed as
+a static export to GitHub Pages.
+
+That makes it a convincing demo and an unusable product. Two people cannot share a
+workspace, and none of its protections are real:
+
+- `canSeeChannel` / `canSeeProject` (`lib/store.tsx:1096-1120`) only hide rows in the UI.
+  The entire workspace — including every "private" channel and "restricted" project — sits
+  in plain text in every user's localStorage.
+- `DEMO_PASSWORD = "lumina24"` (`lib/auth.tsx:24`) and the credential-vault key
+  (`lib/crypto.ts:237-238`) are literals in the shipped bundle. `lib/crypto.ts:1-15` says
+  so itself: *"anyone who can run this code can derive the key… a real deployment must move
+  verification server-side."*
+- The session is a raw user id written to storage with no token, signature, or expiry
+  (`lib/auth.tsx:165-171`).
+- "View as" (`lib/auth.tsx:287-295`) hands out a session with no credential at all.
+
+The goal: make Lumina a real internal tool that one team uses daily.
+
+### Decisions
+
+| Decision | Choice |
+|---|---|
+| Audience | Internal tool for one team — single tenant, invite-only, no billing |
+| Sign-in | Email + password verified server-side, with the existing TOTP 2FA |
+| Day-one must-haves | Live chat updates; real file storage |
+| Deferred | Admin invite flow; email notifications |
+| Public demo | Retired — `tomit1980.github.io/lumina` keeps its URL but now shows a login screen |
+| Backend | Supabase behind the current static site; Row Level Security is the boundary |
+| Tier | Free tier, accepting its limits |
+
+### Alternatives considered
+
+**Move to a Vercel server + Supabase.** Business rules would live in TypeScript instead of
+SQL policies, which is more familiar and easier to test. Rejected because it drops the
+static export, adds a second host, and reduces the existing GitHub Pages URL to a redirect
+— directly against the decision to keep that link serving the app.
+
+**Own API + Postgres on a VPS.** Maximum control, no vendor. Rejected as disproportionate
+for a single internal team: it is the most code to write and the only option where
+backups, patching, monitoring, and uptime become our job.
+
+## Architecture
+
+The browser keeps shipping exactly as today — static export, `basePath: "/lumina"`, GitHub
+Pages, same URL. It gains one dependency, `@supabase/supabase-js`, and talks directly to
+Supabase for Postgres, Auth, Realtime, and Storage.
+
+```
+Browser (static Next.js export, GitHub Pages)
+  └── supabase-js ──► Supabase
+                       ├── Postgres  (data + RLS policies + invariant functions)
+                       ├── Auth      (email/password, TOTP MFA, JWT sessions)
+                       ├── Realtime  (live updates, presence)
+                       └── Storage   (file bytes)
+```
+
+`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are injected at build time
+from GitHub Actions secrets. The anon key is a public identifier by design and safe in a
+public repo's bundle — it grants nothing on its own, because RLS is the boundary. The
+`service_role` key never reaches the client; privileged work happens in the Supabase
+dashboard.
+
+## Data model
+
+The schema mirrors `lib/types.ts` with three structural changes.
+
+**Ids stay client-generated prefixed text** (`c_`, `p_`, `t_`, … from `uid()` at
+`lib/store.tsx:31`) rather than database defaults, so optimistic updates can mint an id
+before the server answers. Only `profiles.id` is a uuid, because it must equal
+`auth.users.id`.
+
+### Change 1 — nested arrays become tables
+
+A policy can only guard a row, so anything needing its own access rule must be one.
+
+- `Channel.members` / `Project.members` (`ResourceMember[]`) → `channel_members`,
+  `project_members` (`resource_id, user_id, level`).
+- `Message.reactions` (`Reaction[]`) → `reactions` (`message_id, emoji, user_id`).
+- `Project.attachments` / `Task.attachments` / `Message.attachments` → a shared
+  `attachments` table plus join tables.
+
+### Change 2 — conversations get a real parent
+
+`Message.channelId` (`lib/types.ts:76`) holds either a channel id or a DM id — polymorphic,
+and unexpressible as a foreign key. A `conversations (id, kind: 'channel' | 'dm')` table
+that `channels` and `dms` each extend 1:1 gives messages one clean parent and lets a single
+policy cover both kinds.
+
+### Change 3 — read state goes private
+
+`AppState.lastRead` (`lib/types.ts:164`) is a `Record<"userId:conversationId", number>`
+inside the shared blob, so every user's read positions are visible to everyone. It becomes
+`read_state (user_id, conversation_id, last_read_at)`, each row visible only to its owner.
+
+### Tables
+
+| Table | Notes |
+|---|---|
+| `profiles` | `User` **plus `email`** — the type has none today; `id` = auth user id |
+| `roles` | `RoleDef`; `permissions text[]`; `is_system`, `locked` preserved |
+| `conversations` | `id`, `kind` — new parent for messages |
+| `channels` | extends `conversations`; name, description, `is_private`, `is_team`, creator |
+| `dms` | extends `conversations`; exactly two members |
+| `channel_members`, `project_members` | `user_id`, `level: 'viewer' \| 'editor'` |
+| `messages` | `conversation_id` FK, author, content, `created_at`, `edited_at` |
+| `reactions` | `message_id`, `emoji`, `user_id` |
+| `projects`, `tasks` | as today, minus the embedded arrays |
+| `attachments` | `storage_path` replaces `dataUrl`; name, size, mime, uploader, editor |
+| `project_attachments`, `task_attachments`, `message_attachments` | joins; the last carries `source_project_id` |
+| `activities` | as today; the 60-row `MAX_ACTIVITIES` cap (`lib/store.tsx:29`) is dropped — the feed is paged in the UI instead |
+| `read_state` | replaces the shared `lastRead` map |
+
+Retired: `migrate()` / `SEED_VERSION` (`lib/store.tsx:290-344`) and `lib/seed.ts` — schema
+migrations replace them.
+
+## Security model
+
+Row Level Security on every table, default deny. The policies become the real enforcement;
+the `can*` helpers stay only to decide what the UI greys out.
+
+**Reads** mirror today's helpers: profiles and roles are readable by any signed-in
+teammate, since this is one team. Public channels are visible to everyone, private ones
+only to their members. Messages inherit their conversation's visibility. Projects and tasks
+follow `project_members` plus the `restricted` flag. Holders of `members.manage` bypass,
+exactly as the code does now.
+
+**Writes** go through one SQL function, `has_permission(user_id, permission)` — the
+database twin of `guard()` (`lib/store.tsx:400-410`) — reading the caller's role from
+`roles.permissions`.
+
+**Four invariants** cannot be expressed as policies and become Postgres functions or
+triggers, ported from the store:
+
+1. Last-admin protection (`lib/store.tsx:428-434`) — cannot demote or delete the final admin.
+2. A role with members cannot be deleted (`lib/store.tsx:546`).
+3. A resource's creator is always re-inserted as an editor (`ensureEditor`, `:228-233`).
+4. Moving a task renumbers its whole destination column in one transaction (`moveTask`,
+   `:977-1010`).
+
+## Implementation phases
+
+### Phase 0 — safety net
+
+There are zero tests across ~13,200 lines, and CI runs neither typecheck nor lint. Before
+touching anything structural:
+
+- Vitest + `npm test`; add `npm run typecheck`.
+- Wire typecheck, lint, and test into `.github/workflows/deploy.yml`.
+- Add `app/error.tsx` and `app/global-error.tsx` — neither exists.
+- Add `.env.example`.
+
+### Phase 1 — foundation
+
+1. Supabase project; migrations for the schema; RLS policies; `has_permission`; the four
+   invariant functions.
+2. `lib/supabase.ts` — typed client built from generated database types.
+3. **Auth swap.** Keep the `AuthValue` shape (`lib/auth.tsx:58-92`) where practical, backed
+   by Supabase Auth: `signInWithPassword`, native TOTP MFA factors, JWT sessions with real
+   expiry. Delete `lib/crypto.ts` outright, along with `DEMO_PASSWORD`, `buildSeedStore`,
+   `requestSwitch`, and `resetAll`. `components/auth/session-bridge.tsx` simplifies to
+   auth-uid → profile.
+4. **Store rewrite — the bulk of the project.** `StoreValue` (`lib/store.tsx:69-162`)
+   survives as the seam, so components are largely untouched, and `AppState` stays as an
+   in-memory cache. Replace the hydrate and persist effects (`:349-385`, which serialise
+   the entire blob on every state change) with parallel selects at sign-in. Convert all ~30
+   actions to optimistic-async: patch local state immediately, call Supabase, roll the
+   patch back and toast on failure. `guard()` stays as a local fast path for UI gating.
+5. **Strip demo affordances.** "View as" (`components/app-shell.tsx:575-598`,
+   `components/command-palette.tsx:206-217`), "Reset demo data"
+   (`app-shell.tsx:650-656`), and the one-click demo logins in
+   `components/auth/login-screen.tsx`.
+
+### Phase 2 — the day-one requirements
+
+- **Realtime.** Subscribe to messages, reactions, tasks, projects, channels, and
+  activities; patch the cache on change. Unread badges (`getUnreadCount`,
+  `lib/store.tsx:236-253`) become correct across devices via `read_state`.
+- **Presence.** Realtime Presence replaces `User.presence`, which is static seed data today
+  (`lib/seed.ts:33,42,…`) rendering permanently-fake online dots.
+- **Storage.** Buckets for project, task, and message files. `Attachment.dataUrl` becomes
+  `storage_path` fetched through signed URLs. Rework `readFileAsAttachment`
+  (`lib/attachments.ts:20-49`) to upload, `resolveMessageAttachment` (`:54-61`) to look up
+  the shared row, and the load/save ends of `components/documents/document-page.tsx:72-98`
+  plus the three editors — their editing internals are untouched. Raise
+  `MAX_ATTACHMENT_BYTES` (`lib/attachments.ts:7`) from 3 MB to 10 MB, and delete the
+  localStorage quota toast (`lib/store.tsx:372-385`).
+
+### Phase 3 — cutover
+
+Create real accounts in the Supabase dashboard; seed the team's actual channels and
+projects; switch GitHub Actions to inject production keys; run the RLS verification pass;
+add a weekly `pg_dump` to a GitHub Actions artifact, since the free tier has no backups.
+
+## Verification
+
+1. `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build` green in CI.
+2. **RLS policy suite — non-negotiable.** Vitest against a local Supabase (`supabase
+   start`). Sign in as admin, member, and guest; for private channels, restricted projects,
+   DMs you are not part of, other users' `read_state`, and role mutation, assert both the
+   allowed and the denied outcome. A policy gap is a data leak, so absence of an error is
+   not evidence — assert each denial explicitly.
+3. **Two-browser test.** Two profiles signed in as different users: a message sent in one
+   appears in the other within ~2s; unread badges clear per-user; a task dragged in one
+   moves in the other; a file uploaded in one downloads in the other.
+4. **Real guest test** (no "View as"): confirm restricted projects are absent from the API
+   response, not merely hidden in the UI — check the network tab.
+5. **Failure path.** Kill the network, make an edit, and confirm the optimistic patch rolls
+   back with a toast rather than silently diverging from the server.
+6. **Document round-trips still pass.** xlsx edit → save → reopen, docx edit → save →
+   reopen, now through Storage rather than localStorage.
+
+## Known limitations
+
+- **Free tier.** The project pauses after 7 days idle and needs a manual un-pause before
+  anyone can log in; 500 MB database; 1 GB files (hence the 10 MB per-file cap rather than
+  something larger); no automatic backups, mitigated by the weekly `pg_dump`. Upgrading to
+  Pro (~$25/mo) removes all four and is worth revisiting once the team depends on it.
+- **Account creation is manual** in the Supabase dashboard until the invite flow is built.
+- **No email notifications**, so nothing pulls people back to the app when they are away.
+- **The async conversion is the main source of effort and regression risk.** It changes
+  error handling at every mutation call site even where signatures stay compatible.
