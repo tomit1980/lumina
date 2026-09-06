@@ -1,5 +1,7 @@
 "use client";
 
+import * as React from "react";
+
 export default function GlobalError({
   error,
   reset,
@@ -7,6 +9,10 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  React.useEffect(() => {
+    console.error("Lumina root layout error:", error);
+  }, [error]);
+
   return (
     <html lang="en">
       <body
