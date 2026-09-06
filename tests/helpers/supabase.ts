@@ -58,7 +58,12 @@ export async function createTestUser(opts: {
   });
   if (error || !data.user) throw new Error(`createTestUser failed: ${error?.message}`);
 
-  const profile = await serviceClient.from("profiles").upsert({
+  // Deliberately untyped: this helper runs both before and after the identity
+  // migration exists. Until it is pushed, `profiles` is absent from the
+  // generated Database type and a typed .from("profiles") will not compile.
+  // The insert below is checked at runtime by the tolerance right after it.
+  const bootstrap = serviceClient as unknown as SupabaseClient;
+  const profile = await bootstrap.from("profiles").upsert({
     id: data.user.id,
     email: opts.email,
     name: opts.name,
@@ -66,10 +71,21 @@ export async function createTestUser(opts: {
     title: "Test User",
     role_id: opts.roleId,
     color: "#7c3aed",
-  } as never);
-  // Tolerated only before the identity migration creates the table.
-  if (profile.error && !/relation .* does not exist/.test(profile.error.message)) {
-    throw new Error(`createTestUser profile insert failed: ${profile.error.message}`);
+  });
+  // Tolerated only before the identity migration creates the table. PostgREST
+  // reports a missing table as PGRST205 ("Could not find the table ... in the
+  // schema cache"), not as Postgres's own "relation does not exist" — match the
+  // code, since the prose has changed between PostgREST versions.
+  const tableMissing =
+    profile.error?.code === "PGRST205" ||
+    /does not exist|schema cache/i.test(profile.error?.message ?? "");
+  if (profile.error && !tableMissing) {
+    // The auth user already exists at this point. Remove it before throwing,
+    // or every failed run leaves an orphan behind that no afterAll can reach.
+    await deleteTestUser(data.user.id);
+    throw new Error(
+      `createTestUser profile insert failed (${profile.error.code}): ${profile.error.message}`
+    );
   }
   return data.user.id;
 }
