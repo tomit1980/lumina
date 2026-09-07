@@ -1143,10 +1143,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       );
       // Assignment never grants access: the resulting owner is checked
       // exactly like a collaborator.
+      //
+      // Only what this patch actually ASSIGNS is checked. A person who was
+      // already on the task and has since lost sight of the project is not
+      // this caller's doing, and refusing over them would make the task
+      // uneditable by anyone — the same trap the dialog's prune-on-open
+      // fixed for collaborators, and it reaches further: marking a task done
+      // from the home page passes no assignment at all. Stale entries are
+      // cleaned up where access is revoked, and pruned by the dialog.
+      const ownerIsNewlyAssigned =
+        patch.assigneeId !== undefined && patch.assigneeId !== task0.assigneeId;
+      const newlyAddedCollaborators = resultingCollaborators.filter(
+        (id) => !task0.collaboratorIds.includes(id)
+      );
       const blockedId =
-        resultingOwner && !canUserSeeProject(s0, project0, resultingOwner)
+        ownerIsNewlyAssigned &&
+        resultingOwner &&
+        !canUserSeeProject(s0, project0, resultingOwner)
           ? resultingOwner
-          : resultingCollaborators.find((id) => !canUserSeeProject(s0, project0, id));
+          : newlyAddedCollaborators.find((id) => !canUserSeeProject(s0, project0, id));
       if (blockedId) {
         const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
         deny(`${name} can't see this project.`);

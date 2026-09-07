@@ -287,14 +287,18 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
     expect(result.current.state.activities.length).toBe(beforeActivities);
   });
 
-  // fix-b001: task-dialog.tsx used to toast "Task updated" and close/discard
-  // the edit regardless of what updateTask returned. These two pin down the
-  // exact repro — a collaborator (Priya) added while the project was open,
-  // the project restricted afterwards without anyone touching the task's
-  // collaborator list, then a save that doesn't even mention
-  // collaboratorIds — proving updateTask itself returns falsy/truthy
-  // correctly so the dialog has something honest to check.
-  it("refuses a title-only patch when an existing collaborator lost visibility after the project was later restricted", () => {
+  // fix-b001 / B-003: this scenario — a collaborator (Priya) added while the
+  // project was open, the project restricted afterwards without anyone
+  // touching the task — originally REFUSED the unrelated edit. That was
+  // wrong, and it locked every user out of the task: the home page's
+  // quick-complete passes no assignment at all and was refused too.
+  // "Assignment never grants access" governs who you may ASSIGN; a person
+  // already on the task who later lost sight of the project is not the
+  // editing user's doing. The write now succeeds and leaves the stale entry
+  // untouched (the dialog prunes it on open, and revoking access prunes it
+  // at the source). Newly adding such a person is still refused — see the
+  // B-003 block at the end of this file.
+  it("allows a title-only patch when an existing collaborator lost visibility after the project was later restricted", () => {
     let state = addProject(baseState(), {
       id: "p_later_restricted",
       name: "Later Restricted",
@@ -322,13 +326,15 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
     };
     const { result } = mount(asUser(state, "u_maya"));
     const beforeTask = result.current.state.tasks.find((t) => t.id === "t_pr")!;
-    // The patch only changes the title — collaboratorIds isn't in it at all
-    // — but the *resulting* list (task0's existing collaborators) still
-    // includes someone who can't see the project, so the write must still
-    // be refused.
+    // The patch only changes the title and assigns nobody, so it goes
+    // through. Priya stays on the task rather than being silently dropped —
+    // removing her is a decision for the dialog (which shows a notice) or
+    // for revocation, not a side effect of renaming.
     const ok = run(() => result.current.updateTask("t_pr", { title: "Renamed" }));
-    expect(ok).toBe(false);
-    expect(result.current.state.tasks.find((t) => t.id === "t_pr")).toEqual(beforeTask);
+    expect(ok).toBe(true);
+    const afterTask = result.current.state.tasks.find((t) => t.id === "t_pr")!;
+    expect(afterTask.title).toBe("Renamed");
+    expect(afterTask.collaboratorIds).toEqual(beforeTask.collaboratorIds);
   });
 
   it("succeeds a title-only patch once the ineligible collaborator has been pruned from the task", () => {
@@ -798,5 +804,74 @@ describe("deleteTask reports refusal to its caller (B-002)", () => {
   it("returns false for a task that does not exist", () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
     expect(run(() => result.current.deleteTask("t_nope"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------
+// B-003 — a stale assignment must not make a task uneditable.
+// "Assignment never grants access" governs who you may ASSIGN. Someone who
+// was already on the task and later lost sight of the project is not the
+// editing user's doing; refusing over them locked everyone out of the task,
+// including the home page's quick-complete, which assigns nobody at all.
+// ---------------------------------------------------------------------
+describe("a stale assignment does not block unrelated edits (B-003)", () => {
+  function restrictedProjectWith(taskFields: Record<string, unknown>) {
+    let state = addProject(baseState(), {
+      id: "p_stale",
+      name: "Restricted",
+      createdBy: "u_vlad",
+      restricted: true,
+      members: [{ userId: "u_vlad", level: "editor" }],
+    });
+    state = addTask(state, {
+      id: "t_stale",
+      projectId: "p_stale",
+      title: "Still editable",
+      createdBy: "u_vlad",
+      ...taskFields,
+    });
+    return mount(asUser(state, "u_vlad"));
+  }
+
+  it("an owner who lost visibility does not block a status change", () => {
+    const { result } = restrictedProjectWith({
+      assigneeId: "u_priya",
+      collaboratorIds: [],
+    });
+    expect(run(() => result.current.updateTask("t_stale", { status: "done" }))).toBe(true);
+    expect(result.current.state.tasks.find((t) => t.id === "t_stale")!.status).toBe("done");
+  });
+
+  it("a collaborator who lost visibility does not block a status change", () => {
+    const { result } = restrictedProjectWith({
+      assigneeId: "u_vlad",
+      collaboratorIds: ["u_priya"],
+    });
+    expect(run(() => result.current.updateTask("t_stale", { status: "done" }))).toBe(true);
+    expect(result.current.state.tasks.find((t) => t.id === "t_stale")!.status).toBe("done");
+  });
+
+  it("but newly ASSIGNING someone who cannot see the project is still refused", () => {
+    const { result } = restrictedProjectWith({
+      assigneeId: "u_vlad",
+      collaboratorIds: [],
+    });
+    expect(
+      run(() => result.current.updateTask("t_stale", { assigneeId: "u_priya" }))
+    ).toBe(false);
+    expect(result.current.state.tasks.find((t) => t.id === "t_stale")!.assigneeId).toBe("u_vlad");
+  });
+
+  it("and newly ADDING a collaborator who cannot see the project is still refused", () => {
+    const { result } = restrictedProjectWith({
+      assigneeId: "u_vlad",
+      collaboratorIds: [],
+    });
+    expect(
+      run(() => result.current.updateTask("t_stale", { collaboratorIds: ["u_priya"] }))
+    ).toBe(false);
+    expect(
+      result.current.state.tasks.find((t) => t.id === "t_stale")!.collaboratorIds
+    ).toEqual([]);
   });
 });
