@@ -1,0 +1,411 @@
+// @vitest-environment jsdom
+//
+// Suite — task owner + collaborators (Plan "task-collaborators", Task 2).
+// Covers normaliseCollaborators (pure), canUserSeeProject (via the
+// createTask/updateTask write-time guard, and via canSeeProject agreeing
+// with it for the current user), and the per-person activity log entries
+// for owner/collaborator changes.
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup } from "@testing-library/react";
+
+import { normaliseCollaborators } from "@/lib/store";
+import { addProject, addTask, asUser, baseState, mount, run } from "./_support";
+
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
+
+function taskInput(overrides: Partial<Parameters<ReturnType<typeof mount>["result"]["current"]["createTask"]>[0]> = {}) {
+  return {
+    projectId: "p_unrestricted",
+    title: "New task",
+    description: "",
+    status: "todo" as const,
+    priority: "medium" as const,
+    assigneeId: null,
+    dueDate: null,
+    startTime: null,
+    durationMinutes: null,
+    reminderMinutes: null,
+    labels: [],
+    attachments: [],
+    ...overrides,
+  };
+}
+
+describe("normaliseCollaborators (pure)", () => {
+  it("is order-preserving for an already-clean list", () => {
+    expect(normaliseCollaborators(null, ["u_a", "u_b", "u_c"])).toEqual([
+      "u_a",
+      "u_b",
+      "u_c",
+    ]);
+  });
+
+  it("drops the owner wherever it appears in the list", () => {
+    expect(normaliseCollaborators("u_b", ["u_a", "u_b", "u_c"])).toEqual([
+      "u_a",
+      "u_c",
+    ]);
+  });
+
+  it("collapses duplicates, keeping the first occurrence's position", () => {
+    expect(normaliseCollaborators(null, ["u_a", "u_b", "u_a", "u_c", "u_b"])).toEqual([
+      "u_a",
+      "u_b",
+      "u_c",
+    ]);
+  });
+
+  it("handles a null owner (unassigned task) without dropping anyone", () => {
+    expect(normaliseCollaborators(null, ["u_a", "u_b"])).toEqual(["u_a", "u_b"]);
+  });
+
+  it("is pure — does not mutate its input array", () => {
+    const input = ["u_a", "u_b"];
+    normaliseCollaborators("u_a", input);
+    expect(input).toEqual(["u_a", "u_b"]);
+  });
+});
+
+describe("createTask — owner/collaborator normalisation and visibility guard", () => {
+  it("drops the owner from the collaborator list automatically", () => {
+    const state = addProject(baseState(), {
+      id: "p_unrestricted",
+      name: "Open Project",
+      createdBy: "u_sam",
+      restricted: false,
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const task = run(() =>
+      result.current.createTask(
+        taskInput({ assigneeId: "u_jonas", collaboratorIds: ["u_jonas", "u_priya"] })
+      )
+    );
+    expect(task).not.toBeNull();
+    expect(task!.collaboratorIds).toEqual(["u_priya"]);
+  });
+
+  it("collapses duplicate collaborators", () => {
+    const state = addProject(baseState(), {
+      id: "p_unrestricted",
+      name: "Open Project",
+      createdBy: "u_sam",
+      restricted: false,
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const task = run(() =>
+      result.current.createTask(
+        taskInput({ assigneeId: null, collaboratorIds: ["u_priya", "u_jonas", "u_priya"] })
+      )
+    );
+    expect(task!.collaboratorIds).toEqual(["u_priya", "u_jonas"]);
+  });
+
+  it("an unrestricted project accepts any user as a collaborator", () => {
+    const state = addProject(baseState(), {
+      id: "p_unrestricted",
+      name: "Open Project",
+      createdBy: "u_sam",
+      restricted: false,
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const task = run(() =>
+      result.current.createTask(
+        taskInput({ collaboratorIds: ["u_jonas", "u_priya", "u_elena"] })
+      )
+    );
+    expect(task).not.toBeNull();
+    expect(task!.collaboratorIds).toEqual(["u_jonas", "u_priya", "u_elena"]);
+  });
+
+  it("refuses the whole write when a collaborator can't see a restricted project", () => {
+    const state = addProject(baseState(), {
+      id: "p_restricted",
+      name: "Restricted Project",
+      createdBy: "u_sam",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "editor" }],
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const before = result.current.state.tasks.length;
+    const beforeActivities = result.current.state.activities.length;
+    const task = run(() =>
+      result.current.createTask(
+        taskInput({
+          projectId: "p_restricted",
+          collaboratorIds: ["u_jonas"], // not a member, not the creator, no members.manage
+        })
+      )
+    );
+    expect(task).toBeNull();
+    expect(result.current.state.tasks.length).toBe(before);
+    expect(result.current.state.activities.length).toBe(beforeActivities);
+  });
+});
+
+describe("updateTask — owner/collaborator normalisation and visibility guard", () => {
+  function unrestrictedProjectWithTask() {
+    let state = addProject(baseState(), {
+      id: "p_unrestricted",
+      name: "Open Project",
+      createdBy: "u_sam",
+      restricted: false,
+    });
+    state = addTask(state, {
+      id: "t_1",
+      projectId: "p_unrestricted",
+      title: "Existing task",
+      createdBy: "u_sam",
+      assigneeId: null,
+      collaboratorIds: [],
+    });
+    return state;
+  }
+
+  it("a patch that sets the owner to an existing collaborator removes them from the list", () => {
+    let state = unrestrictedProjectWithTask();
+    state = {
+      ...state,
+      tasks: state.tasks.map((t) =>
+        t.id === "t_1" ? { ...t, collaboratorIds: ["u_maya", "u_jonas"] } : t
+      ),
+    };
+    const { result } = mount(asUser(state, "u_maya"));
+    const ok = run(() => result.current.updateTask("t_1", { assigneeId: "u_maya" }));
+    expect(ok).toBe(true);
+    const task = result.current.state.tasks.find((t) => t.id === "t_1")!;
+    expect(task.assigneeId).toBe("u_maya");
+    expect(task.collaboratorIds).toEqual(["u_jonas"]);
+  });
+
+  it("a patch changing owner and collaborators together resolves against the resulting owner", () => {
+    let state = unrestrictedProjectWithTask();
+    state = {
+      ...state,
+      tasks: state.tasks.map((t) =>
+        t.id === "t_1"
+          ? { ...t, assigneeId: "u_jonas", collaboratorIds: ["u_priya"] }
+          : t
+      ),
+    };
+    const { result } = mount(asUser(state, "u_maya"));
+    // Sets the owner to u_priya (the old collaborator) while also submitting
+    // a collaborator list that (redundantly) names both the new and old
+    // owner — the resulting list must drop only the *new* owner.
+    const ok = run(() =>
+      result.current.updateTask("t_1", {
+        assigneeId: "u_priya",
+        collaboratorIds: ["u_priya", "u_jonas"],
+      })
+    );
+    expect(ok).toBe(true);
+    const task = result.current.state.tasks.find((t) => t.id === "t_1")!;
+    expect(task.assigneeId).toBe("u_priya");
+    expect(task.collaboratorIds).toEqual(["u_jonas"]);
+  });
+
+  it("an unrestricted project accepts any user as a collaborator on update", () => {
+    const state = unrestrictedProjectWithTask();
+    const { result } = mount(asUser(state, "u_maya"));
+    const ok = run(() =>
+      result.current.updateTask("t_1", { collaboratorIds: ["u_jonas", "u_priya", "u_elena"] })
+    );
+    expect(ok).toBe(true);
+    const task = result.current.state.tasks.find((t) => t.id === "t_1")!;
+    expect(task.collaboratorIds).toEqual(["u_jonas", "u_priya", "u_elena"]);
+  });
+
+  it("refuses the whole write when a collaborator can't see a restricted project, leaving state unchanged", () => {
+    let state = addProject(baseState(), {
+      id: "p_restricted",
+      name: "Restricted Project",
+      createdBy: "u_sam",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "editor" }],
+    });
+    state = addTask(state, {
+      id: "t_r1",
+      projectId: "p_restricted",
+      title: "Existing task",
+      createdBy: "u_sam",
+      assigneeId: null,
+      collaboratorIds: [],
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const beforeTask = result.current.state.tasks.find((t) => t.id === "t_r1")!;
+    const beforeActivities = result.current.state.activities.length;
+    const ok = run(() =>
+      result.current.updateTask("t_r1", { collaboratorIds: ["u_jonas"] })
+    );
+    expect(ok).toBe(false);
+    const afterTask = result.current.state.tasks.find((t) => t.id === "t_r1")!;
+    expect(afterTask).toEqual(beforeTask);
+    expect(result.current.state.activities.length).toBe(beforeActivities);
+  });
+
+  it("a restricted project's creator can be a collaborator even when not explicitly listed as a member", () => {
+    let state = addProject(baseState(), {
+      id: "p_restricted",
+      name: "Restricted Project",
+      createdBy: "u_sam", // creator, deliberately not in `members`
+      restricted: true,
+      members: [{ userId: "u_maya", level: "editor" }],
+    });
+    state = addTask(state, {
+      id: "t_r2",
+      projectId: "p_restricted",
+      title: "Existing task",
+      createdBy: "u_sam",
+      assigneeId: null,
+      collaboratorIds: [],
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const ok = run(() =>
+      result.current.updateTask("t_r2", { collaboratorIds: ["u_sam"] })
+    );
+    expect(ok).toBe(true);
+    expect(result.current.state.tasks.find((t) => t.id === "t_r2")?.collaboratorIds).toEqual([
+      "u_sam",
+    ]);
+  });
+});
+
+describe("canSeeProject / canUserSeeProject agree for the current user", () => {
+  it("a restricted project's creator, not listed as a member, can see their own project", () => {
+    const state = addProject(baseState(), {
+      id: "p_restricted",
+      name: "Restricted Project",
+      createdBy: "u_sam",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "viewer" }], // creator omitted
+    });
+    const { result } = mount(asUser(state, "u_sam"));
+    const project = result.current.state.projects.find((p) => p.id === "p_restricted")!;
+    expect(result.current.canSeeProject(project)).toBe(true);
+  });
+});
+
+describe("activity log — owner and collaborator changes, per person", () => {
+  function unrestrictedProjectWithTask() {
+    let state = addProject(baseState(), {
+      id: "p_unrestricted",
+      name: "Open Project",
+      createdBy: "u_sam",
+      restricted: false,
+    });
+    state = addTask(state, {
+      id: "t_1",
+      projectId: "p_unrestricted",
+      title: "Ship the launch page",
+      createdBy: "u_sam",
+      assigneeId: null,
+      collaboratorIds: [],
+    });
+    return state;
+  }
+
+  it("assigning an owner logs 'assigned “title” to Name'", () => {
+    const state = unrestrictedProjectWithTask();
+    const { result } = mount(asUser(state, "u_maya"));
+    run(() => result.current.updateTask("t_1", { assigneeId: "u_jonas" }));
+    const last = result.current.state.activities.at(-1)!;
+    expect(last.kind).toBe("task");
+    expect(last.text).toBe("assigned “Ship the launch page” to Jonas Weber");
+  });
+
+  it("clearing the owner logs 'unassigned “title”'", () => {
+    let state = unrestrictedProjectWithTask();
+    state = {
+      ...state,
+      tasks: state.tasks.map((t) => (t.id === "t_1" ? { ...t, assigneeId: "u_jonas" } : t)),
+    };
+    const { result } = mount(asUser(state, "u_maya"));
+    run(() => result.current.updateTask("t_1", { assigneeId: null }));
+    const last = result.current.state.activities.at(-1)!;
+    expect(last.text).toBe("unassigned “Ship the launch page”");
+  });
+
+  it("adding a collaborator logs 'added Name to “title”'", () => {
+    const state = unrestrictedProjectWithTask();
+    const { result } = mount(asUser(state, "u_maya"));
+    run(() => result.current.updateTask("t_1", { collaboratorIds: ["u_priya"] }));
+    const last = result.current.state.activities.at(-1)!;
+    expect(last.text).toBe("added Priya Sharma to “Ship the launch page”");
+  });
+
+  it("removing a collaborator logs 'removed Name from “title”'", () => {
+    let state = unrestrictedProjectWithTask();
+    state = {
+      ...state,
+      tasks: state.tasks.map((t) =>
+        t.id === "t_1" ? { ...t, collaboratorIds: ["u_priya"] } : t
+      ),
+    };
+    const { result } = mount(asUser(state, "u_maya"));
+    run(() => result.current.updateTask("t_1", { collaboratorIds: [] }));
+    const last = result.current.state.activities.at(-1)!;
+    expect(last.text).toBe("removed Priya Sharma from “Ship the launch page”");
+  });
+
+  it("emits one activity entry per person for a combined owner+collaborator change", () => {
+    let state = unrestrictedProjectWithTask();
+    state = {
+      ...state,
+      tasks: state.tasks.map((t) =>
+        t.id === "t_1" ? { ...t, assigneeId: "u_jonas", collaboratorIds: ["u_priya"] } : t
+      ),
+    };
+    const { result } = mount(asUser(state, "u_maya"));
+    const before = result.current.state.activities.length;
+    run(() =>
+      result.current.updateTask("t_1", {
+        assigneeId: "u_elena",
+        collaboratorIds: ["u_priya", "u_jonas"],
+      })
+    );
+    const added = result.current.state.activities.slice(before);
+    expect(added.map((a) => a.text)).toEqual([
+      "assigned “Ship the launch page” to Elena Rossi",
+      "added Jonas Weber to “Ship the launch page”",
+    ]);
+  });
+
+  it("moving an existing collaborator into the owner slot logs both the assignment and the removal", () => {
+    let state = unrestrictedProjectWithTask();
+    state = {
+      ...state,
+      tasks: state.tasks.map((t) =>
+        t.id === "t_1" ? { ...t, collaboratorIds: ["u_priya", "u_jonas"] } : t
+      ),
+    };
+    const { result } = mount(asUser(state, "u_maya"));
+    const before = result.current.state.activities.length;
+    run(() => result.current.updateTask("t_1", { assigneeId: "u_priya" }));
+    const added = result.current.state.activities.slice(before);
+    expect(added.map((a) => a.text)).toEqual([
+      "assigned “Ship the launch page” to Priya Sharma",
+      "removed Priya Sharma from “Ship the launch page”",
+    ]);
+  });
+
+  it("createTask does not emit assignment activity on top of the 'created' entry", () => {
+    const state = addProject(baseState(), {
+      id: "p_unrestricted",
+      name: "Open Project",
+      createdBy: "u_sam",
+      restricted: false,
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const before = result.current.state.activities.length;
+    run(() =>
+      result.current.createTask(
+        taskInput({ title: "Brand new task", assigneeId: "u_jonas", collaboratorIds: ["u_priya"] })
+      )
+    );
+    const added = result.current.state.activities.slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0].text).toBe("created “Brand new task”");
+  });
+});

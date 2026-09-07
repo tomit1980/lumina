@@ -157,7 +157,12 @@ interface StoreValue {
   ) => boolean;
 
   createTask: (input: TaskInput) => Task | null;
-  updateTask: (taskId: string, patch: Partial<Omit<Task, "id" | "projectId">>) => void;
+  /** Returns false when denied (no permission, view-only project, or a
+   *  collaborator in the resulting list can't see the project). */
+  updateTask: (
+    taskId: string,
+    patch: Partial<Omit<Task, "id" | "projectId">>
+  ) => boolean;
   moveTask: (taskId: string, toStatus: TaskStatus, toIndex: number) => void;
   deleteTask: (taskId: string) => void;
 }
@@ -217,6 +222,74 @@ function projectIsManageable(s: AppState, project: Project): boolean {
   if (roleHas(actorRole(s), "members.manage")) return true;
   if (project.createdBy === s.currentUserId) return true;
   return roleHas(actorRole(s), "project.create") && !projectIsViewerOnly(s, project);
+}
+
+/** Role of an arbitrary user, not just the acting one — actorRole only ever
+ *  answers for s.currentUserId. */
+function roleOfUser(s: AppState, userId: string): RoleDef | undefined {
+  const user = s.users.find((u) => u.id === userId);
+  return findRole(s, user?.roleId);
+}
+
+/** Per-user form of the project visibility rule: unrestricted → everyone;
+ *  restricted → a listed member, the creator, or anyone with members.manage.
+ *  The provider's `canSeeProject` (below) delegates here for the current
+ *  user so the two can't drift apart — this is what the collaborator picker
+ *  and the assignment guard need for an arbitrary user. */
+export function canUserSeeProject(
+  s: AppState,
+  project: Project,
+  userId: string
+): boolean {
+  if (!project.restricted) return true;
+  if (project.createdBy === userId) return true;
+  if (resourceMemberLevel(project.members, userId) !== null) return true;
+  return roleHas(roleOfUser(s, userId), "members.manage");
+}
+
+/** Drops the owner and any duplicates from a collaborator list, keeping
+ *  order. Pure, and also used by the task dialog to preview the resulting
+ *  list before saving. */
+export function normaliseCollaborators(
+  ownerId: string | null,
+  ids: string[]
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    if (id === ownerId || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** One activity line per person affected by an owner/collaborator change,
+ *  diffing the previous and next (already-normalised) task. Shared so the
+ *  owner-change and collaborator-add/remove branches aren't duplicated at
+ *  each call site. */
+function assignmentActivityTexts(s: AppState, prev: Task, next: Task): string[] {
+  const nameOf = (userId: string) =>
+    s.users.find((u) => u.id === userId)?.name ?? "Someone";
+  const texts: string[] = [];
+  if (next.assigneeId !== prev.assigneeId) {
+    texts.push(
+      next.assigneeId
+        ? `assigned “${prev.title}” to ${nameOf(next.assigneeId)}`
+        : `unassigned “${prev.title}”`
+    );
+  }
+  for (const id of next.collaboratorIds) {
+    if (!prev.collaboratorIds.includes(id)) {
+      texts.push(`added ${nameOf(id)} to “${prev.title}”`);
+    }
+  }
+  for (const id of prev.collaboratorIds) {
+    if (!next.collaboratorIds.includes(id)) {
+      texts.push(`removed ${nameOf(id)} from “${prev.title}”`);
+    }
+  }
+  return texts;
 }
 
 /** Can the acting user see this conversation at all (channel or DM)? Used to
@@ -959,6 +1032,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         deny("You have view-only access to this project.");
         return null;
       }
+      const collaboratorIds = normaliseCollaborators(
+        input.assigneeId,
+        input.collaboratorIds ?? []
+      );
+      if (s0 && project0) {
+        const blockedId = collaboratorIds.find(
+          (id) => !canUserSeeProject(s0, project0, id)
+        );
+        if (blockedId) {
+          const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
+          deny(`${name} can't see this project.`);
+          return null;
+        }
+      }
       const columnSize = s0
         ? s0.tasks.filter((t) => t.projectId === input.projectId && t.status === input.status)
             .length
@@ -966,7 +1053,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const task: Task = {
         id: uid("t"),
         ...input,
-        collaboratorIds: input.collaboratorIds ?? [],
+        collaboratorIds,
         order: columnSize,
         createdAt: Date.now(),
         createdBy: "",
@@ -980,26 +1067,52 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
 
     const updateTask: StoreValue["updateTask"] = (taskId, patch) => {
-      if (!guard("task.edit")) return;
+      if (!guard("task.edit")) return false;
       const s0 = stateRef.current;
       const task0 = s0?.tasks.find((t) => t.id === taskId);
       const project0 = task0 && s0?.projects.find((p) => p.id === task0.projectId);
       if (s0 && project0 && projectIsViewerOnly(s0, project0)) {
         deny("You have view-only access to this project.");
-        return;
+        return false;
+      }
+      if (!s0 || !task0) return false;
+      // Resolve against the *resulting* owner — a patch may change both the
+      // owner and the collaborator list in the same call.
+      const resultingOwner =
+        patch.assigneeId !== undefined ? patch.assigneeId : task0.assigneeId;
+      const resultingCollaborators = normaliseCollaborators(
+        resultingOwner,
+        patch.collaboratorIds !== undefined ? patch.collaboratorIds : task0.collaboratorIds
+      );
+      if (project0) {
+        const blockedId = resultingCollaborators.find(
+          (id) => !canUserSeeProject(s0, project0, id)
+        );
+        if (blockedId) {
+          const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
+          deny(`${name} can't see this project.`);
+          return false;
+        }
       }
       update((s) => {
         const prev = s.tasks.find((t) => t.id === taskId);
         if (!prev) return s;
         const completed = patch.status === "done" && prev.status !== "done";
+        const next: Task = { ...prev, ...patch, collaboratorIds: resultingCollaborators };
+        const assignmentTexts = assignmentActivityTexts(s, prev, next);
+        let activities = completed
+          ? activity(s, "task", `completed “${prev.title}”`)
+          : s.activities;
+        for (const text of assignmentTexts) {
+          activities = activity({ ...s, activities }, "task", text);
+        }
         return {
           ...s,
-          tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, ...patch } : t)),
-          activities: completed
-            ? activity(s, "task", `completed “${prev.title}”`)
-            : s.activities,
+          tasks: s.tasks.map((t) => (t.id === taskId ? next : t)),
+          activities,
         };
       });
+      return true;
     };
 
     const moveTask: StoreValue["moveTask"] = (taskId, toStatus, toIndex) => {
@@ -1148,10 +1261,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return resourceMemberLevel(channel.members, user.id) ?? "viewer";
   };
 
-  const canSeeProject: StoreValue["canSeeProject"] = (project, user = currentUser) => {
-    if (!project.restricted) return true;
-    return project.members.some((m) => m.userId === user.id) || can("members.manage", user);
-  };
+  const canSeeProject: StoreValue["canSeeProject"] = (project, user = currentUser) =>
+    canUserSeeProject(state, project, user.id);
 
   const projectAccessLevel: StoreValue["projectAccessLevel"] = (
     project,
