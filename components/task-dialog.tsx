@@ -210,6 +210,15 @@ export function TaskDialog() {
   const ownerCandidates = selectedProject
     ? state.users.filter((u) => canUserSeeProject(state, selectedProject, u.id))
     : state.users;
+  // A task can already be owned by someone who has since lost sight of the
+  // project. Keeping them out of the list entirely would render the field
+  // blank, so the task would look unassigned and the next person to touch it
+  // would replace an owner they never saw. Show them, flagged, and let the
+  // user decide.
+  const staleOwner =
+    ownerId && !ownerCandidates.some((u) => u.id === ownerId)
+      ? state.users.find((u) => u.id === ownerId) ?? null
+      : null;
   const visibleCollaboratorIds = normaliseCollaborators(ownerId, form.collaboratorIds);
   const collaboratorCandidates = selectedProject
     ? state.users.filter(
@@ -461,6 +470,17 @@ export function TaskDialog() {
                   <SelectItem value="none">
                     <span className="text-muted-foreground">Unassigned</span>
                   </SelectItem>
+                  {staleOwner && (
+                    <SelectItem key={staleOwner.id} value={staleOwner.id}>
+                      <span className="flex items-center gap-1.5">
+                        <UserAvatar user={staleOwner} size="xs" />
+                        {staleOwner.name}
+                        <span className="text-muted-foreground">
+                          · no longer has access
+                        </span>
+                      </span>
+                    </SelectItem>
+                  )}
                   {ownerCandidates.map((u) => (
                     <SelectItem key={u.id} value={u.id}>
                       <span className="flex items-center gap-1.5">
