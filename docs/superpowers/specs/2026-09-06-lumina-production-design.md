@@ -195,6 +195,27 @@ touching anything structural:
    (`app-shell.tsx:650-656`), and the one-click demo logins in
    `components/auth/login-screen.tsx`.
 
+### Task assignment — owner plus collaborators (added 2026-09-07)
+
+Tasks gained a second assignment dimension after this spec was written, and the
+store swap must carry it across:
+
+- `Task.assigneeId` remains the **owner** and maps to `tasks.assignee_id` as before.
+- `Task.collaboratorIds: string[]` maps to **rows in `public.task_collaborators`**
+  (`supabase/migrations/20260907000600_task_collaborators.sql`), a two-column join
+  table with per-command policies and no update policy — changing who is on a task
+  is a delete plus an insert.
+- Two database triggers hold the invariants the store also enforces: a collaborator
+  can never be the owner, and a collaborator must already be able to see the
+  project. **Assignment never grants access** — reuse `user_can_see_project` rather
+  than reimplementing visibility.
+- `can_see_project(proj_id)` now delegates to `user_can_see_project(proj_id, user_id)`
+  so the rule, including the project creator's own visibility, exists in one place
+  and matches `canUserSeeProject` in `lib/store.tsx`.
+- Reads that mean "my tasks" (home, calendar export, reminders, the project filter)
+  go through `isMine`/`isMineOrUnclaimed` in `lib/permissions.ts`. When these become
+  server queries, they must match on owner **or** collaborator, not just owner.
+
 ### Phase 2 — the day-one requirements
 
 - **Realtime.** Subscribe to messages, reactions, tasks, projects, channels, and
