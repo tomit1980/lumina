@@ -158,6 +158,7 @@ describe("the team channel", () => {
 describe("#general is protected even in legacy (pre-isTeam) data", () => {
   it("migrate() backfills isTeam for a channel literally named 'general' that lacks the flag", () => {
     const raw = baseState() as unknown as Record<string, unknown>;
+    raw.version = 1; // genuinely predates SEED_VERSION, so migrate() sees legacy data
     const channels = raw.channels as Array<Record<string, unknown>>;
     const general = channels.find((c) => c.id === "c_general")!;
     delete general.isTeam; // simulate data written before isTeam existed
@@ -182,6 +183,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
       isPrivate: false,
     });
     const raw = state as unknown as Record<string, unknown>;
+    raw.version = 1; // genuinely predates SEED_VERSION, so migrate() sees legacy data
     const channels = raw.channels as Array<Record<string, unknown>>;
     const dup = channels.find((c) => c.id === "c_general_2")!;
     delete dup.isTeam;
@@ -203,7 +205,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
   // silently turns it into an undeletable pseudo-team channel — with no
   // rename action available to escape it. Expected: a plain user-created
   // "general" channel stays deletable after a reload. Actual: it doesn't.
-  it.fails(
+  it(
     "L1-006: a newly created channel named 'general' should stay deletable after a reload, but does not",
     () => {
       const { result, unmount } = mount(asUser(baseState(), "u_vlad"));

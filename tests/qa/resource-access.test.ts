@@ -399,7 +399,7 @@ describe("restricted projects", () => {
   // rename/recolor/reprioritize that project freely — the viewer gate never
   // runs because `patch.attachments` is undefined. Expected: denied and
   // unchanged, like the attachments case above. Actual: the rename succeeds.
-  it.fails(
+  it(
     "L1-004: updateProject should deny a non-attachments patch from a project viewer, but does not",
     () => {
       let state = addRole(baseState(), {
@@ -430,7 +430,7 @@ describe("restricted projects", () => {
   // including granting itself "editor" — of ANY restricted project, even one
   // it has no relationship to whatsoever. Expected: denied (not a member /
   // not an editor of this project). Actual: succeeds unconditionally.
-  it.fails(
+  it(
     "L1-005: setProjectAccess should deny a caller with no relationship to the target project, but does not",
     () => {
       let state = addRole(baseState(), {

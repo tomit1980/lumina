@@ -209,6 +209,15 @@ function channelIsManageable(s: AppState, channel: Channel): boolean {
   return roleHas(actorRole(s), "channel.delete") || channel.createdBy === s.currentUserId;
 }
 
+/** Who may change a project's access/membership or edit its fields —
+ *  creator, anyone with members.manage, or a project.create holder who
+ *  isn't merely a viewer on this (possibly restricted) project. */
+function projectIsManageable(s: AppState, project: Project): boolean {
+  if (roleHas(actorRole(s), "members.manage")) return true;
+  if (project.createdBy === s.currentUserId) return true;
+  return roleHas(actorRole(s), "project.create") && !projectIsViewerOnly(s, project);
+}
+
 /** Can the acting user see this conversation at all (channel or DM)? Used to
  *  keep reactions from leaking into places the user couldn't otherwise read. */
 function canSeeConversation(s: AppState, conversationId: string): boolean {
@@ -287,7 +296,7 @@ interface LegacyState
   >;
 }
 
-function migrate(parsed: LegacyState): AppState {
+function migrate(parsed: LegacyState, parsedVersion: number): AppState {
   const roles: RoleDef[] =
     parsed.roles ??
     DEFAULT_ROLES.map((r) => ({
@@ -309,7 +318,11 @@ function migrate(parsed: LegacyState): AppState {
       description: c.description,
       isPrivate: c.isPrivate,
       // Backfill the team flag for workspaces created before it existed.
-      isTeam: c.isTeam ?? (c.name === "general" ? true : undefined),
+      // Only for genuinely legacy data — the current schema always sets
+      // isTeam explicitly, so re-running this on every load (regardless of
+      // version) would wrongly re-flag a brand-new channel just named
+      // "general" as the undeletable team channel.
+      isTeam: c.isTeam ?? (parsedVersion < SEED_VERSION && c.name === "general" ? true : undefined),
       // Flat memberIds → per-member access, defaulting existing members to editor.
       members:
         c.members ?? (c.memberIds ?? []).map((userId) => ({ userId, level: "editor" as const })),
@@ -337,9 +350,9 @@ function migrate(parsed: LegacyState): AppState {
       durationMinutes: t.durationMinutes ?? null,
       reminderMinutes: t.reminderMinutes ?? null,
     })),
-    activities: parsed.activities,
+    activities: parsed.activities ?? [],
     roles,
-    lastRead: parsed.lastRead,
+    lastRead: parsed.lastRead ?? {},
   };
 }
 
@@ -357,7 +370,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           parsed.version >= 1 &&
           parsed.version <= SEED_VERSION
         ) {
-          next = migrate(parsed);
+          next = migrate(parsed, parsed.version);
         }
       }
     } catch {
@@ -741,6 +754,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         name: input.name,
         description: input.description,
         isPrivate: input.isPrivate,
+        // Explicit false so a channel created today never has a missing
+        // isTeam key for the legacy-migration name-based backfill to catch.
+        isTeam: false,
         members: [],
         createdBy: "",
         createdAt: Date.now(),
@@ -841,14 +857,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const updateProject: StoreValue["updateProject"] = (projectId, patch) => {
       // Editing a project is part of the "manage projects" capability.
       if (!guard("project.create")) return;
-      if (patch.attachments) {
-        // Files follow the same per-project access rule as tasks.
-        const cur = stateRef.current;
-        const target = cur?.projects.find((p) => p.id === projectId);
-        if (cur && target && projectIsViewerOnly(cur, target)) {
-          deny("You have view-only access to this project.");
-          return;
-        }
+      // Every patch (not just attachments) is subject to the same
+      // object-level manageability check as channel access changes.
+      const cur = stateRef.current;
+      const target = cur?.projects.find((p) => p.id === projectId);
+      if (cur && target && !projectIsManageable(cur, target)) {
+        deny("You have view-only access to this project.");
+        return;
       }
       update((s) => {
         const prev = s.projects.find((p) => p.id === projectId);
@@ -901,12 +916,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
 
     const setProjectAccess: StoreValue["setProjectAccess"] = (projectId, patch) => {
-      // Managing a project's membership is part of the "manage projects" capability.
-      if (!guard("project.create")) return false;
       const s = stateRef.current;
       if (!s) return false;
       const project = s.projects.find((p) => p.id === projectId);
       if (!project) return false;
+      if (!projectIsManageable(s, project)) {
+        deny("You don't have permission to manage this project.");
+        return false;
+      }
       const members = patch.restricted
         ? ensureEditor(patch.members, project.createdBy)
         : [];
@@ -928,26 +945,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         deny("You have view-only access to this project.");
         return null;
       }
+      const columnSize = s0
+        ? s0.tasks.filter((t) => t.projectId === input.projectId && t.status === input.status)
+            .length
+        : 0;
       const task: Task = {
         id: uid("t"),
         ...input,
-        order: 0,
+        order: columnSize,
         createdAt: Date.now(),
         createdBy: "",
       };
-      update((s) => {
-        const columnSize = s.tasks.filter(
-          (t) => t.projectId === input.projectId && t.status === input.status
-        ).length;
-        return {
-          ...s,
-          tasks: [
-            ...s.tasks,
-            { ...task, order: columnSize, createdBy: s.currentUserId },
-          ],
-          activities: activity(s, "task", `created “${input.title}”`),
-        };
-      });
+      update((s) => ({
+        ...s,
+        tasks: [...s.tasks, { ...task, createdBy: s.currentUserId }],
+        activities: activity(s, "task", `created “${input.title}”`),
+      }));
       return task;
     };
 
@@ -999,6 +1012,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const reordered = new Map(
           column.map((t, i) => [t.id, { ...t, status: toStatus, order: i }])
         );
+        if (task.status !== toStatus) {
+          // The task actually changed columns — renumber the source column
+          // too so its `order` values stay a dense 0..n-1 sequence instead
+          // of leaving a gap where the moved task used to be.
+          const sourceColumn = s.tasks
+            .filter(
+              (t) =>
+                t.projectId === task.projectId &&
+                t.status === task.status &&
+                t.id !== taskId
+            )
+            .sort((a, b) => a.order - b.order);
+          sourceColumn.forEach((t, i) => reordered.set(t.id, { ...t, order: i }));
+        }
         const completed = toStatus === "done" && task.status !== "done";
         return {
           ...s,

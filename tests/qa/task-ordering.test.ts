@@ -101,7 +101,7 @@ describe("createTask appends at the end of its status column", () => {
   // the returned Task's `order` is always 0, regardless of how many tasks
   // are already in the column. Expected: the returned Task's `order` matches
   // what actually gets persisted. Actual: it's always 0.
-  it.fails(
+  it(
     "L1-010: createTask's return value should carry the real order, but always reports 0",
     () => {
       const { state } = seedProjectWithTasks(3, "todo");
@@ -191,7 +191,7 @@ describe("moveTask across columns opens a dense slot in the destination", () => 
   // the source column renumbers to a dense 0..n-1 run, same as the
   // within-column case. Actual: a gap remains (e.g. [0, 2] instead of [0, 1]
   // for a 3-task column after removing the middle task).
-  it.fails(
+  it(
     "L1-007: moving a task out of a column should close the gap left behind, but does not",
     () => {
       const { state, ids } = seedProjectWithTasks(3, "todo"); // orders 0, 1, 2

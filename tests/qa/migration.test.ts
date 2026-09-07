@@ -235,7 +235,7 @@ describe("migrate() failure paths fall back to a fresh seed without throwing", (
   // same as the other missing-array cases above and fall back to a fresh
   // seed (or at least backfill to `[]`). Actual: `state.activities` is
   // `undefined`.
-  it.fails(
+  it(
     "L1-008: a blob missing only `activities` should fall back to a fresh seed (or backfill []), but yields activities: undefined",
     () => {
       const blob = legacyBlob(SEED_VERSION) as Record<string, unknown>;
@@ -251,7 +251,7 @@ describe("migrate() failure paths fall back to a fresh seed without throwing", (
   // `state.lastRead[`${userId}:${conversationId}`]` with no optional
   // chaining, so this isn't just a shape inconsistency — it's a live
   // TypeError waiting to happen the next time unread counts are read.
-  it.fails(
+  it(
     "L1-008: a blob missing only `lastRead` should fall back to a fresh seed (or backfill {}), but yields lastRead: undefined",
     () => {
       const blob = legacyBlob(SEED_VERSION) as Record<string, unknown>;
