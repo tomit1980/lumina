@@ -204,6 +204,12 @@ export function TaskDialog() {
   // actually be persisted.
   const ownerId = form.assigneeId === "none" ? null : form.assigneeId;
   const selectedProject = state.projects.find((p) => p.id === form.projectId);
+  // Same candidate set the collaborator picker uses — the store refuses an
+  // owner who can't see the project exactly like a collaborator, so the
+  // select must not offer anyone it would refuse.
+  const ownerCandidates = selectedProject
+    ? state.users.filter((u) => canUserSeeProject(state, selectedProject, u.id))
+    : state.users;
   const visibleCollaboratorIds = normaliseCollaborators(ownerId, form.collaboratorIds);
   const collaboratorCandidates = selectedProject
     ? state.users.filter(
@@ -455,7 +461,7 @@ export function TaskDialog() {
                   <SelectItem value="none">
                     <span className="text-muted-foreground">Unassigned</span>
                   </SelectItem>
-                  {state.users.map((u) => (
+                  {ownerCandidates.map((u) => (
                     <SelectItem key={u.id} value={u.id}>
                       <span className="flex items-center gap-1.5">
                         <UserAvatar user={u} size="xs" />

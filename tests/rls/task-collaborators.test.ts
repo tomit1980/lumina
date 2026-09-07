@@ -3,7 +3,7 @@ import {
   anonClient, createTestUser, deleteTestUser, serviceClient, signInAs, TEST_PASSWORD,
 } from "../helpers/supabase";
 import {
-  addProjectMember, addTaskCollaborator, createProject, seedRoles,
+  addProjectMember, addTaskCollaborator, createProject, removeProjectMember, seedRoles,
 } from "../helpers/workspace";
 
 // Supabase rate-limits sign-ups and sign-ins per IP across the WHOLE rls run,
@@ -339,5 +339,184 @@ describe("task_collaborators RLS", () => {
     expect(write.error).not.toBeNull();
 
     await serviceClient.from("task_collaborators").delete().eq("task_id", openTask);
+  });
+});
+
+// ---------------------------------------------------------------------
+// F4 (final-review.md) — "assignment never grants access" was enforced for
+// the collaborator slot (check_task_collaborator above) but not the owner
+// slot: tasks.assignee_id could be set to someone who cannot see the
+// project, on both insert and update. 20260907000700_assignee_visibility.sql
+// adds tasks_check_assignee to close this the same way.
+// ---------------------------------------------------------------------
+describe("tasks.assignee_id visibility trigger (F4)", () => {
+  const assigneeInsertTask = `t_tc_assignee_ins_${stamp}`;
+  const assigneeUpdateTask = `t_tc_assignee_upd_${stamp}`;
+
+  afterAll(async () => {
+    await serviceClient.from("tasks").delete()
+      .in("id", [assigneeInsertTask, assigneeUpdateTask]);
+  });
+
+  it("refuses creating a task whose assignee cannot see the project", async () => {
+    const client = await clientFor(emails.editor);
+    const { error } = await client.from("tasks").insert({
+      id: assigneeInsertTask, project_id: secretProject, title: "Bad assignee",
+      assignee_id: ids.outsider, created_by: ids.editor, position: 5,
+    });
+    expect(error).not.toBeNull();
+    expect(error?.code).toBe("P0001");
+
+    const { data } = await serviceClient
+      .from("tasks").select("id").eq("id", assigneeInsertTask);
+    expect(data).toHaveLength(0);
+  });
+
+  it("lets a task be created with an assignee who can see the project", async () => {
+    const client = await clientFor(emails.editor);
+    const { error } = await client.from("tasks").insert({
+      id: assigneeInsertTask, project_id: secretProject, title: "Fine assignee",
+      assignee_id: ids.editor, created_by: ids.editor, position: 5,
+    });
+    expect(error).toBeNull();
+
+    const { data } = await serviceClient
+      .from("tasks").select("assignee_id").eq("id", assigneeInsertTask);
+    expect(data).toHaveLength(1);
+    expect(data?.[0].assignee_id).toBe(ids.editor);
+  });
+
+  it("refuses reassigning an existing task to someone who cannot see the project", async () => {
+    await serviceClient.from("tasks").insert({
+      id: assigneeUpdateTask, project_id: secretProject, title: "Reassign me",
+      assignee_id: ids.owner, created_by: ids.owner, position: 6,
+    });
+
+    const client = await clientFor(emails.editor);
+    const { error } = await client.from("tasks")
+      .update({ assignee_id: ids.outsider }).eq("id", assigneeUpdateTask);
+    expect(error).not.toBeNull();
+    expect(error?.code).toBe("P0001");
+
+    const { data } = await serviceClient
+      .from("tasks").select("assignee_id").eq("id", assigneeUpdateTask).single();
+    expect(data?.assignee_id).toBe(ids.owner);
+  });
+});
+
+// ---------------------------------------------------------------------
+// F2 (final-review.md) — revoking a user's project_members row used to
+// leave their task_collaborators rows behind. project_members_prune_
+// collaborators (20260907000700_assignee_visibility.sql) deletes them.
+// ---------------------------------------------------------------------
+describe("project_members delete prunes stray task_collaborators (F2)", () => {
+  const pruneProject = `p_tc_prune_${stamp}`;
+  const pruneTask = `t_tc_prune_${stamp}`;
+
+  afterAll(async () => {
+    await serviceClient.from("projects").delete().eq("id", pruneProject);
+  });
+
+  it("deletes a revoked member's collaborator row, leaving another member's row intact", async () => {
+    await createProject({ id: pruneProject, name: "Prune", restricted: true, createdBy: ids.owner });
+    await addProjectMember(pruneProject, ids.viewer, "viewer");
+    await addProjectMember(pruneProject, ids.editor, "editor");
+    await serviceClient.from("tasks").insert({
+      id: pruneTask, project_id: pruneProject, title: "Shared", created_by: ids.owner, position: 0,
+    });
+    await addTaskCollaborator(pruneTask, ids.viewer);
+    await addTaskCollaborator(pruneTask, ids.editor);
+
+    const before = await serviceClient
+      .from("task_collaborators").select("user_id").eq("task_id", pruneTask);
+    expect((before.data ?? []).map((r) => r.user_id).sort()).toEqual(
+      [ids.editor, ids.viewer].sort()
+    );
+
+    await removeProjectMember(pruneProject, ids.viewer);
+
+    const after = await serviceClient
+      .from("task_collaborators").select("user_id").eq("task_id", pruneTask);
+    expect((after.data ?? []).map((r) => r.user_id)).toEqual([ids.editor]);
+  });
+
+  it("does nothing when the removed member can still see the project another way (members.manage)", async () => {
+    // A plain project_members row is not the only way to see a restricted
+    // project — members.manage short-circuits user_can_see_project to true
+    // regardless of membership. Removing this admin's membership row must
+    // NOT prune their collaborator rows, because they can still see the
+    // project through that role permission. A member-role fixture wouldn't
+    // exercise this branch (that's why every OTHER fixture in this file is
+    // deliberately kept off the admin role), so this test mints one small,
+    // dedicated admin user via the admin API — no interactive sign-in, so it
+    // doesn't touch this file's signInWithPassword rate-limit budget.
+    const adminEmail = `tcadmin-${stamp}@lumina.test`;
+    const adminId = await createTestUser({
+      email: adminEmail, password: TEST_PASSWORD,
+      name: "admin2", handle: `tcadmin${stamp}`, roleId: "admin",
+    });
+    const soloProject = `p_tc_prune_solo_${stamp}`;
+    const soloTask = `t_tc_prune_solo_${stamp}`;
+    try {
+      await createProject({ id: soloProject, name: "Solo Prune", restricted: true, createdBy: ids.owner });
+      await addProjectMember(soloProject, adminId, "editor");
+      await serviceClient.from("tasks").insert({
+        id: soloTask, project_id: soloProject, title: "Solo", created_by: ids.owner, position: 0,
+      });
+      await addTaskCollaborator(soloTask, adminId);
+
+      await removeProjectMember(soloProject, adminId);
+
+      const after = await serviceClient
+        .from("task_collaborators").select("user_id").eq("task_id", soloTask);
+      expect((after.data ?? []).map((r) => r.user_id)).toEqual([adminId]);
+    } finally {
+      await serviceClient.from("projects").delete().eq("id", soloProject);
+      await deleteTestUser(adminId);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------
+// F3 (final-review.md) — nothing stopped tasks.project_id from changing and
+// stranding a collaborator who cannot see the destination project.
+// tasks_prune_collaborators_on_reparent (20260907000700_assignee_visibility.sql)
+// deletes the stray rows when that happens.
+// ---------------------------------------------------------------------
+describe("re-parenting a task prunes collaborators who can't see the new project (F3)", () => {
+  const reparentSrc = `p_tc_rp_src_${stamp}`;
+  const reparentDst = `p_tc_rp_dst_${stamp}`;
+  const reparentTask = `t_tc_rp_${stamp}`;
+
+  afterAll(async () => {
+    await serviceClient.from("projects").delete().in("id", [reparentSrc, reparentDst]);
+  });
+
+  it("drops a collaborator who can't see the destination, keeps one who can", async () => {
+    await createProject({ id: reparentSrc, name: "Reparent Src", restricted: false, createdBy: ids.owner });
+    await createProject({ id: reparentDst, name: "Reparent Dst", restricted: true, createdBy: ids.owner });
+    await addProjectMember(reparentDst, ids.collab, "editor"); // collab CAN see the destination
+
+    await serviceClient.from("tasks").insert({
+      id: reparentTask, project_id: reparentSrc, title: "Movable",
+      created_by: ids.owner, position: 0,
+    });
+    // Both can see the (open) source project at the time they're added.
+    await addTaskCollaborator(reparentTask, ids.editor); // cannot see reparentDst
+    await addTaskCollaborator(reparentTask, ids.collab); // can see reparentDst
+
+    const before = await serviceClient
+      .from("task_collaborators").select("user_id").eq("task_id", reparentTask);
+    expect((before.data ?? []).map((r) => r.user_id).sort()).toEqual(
+      [ids.collab, ids.editor].sort()
+    );
+
+    const { error } = await serviceClient.from("tasks")
+      .update({ project_id: reparentDst }).eq("id", reparentTask);
+    expect(error).toBeNull();
+
+    const after = await serviceClient
+      .from("task_collaborators").select("user_id").eq("task_id", reparentTask);
+    expect((after.data ?? []).map((r) => r.user_id)).toEqual([ids.collab]);
   });
 });

@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-import { normaliseCollaborators } from "@/lib/store";
+import { canUserSeeTaskProject, normaliseCollaborators } from "@/lib/store";
 import { addProject, addTask, asUser, baseState, mount, run } from "./_support";
 
 afterEach(() => {
@@ -142,6 +142,48 @@ describe("createTask — owner/collaborator normalisation and visibility guard",
     expect(task).toBeNull();
     expect(result.current.state.tasks.length).toBe(before);
     expect(result.current.state.activities.length).toBe(beforeActivities);
+  });
+
+  // F4 (final-review.md) — "assignment never grants access" was enforced for
+  // the collaborator slot but not the owner slot: assigneeId could be set to
+  // someone who cannot see the project. Same guard, same shape, same voice.
+  it("refuses the whole write when the OWNER can't see a restricted project", () => {
+    const state = addProject(baseState(), {
+      id: "p_restricted",
+      name: "Restricted Project",
+      createdBy: "u_sam",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "editor" }],
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const before = result.current.state.tasks.length;
+    const beforeActivities = result.current.state.activities.length;
+    const task = run(() =>
+      result.current.createTask(
+        taskInput({
+          projectId: "p_restricted",
+          assigneeId: "u_jonas", // not a member, not the creator, no members.manage
+        })
+      )
+    );
+    expect(task).toBeNull();
+    expect(result.current.state.tasks.length).toBe(before);
+    expect(result.current.state.activities.length).toBe(beforeActivities);
+  });
+
+  // Finding 10 (final-review.md) — the visibility guard used to sit inside
+  // `if (s0 && project0)`, so a task whose projectId doesn't resolve to a
+  // real project skipped the check entirely (fail open) instead of being
+  // refused (fail closed).
+  it("fails closed — refuses the write when projectId doesn't resolve to a real project", () => {
+    const state = baseState();
+    const { result } = mount(asUser(state, "u_maya"));
+    const before = result.current.state.tasks.length;
+    const task = run(() =>
+      result.current.createTask(taskInput({ projectId: "p_does_not_exist" }))
+    );
+    expect(task).toBeNull();
+    expect(result.current.state.tasks.length).toBe(before);
   });
 });
 
@@ -311,6 +353,58 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
     expect(result.current.state.tasks.find((t) => t.id === "t_pr2")?.title).toBe("Renamed");
   });
 
+  // F4 (final-review.md) — same guard, applied to a patch that sets the
+  // owner rather than a collaborator.
+  it("refuses setting the owner to someone who can't see a restricted project", () => {
+    let state = addProject(baseState(), {
+      id: "p_restricted",
+      name: "Restricted Project",
+      createdBy: "u_sam",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "editor" }],
+    });
+    state = addTask(state, {
+      id: "t_owner_guard",
+      projectId: "p_restricted",
+      title: "Existing task",
+      createdBy: "u_sam",
+      assigneeId: null,
+      collaboratorIds: [],
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const beforeTask = result.current.state.tasks.find((t) => t.id === "t_owner_guard")!;
+    const ok = run(() =>
+      result.current.updateTask("t_owner_guard", { assigneeId: "u_jonas" })
+    );
+    expect(ok).toBe(false);
+    expect(result.current.state.tasks.find((t) => t.id === "t_owner_guard")).toEqual(
+      beforeTask
+    );
+  });
+
+  // Finding 10 — same fail-closed reshape, on the updateTask side.
+  it("fails closed — refuses the write when the task's project doesn't resolve", () => {
+    let state = addProject(baseState(), {
+      id: "p_will_vanish",
+      name: "Will Vanish",
+      createdBy: "u_sam",
+      restricted: false,
+    });
+    state = addTask(state, {
+      id: "t_orphan",
+      // References a project id that isn't in state.projects at all — the
+      // orphan a deleted-but-not-cascaded project would leave behind.
+      projectId: "p_does_not_exist",
+      title: "Orphaned task",
+      createdBy: "u_sam",
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+    const beforeTask = result.current.state.tasks.find((t) => t.id === "t_orphan")!;
+    const ok = run(() => result.current.updateTask("t_orphan", { title: "Renamed" }));
+    expect(ok).toBe(false);
+    expect(result.current.state.tasks.find((t) => t.id === "t_orphan")).toEqual(beforeTask);
+  });
+
   it("a restricted project's creator can be a collaborator even when not explicitly listed as a member", () => {
     let state = addProject(baseState(), {
       id: "p_restricted",
@@ -350,6 +444,179 @@ describe("canSeeProject / canUserSeeProject agree for the current user", () => {
     const { result } = mount(asUser(state, "u_sam"));
     const project = result.current.state.projects.find((p) => p.id === "p_restricted")!;
     expect(result.current.canSeeProject(project)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------
+// F2 (final-review.md) — revocation left stale rows: removing someone's
+// project access pruned nothing from collaboratorIds, so a task could keep
+// naming a collaborator who could no longer see its project.
+// ---------------------------------------------------------------------
+describe("setProjectAccess prunes stray collaborators on revocation (F2)", () => {
+  it("drops a collaborator's id from the project's tasks once they lose visibility", () => {
+    let state = addProject(baseState(), {
+      id: "p_revoke",
+      name: "Revoke Me",
+      createdBy: "u_vlad",
+      restricted: false, // open — jonas can see it and is added as a collaborator
+    });
+    state = addTask(state, {
+      id: "t_revoke",
+      projectId: "p_revoke",
+      title: "Shared task",
+      createdBy: "u_vlad",
+      assigneeId: "u_sam",
+      collaboratorIds: ["u_jonas"],
+    });
+    const { result } = mount(asUser(state, "u_vlad"));
+
+    // Restrict the project without inviting jonas back — the exact
+    // revocation shape final-review.md's probe A3 exercised directly
+    // against Postgres.
+    const ok = run(() =>
+      result.current.setProjectAccess("p_revoke", {
+        restricted: true,
+        members: [{ userId: "u_maya", level: "editor" }],
+      })
+    );
+    expect(ok).toBe(true);
+    const task = result.current.state.tasks.find((t) => t.id === "t_revoke")!;
+    expect(task.collaboratorIds).toEqual([]);
+  });
+
+  it("leaves a collaborator's id alone when they're still listed as a member", () => {
+    let state = addProject(baseState(), {
+      id: "p_keep",
+      name: "Keep Access",
+      createdBy: "u_vlad",
+      restricted: false,
+    });
+    state = addTask(state, {
+      id: "t_keep",
+      projectId: "p_keep",
+      title: "Shared task",
+      createdBy: "u_vlad",
+      assigneeId: "u_sam",
+      collaboratorIds: ["u_jonas"],
+    });
+    const { result } = mount(asUser(state, "u_vlad"));
+
+    const ok = run(() =>
+      result.current.setProjectAccess("p_keep", {
+        restricted: true,
+        members: [
+          { userId: "u_maya", level: "editor" },
+          { userId: "u_jonas", level: "viewer" },
+        ],
+      })
+    );
+    expect(ok).toBe(true);
+    const task = result.current.state.tasks.find((t) => t.id === "t_keep")!;
+    expect(task.collaboratorIds).toEqual(["u_jonas"]);
+  });
+
+  // The reviewer's exact repro (finding 2): before this fix, a stale
+  // collaborator refused updateTask (quick-complete) while moveTask
+  // (drag-to-done) — which never re-validates collaborators — still
+  // succeeded. Pruning at the revocation source resolves the asymmetry:
+  // once collaboratorIds no longer names anyone ineligible, BOTH paths
+  // agree, so moveTask never needed its own copy of the guard.
+  it("resolves the quick-complete-vs-drag asymmetry: both paths succeed once revocation has pruned", () => {
+    let state = addProject(baseState(), {
+      id: "p_asym",
+      name: "Asymmetry",
+      createdBy: "u_vlad",
+      restricted: false,
+    });
+    state = addTask(state, {
+      id: "t_asym",
+      projectId: "p_asym",
+      title: "Finish this",
+      createdBy: "u_vlad",
+      assigneeId: "u_sam",
+      collaboratorIds: ["u_jonas"],
+      status: "todo",
+      order: 0,
+    });
+    const { result } = mount(asUser(state, "u_vlad"));
+
+    run(() =>
+      result.current.setProjectAccess("p_asym", {
+        restricted: true,
+        members: [{ userId: "u_sam", level: "editor" }],
+      })
+    );
+    expect(
+      result.current.state.tasks.find((t) => t.id === "t_asym")?.collaboratorIds
+    ).toEqual([]);
+
+    // Quick-complete's shape (updateTask with an unrelated status patch).
+    const updated = run(() =>
+      result.current.updateTask("t_asym", { status: "done" })
+    );
+    expect(updated).toBe(true);
+    expect(result.current.state.tasks.find((t) => t.id === "t_asym")?.status).toBe(
+      "done"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------
+// F1 (final-review.md) — the shared read-path visibility helper the home
+// list, schedule export, and reminder gate all now call. Exercised directly
+// here (pure); tests/qa/home-collaborators.test.ts,
+// tests/qa/reminders-collaborators.test.ts,
+// tests/qa/app-shell-collaborators.test.ts and
+// tests/qa/projects-page-collaborators.test.ts exercise it through each
+// real call site.
+// ---------------------------------------------------------------------
+describe("canUserSeeTaskProject (F1 helper)", () => {
+  it("is false for a revoked collaborator once their project access is gone", () => {
+    let state = addProject(baseState(), {
+      id: "p_ctp",
+      name: "CTP",
+      createdBy: "u_vlad",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "editor" }], // jonas omitted
+    });
+    state = addTask(state, {
+      id: "t_ctp",
+      projectId: "p_ctp",
+      title: "Task",
+      createdBy: "u_vlad",
+      collaboratorIds: ["u_jonas"],
+    });
+    const task = state.tasks.find((t) => t.id === "t_ctp")!;
+    expect(canUserSeeTaskProject(state, task, "u_jonas")).toBe(false);
+  });
+
+  it("is true once the same user can see the project", () => {
+    let state = addProject(baseState(), {
+      id: "p_ctp2",
+      name: "CTP2",
+      createdBy: "u_vlad",
+      restricted: false,
+    });
+    state = addTask(state, {
+      id: "t_ctp2",
+      projectId: "p_ctp2",
+      title: "Task",
+      createdBy: "u_vlad",
+      collaboratorIds: ["u_jonas"],
+    });
+    const task = state.tasks.find((t) => t.id === "t_ctp2")!;
+    expect(canUserSeeTaskProject(state, task, "u_jonas")).toBe(true);
+  });
+
+  it("fails closed when the task's project can't be resolved at all", () => {
+    const state = addTask(baseState(), {
+      id: "t_ctp3",
+      projectId: "p_missing_entirely",
+      title: "Task",
+      createdBy: "u_vlad",
+    });
+    const task = state.tasks.find((t) => t.id === "t_ctp3")!;
+    expect(canUserSeeTaskProject(state, task, "u_vlad")).toBe(false);
   });
 });
 

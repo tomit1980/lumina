@@ -56,9 +56,24 @@ import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
 import { isMineOrUnclaimed } from "@/lib/permissions";
-import { getUnreadCount, useStore } from "@/lib/store";
+import { canUserSeeTaskProject, getUnreadCount, useStore } from "@/lib/store";
+import type { AppState, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { chatHref, dmHref, projectHref, useCurrentRoute, useIsViewing } from "@/lib/routes";
+
+/** Tasks eligible for the current user's schedule (.ics) export: has a due
+ *  date, is theirs (owned, collaborated-on, or an unclaimed task they
+ *  created), and their access to its project hasn't since been revoked.
+ *  Exported and pure so this exact filter — not a re-implementation of it —
+ *  can be tested directly, without driving the dropdown menu it's wired to. */
+export function computeMyScheduledTasks(state: AppState, userId: string): Task[] {
+  return state.tasks.filter(
+    (t) =>
+      t.dueDate != null &&
+      isMineOrUnclaimed(t, userId) &&
+      canUserSeeTaskProject(state, t, userId)
+  );
+}
 
 function NavLink({
   href,
@@ -209,11 +224,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   }, []);
 
   const myScheduledTasks = React.useMemo(
-    () =>
-      state.tasks.filter(
-        (t) => t.dueDate != null && isMineOrUnclaimed(t, currentUser.id)
-      ),
-    [state.tasks, currentUser.id]
+    () => computeMyScheduledTasks(state, currentUser.id),
+    [state, currentUser.id]
   );
 
   const exportMySchedule = () => {

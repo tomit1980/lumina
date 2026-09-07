@@ -7,7 +7,8 @@ import { toast } from "sonner";
 
 import { taskEvent } from "@/lib/calendar";
 import { isMineOrUnclaimed } from "@/lib/permissions";
-import { useStore } from "@/lib/store";
+import { canUserSeeTaskProject, useStore } from "@/lib/store";
+import type { AppState } from "@/lib/types";
 
 /**
  * Native, backend-free reminders for the current user's scheduled tasks.
@@ -96,8 +97,13 @@ export function Reminders() {
   const { state, currentUser } = useStore();
 
   // Keep the interval reading fresh data without re-subscribing every render.
-  const dataRef = React.useRef({ tasks: state.tasks, userId: currentUser.id });
-  dataRef.current = { tasks: state.tasks, userId: currentUser.id };
+  // The whole state (not just tasks) is kept so the visibility check below
+  // can look up each task's project without a stale/second store reference.
+  const dataRef = React.useRef<{ state: AppState; userId: string }>({
+    state,
+    userId: currentUser.id,
+  });
+  dataRef.current = { state, userId: currentUser.id };
 
   React.useEffect(() => {
     const fired = loadFired();
@@ -132,9 +138,9 @@ export function Reminders() {
     };
 
     const tick = () => {
-      const { tasks, userId } = dataRef.current;
+      const { state, userId } = dataRef.current;
       const now = Date.now();
-      for (const task of tasks) {
+      for (const task of state.tasks) {
         if (
           task.reminderMinutes == null ||
           !task.startTime ||
@@ -144,6 +150,10 @@ export function Reminders() {
           continue;
         }
         if (!isMineOrUnclaimed(task, userId)) continue;
+        // A revoked collaborator (or an owner whose access changed since)
+        // must not still get reminded of a task whose project they can no
+        // longer see.
+        if (!canUserSeeTaskProject(state, task, userId)) continue;
 
         const ev = taskEvent(task);
         if (!ev || ev.allDay) continue;

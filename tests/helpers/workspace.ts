@@ -80,6 +80,19 @@ export async function addProjectMember(
   if (error) throw new Error(`addProjectMember failed: ${error.message}`);
 }
 
+/** Revokes a member's project access — the shape final-review.md's F2
+ *  targets: this alone must be enough to prune that user's stray
+ *  task_collaborators rows on the project (project_members_prune_collaborators,
+ *  20260907000700_assignee_visibility.sql). */
+export async function removeProjectMember(
+  projectId: string,
+  userId: string
+): Promise<void> {
+  const { error } = await serviceClient
+    .from("project_members").delete().eq("project_id", projectId).eq("user_id", userId);
+  if (error) throw new Error(`removeProjectMember failed: ${error.message}`);
+}
+
 /**
  * Seeds a collaborator row. Bypasses RLS like every helper here, but NOT the
  * task_collaborators_check_insert trigger (triggers fire for the service role

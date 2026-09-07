@@ -264,6 +264,26 @@ export function normaliseCollaborators(
   return out;
 }
 
+/** Can this user still see the project a task belongs to? Every "mine"-style
+ *  read site (the home page's task list, the schedule .ics export, the
+ *  reminder gate) must ask this in addition to `isMine`/`isMineOrUnclaimed`
+ *  (lib/permissions.ts) — otherwise a revoked collaborator, or an owner
+ *  whose access changed since, keeps seeing a task whose project the
+ *  database would no longer return the row for. A missing project (should
+ *  never happen — deleteProject cascades its tasks) is treated as
+ *  not-visible, matching the write-time guards' fail-closed shape. Shared
+ *  here, not duplicated at each call site, and kept out of
+ *  lib/permissions.ts so that module stays free of the store's React
+ *  imports. */
+export function canUserSeeTaskProject(
+  s: AppState,
+  task: Pick<Task, "projectId">,
+  userId: string
+): boolean {
+  const project = s.projects.find((p) => p.id === task.projectId);
+  return !!project && canUserSeeProject(s, project, userId);
+}
+
 /** One activity line per person affected by an owner/collaborator change,
  *  diffing the previous and next (already-normalised) task. Shared so the
  *  owner-change and collaborator-add/remove branches aren't duplicated at
@@ -271,22 +291,26 @@ export function normaliseCollaborators(
 function assignmentActivityTexts(s: AppState, prev: Task, next: Task): string[] {
   const nameOf = (userId: string) =>
     s.users.find((u) => u.id === userId)?.name ?? "Someone";
+  // Every line names the task by its *resulting* title — a patch that
+  // renames and reassigns in the same call must log the assignment against
+  // the new name, not the one being replaced.
+  const title = next.title;
   const texts: string[] = [];
   if (next.assigneeId !== prev.assigneeId) {
     texts.push(
       next.assigneeId
-        ? `assigned “${prev.title}” to ${nameOf(next.assigneeId)}`
-        : `unassigned “${prev.title}”`
+        ? `assigned “${title}” to ${nameOf(next.assigneeId)}`
+        : `unassigned “${title}”`
     );
   }
   for (const id of next.collaboratorIds) {
     if (!prev.collaboratorIds.includes(id)) {
-      texts.push(`added ${nameOf(id)} to “${prev.title}”`);
+      texts.push(`added ${nameOf(id)} to “${title}”`);
     }
   }
   for (const id of prev.collaboratorIds) {
     if (!next.collaboratorIds.includes(id)) {
-      texts.push(`removed ${nameOf(id)} from “${prev.title}”`);
+      texts.push(`removed ${nameOf(id)} from “${title}”`);
     }
   }
   return texts;
@@ -429,7 +453,6 @@ function migrate(parsed: LegacyState, parsedVersion: number): AppState {
       startTime: t.startTime ?? null,
       durationMinutes: t.durationMinutes ?? null,
       reminderMinutes: t.reminderMinutes ?? null,
-      // Collaborators are new — older tasks have none.
       // Collaborators are new — older tasks have none.
       collaboratorIds: t.collaboratorIds ?? [],
     })),
@@ -1014,13 +1037,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const members = patch.restricted
         ? ensureEditor(patch.members, project.createdBy)
         : [];
-      update((st) => ({
-        ...st,
-        projects: st.projects.map((p) =>
-          p.id === projectId ? { ...p, restricted: patch.restricted, members } : p
-        ),
-        activities: activity(st, "project", `updated access for ${project.name}`),
-      }));
+      const updatedProject: Project = { ...project, restricted: patch.restricted, members };
+      update((st) => {
+        // Revocation must not leave stale collaborator rows: anyone on this
+        // project's tasks who can no longer see it (per the *new*
+        // restricted/members state) is pruned — the same rule the write-time
+        // guard enforces, applied retroactively.
+        const tasks = st.tasks.map((t) => {
+          if (t.projectId !== projectId) return t;
+          const kept = t.collaboratorIds.filter((id) =>
+            canUserSeeProject(st, updatedProject, id)
+          );
+          return kept.length === t.collaboratorIds.length
+            ? t
+            : { ...t, collaboratorIds: kept };
+        });
+        return {
+          ...st,
+          projects: st.projects.map((p) => (p.id === projectId ? updatedProject : p)),
+          tasks,
+          activities: activity(st, "project", `updated access for ${project.name}`),
+        };
+      });
       return true;
     };
 
@@ -1036,10 +1074,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         input.assigneeId,
         input.collaboratorIds ?? []
       );
-      if (s0 && project0) {
-        const blockedId = collaboratorIds.find(
-          (id) => !canUserSeeProject(s0, project0, id)
-        );
+      // Fail closed: a task whose projectId doesn't resolve to a real
+      // project can't have its owner/collaborators checked against
+      // anything, so it must be refused rather than let the write fall
+      // through unchecked.
+      if (!s0 || !project0) {
+        deny("That project doesn't exist.");
+        return null;
+      }
+      {
+        // Assignment never grants access: the owner is checked exactly like
+        // a collaborator — a person who can't see the project can't be put
+        // on its tasks in either slot.
+        const blockedId =
+          input.assigneeId && !canUserSeeProject(s0, project0, input.assigneeId)
+            ? input.assigneeId
+            : collaboratorIds.find((id) => !canUserSeeProject(s0, project0, id));
         if (blockedId) {
           const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
           deny(`${name} can't see this project.`);
@@ -1076,6 +1126,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
       if (!s0 || !task0) return false;
+      // Fail closed: a task whose project can't be resolved can't have its
+      // owner/collaborators checked against anything, so the write must be
+      // refused rather than let the check fall through unrun.
+      if (!project0) {
+        deny("That project doesn't exist.");
+        return false;
+      }
       // Resolve against the *resulting* owner — a patch may change both the
       // owner and the collaborator list in the same call.
       const resultingOwner =
@@ -1084,15 +1141,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         resultingOwner,
         patch.collaboratorIds !== undefined ? patch.collaboratorIds : task0.collaboratorIds
       );
-      if (project0) {
-        const blockedId = resultingCollaborators.find(
-          (id) => !canUserSeeProject(s0, project0, id)
-        );
-        if (blockedId) {
-          const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
-          deny(`${name} can't see this project.`);
-          return false;
-        }
+      // Assignment never grants access: the resulting owner is checked
+      // exactly like a collaborator.
+      const blockedId =
+        resultingOwner && !canUserSeeProject(s0, project0, resultingOwner)
+          ? resultingOwner
+          : resultingCollaborators.find((id) => !canUserSeeProject(s0, project0, id));
+      if (blockedId) {
+        const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
+        deny(`${name} can't see this project.`);
+        return false;
       }
       update((s) => {
         const prev = s.tasks.find((t) => t.id === taskId);

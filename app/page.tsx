@@ -27,7 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { isMine } from "@/lib/permissions";
-import { getUnreadCount, useStore } from "@/lib/store";
+import { canUserSeeTaskProject, getUnreadCount, useStore } from "@/lib/store";
 import { PRIORITY_META, type ActivityKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { chatHref, projectHref } from "@/lib/routes";
@@ -56,8 +56,17 @@ export default function HomePage() {
   const mayEditTasks = can("task.edit");
   const teamChannel = state.channels.find((c) => c.isTeam);
 
+  // `isMine` alone doesn't ask whether the user can still see the task's
+  // project — a revoked collaborator (or an owner whose access changed
+  // since) would otherwise keep seeing the task's title here even though
+  // the database would no longer return the row at all.
   const myOpenTasks = state.tasks
-    .filter((t) => isMine(t, currentUser.id) && t.status !== "done")
+    .filter(
+      (t) =>
+        isMine(t, currentUser.id) &&
+        canUserSeeTaskProject(state, t, currentUser.id) &&
+        t.status !== "done"
+    )
     .sort((a, b) => {
       // Owned tasks first, then collaborated-on ones; due date breaks ties
       // within each group.
@@ -82,7 +91,10 @@ export default function HomePage() {
       .reduce((acc, d) => acc + getUnreadCount(state, currentUser.id, d.id), 0);
 
   const completedByMe = state.tasks.filter(
-    (t) => isMine(t, currentUser.id) && t.status === "done"
+    (t) =>
+      isMine(t, currentUser.id) &&
+      canUserSeeTaskProject(state, t, currentUser.id) &&
+      t.status === "done"
   ).length;
 
   const activities = [...state.activities].sort((a, b) => b.ts - a.ts).slice(0, 8);

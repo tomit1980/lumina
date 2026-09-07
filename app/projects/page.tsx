@@ -303,7 +303,7 @@ function ProjectPageInner() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All assignees</SelectItem>
+                  <SelectItem value="all">Everyone</SelectItem>
                   <SelectItem value="unassigned">Unassigned</SelectItem>
                   {state.users.map((u) => (
                     <SelectItem key={u.id} value={u.id}>
