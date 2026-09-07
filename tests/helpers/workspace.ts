@@ -79,3 +79,18 @@ export async function addProjectMember(
     .from("project_members").insert({ project_id: projectId, user_id: userId, level });
   if (error) throw new Error(`addProjectMember failed: ${error.message}`);
 }
+
+/**
+ * Seeds a collaborator row. Bypasses RLS like every helper here, but NOT the
+ * task_collaborators_check_insert trigger (triggers fire for the service role
+ * too), so a fixture that violates the owner/visibility invariants throws
+ * rather than silently creating an impossible row.
+ */
+export async function addTaskCollaborator(
+  taskId: string,
+  userId: string
+): Promise<void> {
+  const { error } = await serviceClient
+    .from("task_collaborators").insert({ task_id: taskId, user_id: userId });
+  if (error) throw new Error(`addTaskCollaborator failed: ${error.message}`);
+}
