@@ -714,6 +714,10 @@ export type Database = {
         Returns: boolean
       }
       has_permission: { Args: { perm: string }; Returns: boolean }
+      move_task: {
+        Args: { p_index: number; p_status: string; p_task_id: string }
+        Returns: undefined
+      }
       my_role_id: { Args: never; Returns: string }
       project_is_manageable: {
         Args: { target_project_id: string }
