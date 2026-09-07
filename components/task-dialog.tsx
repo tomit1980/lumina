@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { format } from "date-fns";
-import { CalendarPlus, Download, Flag, Trash2 } from "lucide-react";
+import { CalendarPlus, Download, Flag, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -33,7 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AttachmentsField } from "@/components/attachments";
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
-import { useStore } from "@/lib/store";
+import { canUserSeeProject, normaliseCollaborators, useStore } from "@/lib/store";
 import {
   PRIORITIES,
   PRIORITY_META,
@@ -53,6 +53,7 @@ interface FormState {
   status: TaskStatus;
   priority: Priority;
   assigneeId: string;
+  collaboratorIds: string[];
   dueDate: string;
   /** "HH:MM" or "" when the task is date-only / unscheduled. */
   startTime: string;
@@ -112,9 +113,15 @@ export function TaskDialog() {
   // deleting the task mid-dialog doesn't flip the closing dialog into
   // "New task" while it's still animating out with the old field values.
   const [mode, setMode] = React.useState<"create" | "edit">("create");
+  // Transient UI state for the collaborators picker — not part of the saved
+  // form, reset alongside it whenever the dialog (re)opens.
+  const [addCollaboratorId, setAddCollaboratorId] = React.useState("");
+  const [pruneNotice, setPruneNotice] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!taskDialog.open) return;
+    setAddCollaboratorId("");
+    setPruneNotice(null);
     if (editing) {
       setMode("edit");
       setForm({
@@ -124,6 +131,7 @@ export function TaskDialog() {
         status: editing.status,
         priority: editing.priority,
         assigneeId: editing.assigneeId ?? "none",
+        collaboratorIds: [...editing.collaboratorIds],
         dueDate: editing.dueDate ? format(editing.dueDate, "yyyy-MM-dd") : "",
         startTime: editing.startTime ?? "",
         duration: String(editing.durationMinutes ?? 60),
@@ -141,6 +149,7 @@ export function TaskDialog() {
         status: taskDialog.status ?? "todo",
         priority: "medium",
         assigneeId: "none",
+        collaboratorIds: [],
         dueDate: "",
         startTime: "",
         duration: "60",
@@ -172,6 +181,60 @@ export function TaskDialog() {
   const canSchedule = !!form.dueDate;
   const hasTime = canSchedule && !!form.startTime;
 
+  // Owner + collaborators. `visibleCollaboratorIds` runs the same
+  // normalisation the store applies on save, so the picker never shows a
+  // state (e.g. the owner also listed as a collaborator) that couldn't
+  // actually be persisted.
+  const ownerId = form.assigneeId === "none" ? null : form.assigneeId;
+  const selectedProject = state.projects.find((p) => p.id === form.projectId);
+  const visibleCollaboratorIds = normaliseCollaborators(ownerId, form.collaboratorIds);
+  const collaboratorCandidates = selectedProject
+    ? state.users.filter(
+        (u) =>
+          u.id !== ownerId &&
+          !visibleCollaboratorIds.includes(u.id) &&
+          canUserSeeProject(state, selectedProject, u.id)
+      )
+    : [];
+
+  const addCollaborator = (userId: string) => {
+    if (!userId || readOnly) return;
+    set("collaboratorIds", [...form.collaboratorIds, userId]);
+    setAddCollaboratorId("");
+    setPruneNotice(null);
+  };
+
+  const removeCollaborator = (userId: string) => {
+    if (readOnly) return;
+    set(
+      "collaboratorIds",
+      form.collaboratorIds.filter((id) => id !== userId)
+    );
+    setPruneNotice(null);
+  };
+
+  // Changing the project can leave collaborators who can't see the new
+  // project — prune them and say so, rather than silently dropping them or
+  // letting a save fail later.
+  const changeProject = (projectId: string) => {
+    if (readOnly) return;
+    const project = state.projects.find((p) => p.id === projectId);
+    const stillVisible = form.collaboratorIds.filter(
+      (id) => !project || canUserSeeProject(state, project, id)
+    );
+    const removed = form.collaboratorIds.length - stillVisible.length;
+    setPruneNotice(
+      removed > 0
+        ? `Removed ${removed} ${removed === 1 ? "person" : "people"} who can't see this project`
+        : null
+    );
+    setForm((f) =>
+      f
+        ? { ...f, projectId, collaboratorIds: normaliseCollaborators(ownerId, stillVisible) }
+        : f
+    );
+  };
+
   const save = () => {
     if (readOnly) return;
     const title = form.title.trim();
@@ -198,6 +261,7 @@ export function TaskDialog() {
       status: form.status,
       priority: form.priority,
       assigneeId: form.assigneeId === "none" ? null : form.assigneeId,
+      collaboratorIds: form.collaboratorIds,
       dueDate: form.dueDate
         ? new Date(`${form.dueDate}T00:00:00`).getTime()
         : null,
@@ -280,7 +344,7 @@ export function TaskDialog() {
               <Label>Project</Label>
               <Select
                 value={form.projectId}
-                onValueChange={(v) => set("projectId", v)}
+                onValueChange={changeProject}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Pick a project" />
@@ -352,7 +416,7 @@ export function TaskDialog() {
 
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
-              <Label>Assignee</Label>
+              <Label>Owner</Label>
               <Select
                 value={form.assigneeId}
                 disabled={readOnly}
@@ -386,6 +450,62 @@ export function TaskDialog() {
                 onChange={(e) => set("dueDate", e.target.value)}
               />
             </div>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>Collaborators</Label>
+            {visibleCollaboratorIds.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {visibleCollaboratorIds.map((id) => {
+                  const user = state.users.find((u) => u.id === id);
+                  if (!user) return null;
+                  return (
+                    <span
+                      key={id}
+                      className="flex items-center gap-1.5 rounded-full border bg-muted/40 py-1 pr-1 pl-1.5"
+                    >
+                      <UserAvatar user={user} size="xs" />
+                      <span className="text-[12px] font-medium">{user.name}</span>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${user.name} as a collaborator`}
+                          onClick={() => removeCollaborator(id)}
+                          className="flex size-4 items-center justify-center rounded-full text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            {!readOnly && collaboratorCandidates.length > 0 && (
+              <Select value={addCollaboratorId} onValueChange={addCollaborator}>
+                <SelectTrigger className="h-8 text-xs">
+                  <UserPlus className="size-3.5 text-muted-foreground" />
+                  <SelectValue placeholder="Add person…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {collaboratorCandidates.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      <span className="flex items-center gap-1.5">
+                        <UserAvatar user={u} size="xs" />
+                        {u.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {visibleCollaboratorIds.length === 0 &&
+              (readOnly || collaboratorCandidates.length === 0) && (
+                <p className="text-[11px] text-muted-foreground">No collaborators yet.</p>
+              )}
+            {pruneNotice && (
+              <p className="text-[11px] text-muted-foreground">{pruneNotice}</p>
+            )}
           </div>
 
           {/* Scheduling — time, duration, and an in-app reminder. */}

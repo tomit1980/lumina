@@ -7,8 +7,9 @@ import { format, isPast, isToday } from "date-fns";
 import { CalendarDays, Circle, CircleCheck, Flag } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { UserAvatar } from "@/components/user-avatar";
+import { PeopleStack } from "@/components/kanban/people-stack";
 import { taskEvent } from "@/lib/calendar";
+import { useStore } from "@/lib/store";
 import { PRIORITY_META, type Task, type User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +34,12 @@ export function TaskCardContent({
 
   const ev = taskEvent(task);
   const timeLabel = ev && !ev.allDay ? format(ev.start, "p") : null;
+
+  const { state } = useStore();
+  const collaborators = task.collaboratorIds
+    .map((id) => state.users.find((u) => u.id === id))
+    .filter((u): u is User => u !== undefined);
+  const hasPeople = !!assignee || collaborators.length > 0;
 
   return (
     <div
@@ -92,7 +99,7 @@ export function TaskCardContent({
         </p>
       </div>
 
-      {(task.dueDate !== null || assignee) && (
+      {(task.dueDate !== null || hasPeople) && (
         <div className="flex items-center justify-between">
           {task.dueDate !== null ? (
             <span
@@ -111,16 +118,7 @@ export function TaskCardContent({
           ) : (
             <span />
           )}
-          {assignee && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span>
-                  <UserAvatar user={assignee} size="sm" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>{assignee.name}</TooltipContent>
-            </Tooltip>
-          )}
+          <PeopleStack owner={assignee} collaborators={collaborators} />
         </div>
       )}
     </div>

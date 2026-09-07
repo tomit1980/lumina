@@ -17,7 +17,7 @@ import { CalendarDays, Circle, CircleCheck, Flag, GripVertical } from "lucide-re
 import { toast } from "sonner";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { UserAvatar } from "@/components/user-avatar";
+import { PeopleStack } from "@/components/kanban/people-stack";
 import { taskEvent } from "@/lib/calendar";
 import { COLUMN_PREFIX, useTaskDnd } from "@/components/kanban/use-task-dnd";
 import { useUI } from "@/components/ui-context";
@@ -54,6 +54,11 @@ function TaskRowContent({
   const ev = taskEvent(task);
   const timeLabel = ev && !ev.allDay ? format(ev.start, "p") : null;
 
+  const { state } = useStore();
+  const collaborators = task.collaboratorIds
+    .map((id) => state.users.find((u) => u.id === id))
+    .filter((u): u is User => u !== undefined);
+
   return (
     <div className="flex w-full items-center gap-3 px-3 py-2.5 text-left">
       <GripVertical
@@ -87,15 +92,8 @@ function TaskRowContent({
           {timeLabel && ` · ${timeLabel}`}
         </span>
       )}
-      {assignee ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span>
-              <UserAvatar user={assignee} size="sm" />
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>{assignee.name}</TooltipContent>
-        </Tooltip>
+      {assignee || collaborators.length > 0 ? (
+        <PeopleStack owner={assignee} collaborators={collaborators} />
       ) : (
         <span className="size-6 rounded-full border border-dashed" />
       )}
