@@ -119,6 +119,8 @@ export interface Task {
   order: number;
   createdAt: number;
   createdBy: string;
+  /** User ids helping on this task, in addition to assigneeId. */
+  collaboratorIds: string[];
 }
 
 export interface Project {

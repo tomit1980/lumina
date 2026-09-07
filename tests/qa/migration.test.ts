@@ -128,13 +128,25 @@ function assertCoherentShape(state: AppState) {
     expect(t.durationMinutes === null || typeof t.durationMinutes === "number").toBe(true);
     expect(t.reminderMinutes === null || typeof t.reminderMinutes === "number").toBe(true);
     expect(["high", "medium", "low"]).toContain(t.priority);
+    expect(Array.isArray(t.collaboratorIds)).toBe(true);
   }
   for (const m of state.messages) {
     expect(Array.isArray(m.attachments)).toBe(true);
   }
 }
 
-describe("migrate() across the accepted SEED_VERSION range (1..10)", () => {
+describe("migrate() backfills collaboratorIds for pre-collaborator tasks", () => {
+  it("a version-10 blob whose tasks lack collaboratorIds migrates to collaboratorIds: [] on every task", () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyBlob(10)));
+    const { result } = mountFromExistingStorage();
+    expect(result.current.state.tasks.length).toBeGreaterThan(0);
+    for (const t of result.current.state.tasks) {
+      expect(t.collaboratorIds).toEqual([]);
+    }
+  });
+});
+
+describe("migrate() across the accepted SEED_VERSION range (1..SEED_VERSION)", () => {
   for (let v = 1; v <= SEED_VERSION; v++) {
     it(`a version-${v} legacy blob migrates to a coherent current-shape state`, () => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyBlob(v)));

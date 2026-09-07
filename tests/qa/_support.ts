@@ -120,6 +120,7 @@ export function addTask(
     attachments: [],
     order: 0,
     createdAt: Date.now(),
+    collaboratorIds: [],
     ...task,
   };
   return { ...state, tasks: [...state.tasks, withDefaults] };

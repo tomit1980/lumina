@@ -57,6 +57,7 @@ export interface TaskInput {
   reminderMinutes: number | null;
   labels: string[];
   attachments: Attachment[];
+  collaboratorIds?: string[];
 }
 
 export interface RoleInput {
@@ -282,13 +283,19 @@ interface LegacyState
   tasks: Array<
     Omit<
       Task,
-      "priority" | "attachments" | "startTime" | "durationMinutes" | "reminderMinutes"
+      | "priority"
+      | "attachments"
+      | "startTime"
+      | "durationMinutes"
+      | "reminderMinutes"
+      | "collaboratorIds"
     > & {
       priority: Priority | "urgent";
       attachments?: Attachment[];
       startTime?: string | null;
       durationMinutes?: number | null;
       reminderMinutes?: number | null;
+      collaboratorIds?: string[];
     }
   >;
   channels: Array<
@@ -349,6 +356,9 @@ function migrate(parsed: LegacyState, parsedVersion: number): AppState {
       startTime: t.startTime ?? null,
       durationMinutes: t.durationMinutes ?? null,
       reminderMinutes: t.reminderMinutes ?? null,
+      // Collaborators are new — older tasks have none.
+      // Collaborators are new — older tasks have none.
+      collaboratorIds: t.collaboratorIds ?? [],
     })),
     activities: parsed.activities ?? [],
     roles,
@@ -956,6 +966,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const task: Task = {
         id: uid("t"),
         ...input,
+        collaboratorIds: input.collaboratorIds ?? [],
         order: columnSize,
         createdAt: Date.now(),
         createdBy: "",

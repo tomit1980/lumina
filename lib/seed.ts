@@ -1,7 +1,7 @@
 import { DEFAULT_ROLES } from "./permissions";
 import type { AppState, DM, Message, Task } from "./types";
 
-export const SEED_VERSION = 10;
+export const SEED_VERSION = 11;
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -276,6 +276,7 @@ export function createSeed(): AppState {
         | "startTime"
         | "durationMinutes"
         | "reminderMinutes"
+        | "collaboratorIds"
       >
     > = {}
   ): Task => {
@@ -299,6 +300,7 @@ export function createSeed(): AppState {
       order,
       createdAt: now - 10 * DAY,
       createdBy: "u_vlad",
+      collaboratorIds: opts.collaboratorIds ?? [],
     };
   };
 
@@ -319,6 +321,7 @@ export function createSeed(): AppState {
       dueDate: midnightPlus(1),
       labels: ["design", "copy"],
       description: "Three directions explored in Figma. Needs sign-off from Sam before build starts.",
+      collaboratorIds: ["u_sam", "u_elena"],
     }),
     task("p_website", "Fix font-swap layout shift on marketing pages", "in-review", "high", {
       assigneeId: "u_jonas", dueDate: midnightPlus(0), labels: ["bug", "frontend"],
@@ -326,6 +329,7 @@ export function createSeed(): AppState {
     }),
     task("p_website", "Build responsive nav + mobile menu", "in-progress", "high", {
       assigneeId: "u_jonas", dueDate: midnightPlus(2), labels: ["frontend"],
+      collaboratorIds: ["u_priya"],
     }),
     task("p_website", "Pricing page — interactive plan comparison", "in-progress", "medium", {
       assigneeId: "u_jonas", dueDate: midnightPlus(5), labels: ["frontend", "design"],
@@ -361,6 +365,7 @@ export function createSeed(): AppState {
     }),
     task("p_mobile", "API: push notification service", "in-progress", "high", {
       assigneeId: "u_priya", dueDate: midnightPlus(4), labels: ["backend", "api"],
+      collaboratorIds: ["u_vlad", "u_jonas"],
     }),
     task("p_mobile", "On-device cache layer & conflict resolution", "in-progress", "high", {
       assigneeId: "u_priya", dueDate: midnightPlus(6), labels: ["backend"],

@@ -35,6 +35,7 @@ function baseTask(overrides: Partial<Task> = {}): Task {
     order: 0,
     createdAt: Date.now(),
     createdBy: "u_vlad",
+    collaboratorIds: [],
     ...overrides,
   };
 }
