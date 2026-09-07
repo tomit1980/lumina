@@ -81,15 +81,21 @@ export function DocumentPage({
         );
         return;
       }
-      updateProject(project.id, {
+      const ok = updateProject(project.id, {
         attachments: project.attachments.map((a) =>
           a.id === file.id
             ? { ...a, dataUrl, size, editedBy: currentUser.id, editedAt: Date.now() }
             : a
         ),
       });
-      setDirty(false);
-      toast.success(`Saved ${file.name}`);
+      // The store may deny the write (e.g. access was revoked mid-edit) —
+      // in that case it already shows the reason via toast, so don't also
+      // claim success and don't clear `dirty` on an edit that was never
+      // persisted (the same lie QA-003b was about, through a different door).
+      if (ok) {
+        setDirty(false);
+        toast.success(`Saved ${file.name}`);
+      }
     } catch (err) {
       toast.error("Couldn't save", { description: String(err) });
     } finally {

@@ -82,19 +82,24 @@ describe("SpreadsheetEditor — Enter commits the cell (QA-003)", () => {
     );
 
     const input = screen.getByRole("textbox", { name: "A1" }) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "42" } });
+    // "5.0" deliberately does NOT round-trip byte-for-byte through the cell
+    // model (it's stored as the number 5, so the reconstructed `current` is
+    // "5", not "5.0") — this is exactly the value class for which `commit`'s
+    // `raw === current` string-compare guard does NOT short-circuit the
+    // follow-up blur. The fix (marking the input before blur, skipping the
+    // commit in onBlur when marked) must hold regardless.
+    fireEvent.change(input, { target: { value: "5.0" } });
     fireEvent.keyDown(input, { key: "Enter" }); // commits, then calls .blur()
     act(() => {
       fireEvent.blur(input); // jsdom doesn't auto-fire blur from .blur() in all cases — simulate it explicitly
     });
 
-    // commit()'s existing `raw === current` guard makes the blur's re-commit
-    // a no-op: onDirty must not have been called a second time.
+    // onDirty must not have been called a second time by the follow-up blur.
     expect(onDirty).toHaveBeenCalledTimes(1);
 
     const outUrl = await ref.current!.getDataUrl();
     const outWb = XLSX.read(dataUrlToArrayBuffer(outUrl), { type: "array" });
     const cell = outWb.Sheets[outWb.SheetNames[0]]?.["A1"];
-    expect(cell?.v).toBe(42);
+    expect(cell?.v).toBe(5);
   });
 });

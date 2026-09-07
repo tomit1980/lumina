@@ -11,19 +11,18 @@
 // rather than calling an extracted save() function, so it exercises the same
 // path QA found broken.
 //
-// See tests/qa/accessible-names.test.ts for why `globalThis.React` and the
-// next/navigation mock are needed under this repo's Vitest/esbuild setup.
+// See tests/qa/accessible-names.test.ts for why the next/navigation mock is
+// needed under this repo's Vitest setup.
 //
 // One more infra wrinkle specific to this file: document-page.tsx loads its
 // editors via `next/dynamic(..., { ssr: false })`. Next's shipped Loadable
 // wrapper (node_modules/next/dist/shared/lib/lazy-dynamic/loadable.js) is a
-// plain (non-forwardRef) function component; under this repo's classic-JSX
-// esbuild transform (see accessible-names.test.ts) `editorRef` ends up bound
-// to the wrong thing (`editorRef.current.getDataUrl is not a function`)
-// instead of the editor's imperative handle. A minimal `next/dynamic` mock
-// that goes straight to `React.lazy` + `React.forwardRef` restores correct
-// ref forwarding without touching any source file — the editor module
-// itself (and everything it does) is untouched and still loaded for real.
+// plain (non-forwardRef) function component, so `editorRef` ends up bound to
+// the wrong thing (`editorRef.current.getDataUrl is not a function`) instead
+// of the editor's imperative handle. A minimal `next/dynamic` mock that goes
+// straight to `React.lazy` + `React.forwardRef` restores correct ref
+// forwarding without touching any source file — the editor module itself
+// (and everything it does) is untouched and still loaded for real.
 vi.mock("next/dynamic", () => ({
   default: (loader: () => Promise<unknown>) => {
     const Lazy = React.lazy(() =>
@@ -42,7 +41,6 @@ vi.mock("next/dynamic", () => ({
 }));
 
 import * as React from "react";
-(globalThis as Record<string, unknown>).React = React;
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -153,10 +151,62 @@ describe("document-page.tsx — save() honesty (QA-003b)", () => {
     await waitFor(() => expect(toastMock.success).toHaveBeenCalledTimes(1));
     expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining("notes.md"));
 
+    // The write goes through the store's persist effect, which is not
+    // guaranteed to have flushed to localStorage yet even though the toast
+    // has already fired — read it inside waitFor so the assertion waits for
+    // the write it's asserting about instead of racing it.
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY)!);
+      const savedAttachment = persisted.projects
+        .find((p: { id: string }) => p.id === "p_doc")
+        .attachments.find((a: { id: string }) => a.id === "a_doc");
+      expect(savedAttachment.editedAt).toBeTruthy();
+    });
+  });
+
+  // Review finding 5 (fix-review.md): updateProject can now deny a write
+  // (object-level manageability check) in strictly more cases than before,
+  // but save() used to ignore the return value entirely, so a denied save
+  // still cleared `dirty` and toasted "Saved" — the same lie QA-003b was
+  // about, arriving through a different door. updateProject now returns
+  // `false` on denial and save() only reports success when it returns `true`.
+  it("a save the store denies leaves the document dirty and shows no Saved toast", async () => {
+    let state = baseState();
+    const attachment: Attachment = {
+      id: "a_doc",
+      name: "notes.md",
+      size: 5,
+      type: "text/markdown",
+      dataUrl: textToDataUrl("hello", "text/markdown"),
+      uploadedBy: state.currentUserId,
+      uploadedAt: Date.now(),
+    };
+    state = addProject(state, {
+      id: "p_doc",
+      name: "Docs",
+      createdBy: "u_sam", // not the acting user — see below
+      attachments: [attachment],
+    });
+    // u_maya holds the seeded "member" role, which lacks project.create, so
+    // updateProject's guard denies the write outright.
+    state = { ...state, currentUserId: "u_maya" };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    const project = state.projects.find((p) => p.id === "p_doc")!;
+
+    const textarea = await renderDocumentPage(project);
+    fireEvent.change(textarea, { target: { value: "hello, edited" } });
+    expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
+
+    ctrlS();
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled());
+    expect(toastMock.success).not.toHaveBeenCalled();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+
     const persisted = JSON.parse(window.localStorage.getItem(STORAGE_KEY)!);
     const savedAttachment = persisted.projects
       .find((p: { id: string }) => p.id === "p_doc")
       .attachments.find((a: { id: string }) => a.id === "a_doc");
-    expect(savedAttachment.editedAt).toBeTruthy();
+    expect(savedAttachment.editedAt).toBeUndefined();
   });
 });

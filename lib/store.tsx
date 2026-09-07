@@ -146,7 +146,7 @@ interface StoreValue {
         "name" | "description" | "emoji" | "color" | "priority" | "attachments"
       >
     >
-  ) => void;
+  ) => boolean;
   deleteProject: (projectId: string) => void;
   /** Sets restriction + the per-member access list in one go. The project's
    *  creator is always kept as an editor so they can't lock themselves out. */
@@ -856,14 +856,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const updateProject: StoreValue["updateProject"] = (projectId, patch) => {
       // Editing a project is part of the "manage projects" capability.
-      if (!guard("project.create")) return;
+      if (!guard("project.create")) return false;
       // Every patch (not just attachments) is subject to the same
       // object-level manageability check as channel access changes.
       const cur = stateRef.current;
       const target = cur?.projects.find((p) => p.id === projectId);
       if (cur && target && !projectIsManageable(cur, target)) {
-        deny("You have view-only access to this project.");
-        return;
+        deny("You don't have permission to edit this project.");
+        return false;
       }
       update((s) => {
         const prev = s.projects.find((p) => p.id === projectId);
@@ -899,6 +899,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               : s.activities,
         };
       });
+      return true;
     };
 
     const deleteProject = (projectId: string) => {
@@ -916,6 +917,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
 
     const setProjectAccess: StoreValue["setProjectAccess"] = (projectId, patch) => {
+      // Managing a project's membership is part of the "manage projects"
+      // capability — same requirement updateProject already enforces.
+      if (!guard("project.create")) return false;
       const s = stateRef.current;
       if (!s) return false;
       const project = s.projects.find((p) => p.id === projectId);

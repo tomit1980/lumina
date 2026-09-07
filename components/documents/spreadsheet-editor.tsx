@@ -159,11 +159,23 @@ export const SpreadsheetEditor = React.forwardRef<DocumentEditorHandle, Document
                           cell?.t === "n" && "text-right tabular-nums",
                           cell?.f && "text-primary"
                         )}
-                        onBlur={(e) => commit(r, c, e.target.value)}
+                        onBlur={(e) => {
+                          // Enter already committed this value and marked the
+                          // input before blurring itself — skip the re-commit
+                          // so values that don't round-trip byte-for-byte
+                          // through the cell model (e.g. "5.0", "007", " 42 ")
+                          // don't fire onDirty()/bump() a second time.
+                          if (e.target.dataset.committed) {
+                            delete e.target.dataset.committed;
+                            return;
+                          }
+                          commit(r, c, e.target.value);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
                             e.preventDefault();
                             commit(r, c, e.currentTarget.value);
+                            e.currentTarget.dataset.committed = "1";
                             e.currentTarget.blur();
                           }
                         }}

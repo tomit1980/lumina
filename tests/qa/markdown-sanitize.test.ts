@@ -36,17 +36,59 @@ describe("markdown-editor — remote image beacon blocked (QA-002)", () => {
     expect(out).not.toMatch(/src=/);
   });
 
-  it("also strips srcset (a src-equivalent bypass) on a remote image", () => {
+  it("also strips srcset (a src-equivalent bypass) on an image with a data: src", () => {
+    // A bare `srcset` with no `src` never exercised the bypass this test
+    // claims to cover — the real attack pairs a benign `data:` src (so the
+    // <img> isn't blocked outright) with a remote `srcset`, which browsers
+    // prefer over `src` when present.
     const out = sanitize(
-      '<img srcset="https://attacker.example/a.png 1x, https://attacker.example/b.png 2x">'
+      '<img src="data:image/png;base64,iVBORw0KGgo=" srcset="https://attacker.example/a.png 1x, https://attacker.example/b.png 2x">'
     );
     expect(out).not.toContain("attacker.example");
     expect(out).not.toMatch(/srcset=/);
   });
 
+  it("strips a remote <source srcset> inside a <picture> (data: <img> fallback survives)", () => {
+    const out = sanitize(
+      '<picture><source srcset="https://attacker.example/a.png"><img src="data:image/png;base64,iVBORw0KGgo=" alt="pic"></picture>'
+    );
+    expect(out).not.toContain("attacker.example");
+    expect(out).not.toMatch(/srcset=/);
+  });
+
+  it("strips a style attribute using url(...) as a background-image beacon", () => {
+    const out = sanitize('<div style="background:url(https://attacker.example/a.png)">hi</div>');
+    expect(out).not.toContain("attacker.example");
+    expect(out).not.toMatch(/style=/);
+  });
+
+  it("strips <table background> (a beacon vector distinct from src/srcset)", () => {
+    const out = sanitize('<table background="https://attacker.example/a.png"><tr><td>x</td></tr></table>');
+    expect(out).not.toContain("attacker.example");
+    expect(out).not.toMatch(/background=/);
+  });
+
+  it("strips <video poster> so the poster frame can't beacon on render", () => {
+    const out = sanitize('<video poster="https://attacker.example/a.png"></video>');
+    expect(out).not.toContain("attacker.example");
+    expect(out).not.toMatch(/poster=/);
+  });
+
+  it("strips src from <input type=\"image\"> (not an <img> node, but still fetches)", () => {
+    const out = sanitize('<input type="image" src="https://attacker.example/a.png">');
+    expect(out).not.toContain("attacker.example");
+    expect(out).not.toMatch(/\ssrc=/);
+  });
+
   it("marks the blocked image so a placeholder can render (non-empty alt / marker attribute)", () => {
     const out = sanitize('<img src="https://attacker.example/pixel.png">');
     expect(out).toMatch(/alt="[^"]+"/);
+    expect(out).toContain("data-remote-image-blocked");
+  });
+
+  it("never overwrites an author-supplied alt on a blocked image", () => {
+    const out = sanitize('<img src="https://attacker.example/pixel.png" alt="A cat wearing a hat">');
+    expect(out).toContain('alt="A cat wearing a hat"');
     expect(out).toContain("data-remote-image-blocked");
   });
 

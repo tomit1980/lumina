@@ -6,20 +6,14 @@
 // This renders the *real* components — not a static source-text check — and
 // asserts every icon-only button in each has a non-empty accessible name.
 //
-// A couple of infrastructure notes specific to this repo's Vitest setup
-// (esbuild transforms .tsx with the classic JSX runtime because tsconfig
-// sets `jsx: "preserve"`, which Next's own SWC compiler handles but esbuild
-// does not — no @vitejs/plugin-react is configured to normalize it): several
-// leaf components (e.g. components/user-avatar.tsx) don't import React
-// themselves, relying on the automatic runtime Next provides. Under plain
-// esbuild that produces "ReferenceError: React is not defined". Stashing the
-// React namespace on `globalThis` before importing anything works around it
-// without touching any source file. next/navigation's useRouter/usePathname/
-// useSearchParams need an App Router context this harness doesn't provide,
-// and app-shell.tsx also calls useAuth() directly, so both are mocked.
+// One infrastructure note specific to this repo's Vitest setup:
+// next/navigation's useRouter/usePathname/useSearchParams need an App Router
+// context this harness doesn't provide, and app-shell.tsx also calls
+// useAuth() directly, so both are mocked. (Vitest's esbuild transform now
+// uses the automatic JSX runtime — see vitest.config.ts — so leaf components
+// that don't import React themselves, relying on the runtime Next provides,
+// no longer need a `globalThis.React` workaround here.)
 import * as React from "react";
-(globalThis as Record<string, unknown>).React = React;
-
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
