@@ -9,27 +9,11 @@ import {
 // Supabase rate-limits sign-ups and sign-ins per IP across the WHOLE rls run,
 // and the seven files here run in parallel forks against one project — so
 // this file is deliberately frugal: five fixture users, and only three of
-// them are ever signed in. Sign-ins are memoised (as in projects.test.ts) and
-// retried with backoff, because the limit is a shared budget this file does
-// not control and a 429 here is not a policy result.
-const clientCache = new Map<string, Awaited<ReturnType<typeof signInAs>>>();
-async function clientFor(email: string): Promise<Awaited<ReturnType<typeof signInAs>>> {
-  const cached = clientCache.get(email);
-  if (cached) return cached;
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const client = await signInAs(email, TEST_PASSWORD);
-      clientCache.set(email, client);
-      return client;
-    } catch (error) {
-      lastError = error;
-      if (!/rate limit/i.test(String(error))) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
-    }
-  }
-  throw lastError;
-}
+// them are ever signed in. signInAs itself now memoises by email and
+// retries the rate-limit error with backoff (see tests/helpers/supabase.ts),
+// so this file just calls it directly under the `clientFor` name it already
+// used everywhere below.
+const clientFor = (email: string) => signInAs(email, TEST_PASSWORD);
 
 const stamp = Date.now();
 const openProject = `p_tc_open_${stamp}`;

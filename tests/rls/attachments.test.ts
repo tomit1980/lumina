@@ -6,20 +6,11 @@ import {
   addChannelMember, addProjectMember, createChannel, createProject, seedRoles,
 } from "../helpers/workspace";
 
-// Supabase rate-limits sign-ins per project; this file needs five
-// identities across many assertions. Memoize one signed-in client per
-// email and reuse it everywhere instead of calling signInAs per test — the
-// RLS behaviour under test depends on server-side data, not client-side
-// session state, so a cached session is exactly as valid a probe as a
-// fresh one.
-const clientCache = new Map<string, Awaited<ReturnType<typeof signInAs>>>();
-async function clientFor(email: string): Promise<Awaited<ReturnType<typeof signInAs>>> {
-  const cached = clientCache.get(email);
-  if (cached) return cached;
-  const client = await signInAs(email, TEST_PASSWORD);
-  clientCache.set(email, client);
-  return client;
-}
+// signInAs itself memoises by email now (see tests/helpers/supabase.ts) —
+// this file just calls it directly under the `clientFor` name it already
+// used everywhere below, so every call site stays one sign-in per identity
+// with no further change here.
+const clientFor = (email: string) => signInAs(email, TEST_PASSWORD);
 
 const stamp = Date.now();
 const secretProject = `p_att_${stamp}`;

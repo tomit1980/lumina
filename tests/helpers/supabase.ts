@@ -30,18 +30,99 @@ export function anonClient(): SupabaseClient<Database> {
   });
 }
 
+// Memoised by email, module-scoped. Supabase rate-limits signInWithPassword
+// per project across the whole `npm run test:rls` run, and several
+// pre-existing suites were re-authenticating the same handful of identities
+// on every single assertion — that's what was crossing the threshold, not
+// the number of distinct fixture users.
+//
+// Safe to cache the session rather than the account: has_permission() (see
+// supabase/migrations/20260906000100_identity.sql) reads role and
+// permissions from the profiles/roles tables live via auth.uid() on every
+// request — nothing is baked into the JWT — so a session cached before a
+// role or membership change stays exactly as valid a probe as a fresh one
+// afterwards. tests/rls/attachments.test.ts's revocation tests confirm this
+// empirically: they hold a client cached before a project_members /
+// channel_members row is deleted, then reuse it afterwards, and the policy
+// still denies correctly.
+//
+// Safe with respect to user lifecycle too: no test in this suite deletes a
+// user and later signs back in as that same email address, so this cache
+// never hands back a session for an identity that no longer exists.
+//
+// This cache is per test FILE, not per process: vitest.rls.config.ts uses
+// pool "forks" with the default isolate: true, so vitest resets the module
+// registry between test files even when they share a worker process, and
+// each file gets its own fresh copy of this module (and this Map). That is
+// fine — every RLS file mints its own timestamped emails, so there is no
+// cross-file cache hit to lose; this only dedupes repeat sign-ins *within*
+// one file, which is where the call volume was.
+//
+// `fresh: true` is an escape hatch for a future test that genuinely needs a
+// new token for an existing email (e.g. re-authenticating after a password
+// change) — nothing in the current suite exercises that path, since the
+// permission model above never requires it.
+const signInCache = new Map<string, SupabaseClient<Database>>();
+
+// Debug-only counter for measuring the before/after sign-in volume. Reset it
+// with resetSignInCount(); it has no effect on behaviour. Set
+// RLS_DEBUG_SIGNIN_COUNT to have each test file (they run in isolated
+// processes, so this fires once per file) report its own total on exit.
+let signInCount = 0;
+export function getSignInCount(): number {
+  return signInCount;
+}
+export function resetSignInCount(): void {
+  signInCount = 0;
+}
+
+function isRateLimitError(message: string): boolean {
+  return /rate limit/i.test(message);
+}
+
 /**
- * A client authenticated as one user. Each call builds its own client so a
- * test can hold several identities at once and compare what each can see.
+ * A client authenticated as one user, memoised by email so repeat calls in
+ * the same test file reuse one session instead of re-authenticating (see
+ * the cache comment above for why that is safe here). Retries with backoff
+ * specifically on Supabase's sign-in rate-limit error — never on any other
+ * failure — so a cold-start burst across the suite's forked test files
+ * cannot fail the run on its own.
  */
 export async function signInAs(
   email: string,
-  password: string
+  password: string,
+  opts: { fresh?: boolean } = {}
 ): Promise<SupabaseClient<Database>> {
-  const client = anonClient();
-  const { error } = await client.auth.signInWithPassword({ email, password });
-  if (error) throw new Error(`signInAs(${email}) failed: ${error.message}`);
-  return client;
+  if (!opts.fresh) {
+    const cached = signInCache.get(email);
+    if (cached) return cached;
+  }
+
+  const maxAttempts = 5;
+  let lastMessage = "unknown error";
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const client = anonClient();
+    const { error } = await client.auth.signInWithPassword({ email, password });
+    if (!error) {
+      signInCount++;
+      if (process.env.RLS_DEBUG_SIGNIN_COUNT) {
+        console.log(`[signInAs] network sign-in #${signInCount} in this file: ${email}`);
+      }
+      if (!opts.fresh) signInCache.set(email, client);
+      return client;
+    }
+    lastMessage = error.message;
+    if (!isRateLimitError(lastMessage)) {
+      throw new Error(`signInAs(${email}) failed: ${lastMessage}`);
+    }
+    // Rate limiting is a shared, per-project budget every RLS file draws
+    // from concurrently — a 429 here says nothing about policy correctness.
+    // Back off and retry rather than failing the run on it.
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    }
+  }
+  throw new Error(`signInAs(${email}) failed after ${maxAttempts} attempts: ${lastMessage}`);
 }
 
 export async function createTestUser(opts: {

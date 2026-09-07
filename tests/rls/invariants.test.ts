@@ -6,16 +6,11 @@ import {
   addChannelMember, addProjectMember, createChannel, createProject, seedRoles,
 } from "../helpers/workspace";
 
-// Supabase rate-limits sign-ins per project; memoize one client per email
-// and reuse it everywhere in this file, matching projects.test.ts.
-const clientCache = new Map<string, Awaited<ReturnType<typeof signInAs>>>();
-async function clientFor(email: string): Promise<Awaited<ReturnType<typeof signInAs>>> {
-  const cached = clientCache.get(email);
-  if (cached) return cached;
-  const client = await signInAs(email, TEST_PASSWORD);
-  clientCache.set(email, client);
-  return client;
-}
+// signInAs itself memoises by email now (see tests/helpers/supabase.ts) —
+// this file just calls it directly under the `clientFor` name it already
+// used everywhere below, so every call site stays one sign-in per identity
+// with no further change here.
+const clientFor = (email: string) => signInAs(email, TEST_PASSWORD);
 
 const stamp = Date.now();
 const project = `p_inv_${stamp}`;
