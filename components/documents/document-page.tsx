@@ -70,7 +70,7 @@ export function DocumentPage({
     : undefined;
 
   const save = React.useCallback(async () => {
-    if (!file || !editorRef.current || readOnly || saving) return;
+    if (!file || !editorRef.current || readOnly || saving || !dirty) return;
     setSaving(true);
     try {
       const dataUrl = await editorRef.current.getDataUrl();
@@ -95,7 +95,7 @@ export function DocumentPage({
     } finally {
       setSaving(false);
     }
-  }, [file, readOnly, saving, updateProject, project.id, project.attachments, currentUser.id]);
+  }, [file, readOnly, saving, dirty, updateProject, project.id, project.attachments, currentUser.id]);
 
   // ⌘S / Ctrl+S saves; warn before a reload with unsaved edits.
   React.useEffect(() => {

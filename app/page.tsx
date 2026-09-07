@@ -207,6 +207,7 @@ export default function HomePage() {
                           <TooltipTrigger asChild>
                             <button
                               className="text-muted-foreground/50 transition-colors hover:text-emerald-500"
+                              aria-label={`Mark "${task.title}" complete`}
                               onClick={() => {
                                 updateTask(task.id, { status: "done" });
                                 toast.success("Nice — task completed!", {

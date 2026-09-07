@@ -157,6 +157,7 @@ function SectionHeader({
               variant="ghost"
               size="icon"
               className="size-5 text-muted-foreground hover:text-foreground"
+              aria-label={addTooltip}
               onClick={onAdd}
             >
               <Plus className="size-3.5" />
@@ -319,6 +320,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               variant="ghost"
               size="icon"
               className="size-7 text-muted-foreground"
+              aria-label="Open command palette"
               onClick={() => setPaletteOpen(true)}
             >
               <CommandIcon className="size-3.5" />
@@ -718,7 +720,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3 md:hidden">
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="size-8">
+              <Button variant="ghost" size="icon" className="size-8" aria-label="Open navigation menu">
                 <Menu className="size-4" />
               </Button>
             </SheetTrigger>

@@ -163,7 +163,8 @@ export const SpreadsheetEditor = React.forwardRef<DocumentEditorHandle, Document
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
                             e.preventDefault();
-                            (e.currentTarget as HTMLInputElement).blur();
+                            commit(r, c, e.currentTarget.value);
+                            e.currentTarget.blur();
                           }
                         }}
                         title={cell?.f ? `=${cell.f} → ${display}` : undefined}

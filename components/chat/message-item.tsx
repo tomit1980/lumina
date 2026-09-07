@@ -191,7 +191,10 @@ export function MessageItem({
               );
             })}
             <EmojiPicker onPick={(emoji) => toggleReaction(message.id, emoji)}>
-              <button className="flex h-6 items-center rounded-full border border-dashed px-1.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:border-foreground/25 hover:text-foreground">
+              <button
+                aria-label="Add reaction"
+                className="flex h-6 items-center rounded-full border border-dashed px-1.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:border-foreground/25 hover:text-foreground"
+              >
                 <SmilePlus className="size-3.5" />
               </button>
             </EmojiPicker>
@@ -203,7 +206,7 @@ export function MessageItem({
       {!editing && (
         <div className="absolute -top-3 right-4 hidden items-center rounded-lg border bg-background shadow-sm group-hover:flex">
           <EmojiPicker onPick={(emoji) => toggleReaction(message.id, emoji)}>
-            <Button variant="ghost" size="icon" className="size-7 rounded-lg">
+            <Button variant="ghost" size="icon" className="size-7 rounded-lg" aria-label="Add reaction">
               <SmilePlus className="size-3.5" />
             </Button>
           </EmojiPicker>
@@ -212,6 +215,7 @@ export function MessageItem({
               variant="ghost"
               size="icon"
               className="size-7 rounded-lg"
+              aria-label="Edit message"
               onClick={() => {
                 setDraft(message.content);
                 setEditing(true);
@@ -225,6 +229,7 @@ export function MessageItem({
               variant="ghost"
               size="icon"
               className="size-7 rounded-lg text-destructive hover:text-destructive"
+              aria-label="Delete message"
               onClick={() => {
                 deleteMessage(message.id);
                 toast("Message deleted");

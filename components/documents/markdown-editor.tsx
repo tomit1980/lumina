@@ -9,6 +9,34 @@ import { dataUrlToText, textToDataUrl } from "@/lib/documents";
 import { cn } from "@/lib/utils";
 import type { DocumentEditorHandle, DocumentEditorProps } from "./types";
 
+// Registered once at module load — not per render/sanitize call — so repeated
+// renders never stack duplicate DOMPurify hooks. Blocks remote image fetches
+// (which would beacon the reader's IP/UA to whoever authored the document)
+// while leaving inline `data:` images intact and rendering a harmless
+// placeholder in their place so the author isn't left wondering where the
+// image went.
+let remoteImageHookRegistered = false;
+function ensureRemoteImageHookRegistered() {
+  if (remoteImageHookRegistered) return;
+  remoteImageHookRegistered = true;
+  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (!(node instanceof Element) || node.tagName !== "IMG") return;
+    const src = node.getAttribute("src");
+    if (src && src.startsWith("data:")) return;
+    node.removeAttribute("src");
+    node.removeAttribute("srcset");
+    node.setAttribute("alt", "Remote image blocked");
+    node.setAttribute("data-remote-image-blocked", "true");
+    node.setAttribute(
+      "style",
+      "display:inline-flex;align-items:center;justify-content:center;min-width:8rem;min-height:1.5rem;" +
+        "padding:2px 8px;border:1px dashed currentColor;border-radius:4px;font-size:11px;" +
+        "color:var(--muted-foreground,#6b7280);background:var(--muted,#f1f5f9);"
+    );
+  });
+}
+ensureRemoteImageHookRegistered();
+
 type Mode = "write" | "split" | "preview";
 
 /** Markdown (with live preview) and plain-text editing. */
