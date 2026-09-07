@@ -35,6 +35,10 @@ function ensureRemoteImageHookRegistered() {
     node.removeAttribute("poster");
     node.removeAttribute("background");
     node.removeAttribute("ping");
+    // A <form action> (or a submit control's formaction) beacons on click —
+    // DOMPurify's html profile keeps both.
+    node.removeAttribute("action");
+    node.removeAttribute("formaction");
 
     // A CSS background-image is just as good a beacon as an <img src>.
     const style = node.getAttribute("style");

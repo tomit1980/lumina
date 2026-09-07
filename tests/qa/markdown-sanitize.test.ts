@@ -80,6 +80,20 @@ describe("markdown-editor — remote image beacon blocked (QA-002)", () => {
     expect(out).not.toMatch(/\ssrc=/);
   });
 
+  it("strips <a ping> so a click can't beacon a hyperlink audit to the attacker", () => {
+    const out = sanitize('<a href="#x" ping="https://attacker.example/p">click</a>');
+    expect(out).not.toContain("attacker.example");
+    expect(out).not.toMatch(/ping=/);
+  });
+
+  it("strips <form action> and a submit control's formaction (DOMPurify keeps both by default)", () => {
+    const out = sanitize(
+      '<form action="https://attacker.example/x"><button formaction="https://attacker.example/y">go</button></form>'
+    );
+    expect(out).not.toContain("attacker.example");
+    expect(out).not.toMatch(/action=/);
+  });
+
   it("marks the blocked image so a placeholder can render (non-empty alt / marker attribute)", () => {
     const out = sanitize('<img src="https://attacker.example/pixel.png">');
     expect(out).toMatch(/alt="[^"]+"/);
