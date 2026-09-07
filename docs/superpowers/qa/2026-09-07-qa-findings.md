@@ -18,6 +18,8 @@ Demo accounts, password `lumina24`: **vlad** (admin), **maya** (member), **elena
 
 ### QA-001 — Critical — every user's browser holds the entire workspace, private data included
 
+> **Status: DEFERRED.** Deferred to Plan 2 (Supabase store swap) — closes when the client only receives rows RLS allows. See docs/superpowers/plans/2026-09-07-qa-fixes.md.
+
 **Area:** persistence / architecture · **Suspected:** `lib/store.tsx:28` (`STORAGE_KEY`, one blob)
 
 **Repro** (fresh localStorage): sign in as **elena** (guest) → open DevTools → read
@@ -36,6 +38,8 @@ team believing private channels are private.
 
 
 ### QA-002 — Medium — a shared Markdown document can beacon to an arbitrary URL when opened
+
+> **Status: FIXED** in `3127237`.
 
 **Area:** documents / privacy · **Suspected:** `components/documents/markdown-editor.tsx:30` (preview render)
 
@@ -60,6 +64,17 @@ preview, would close it.
 src=data:>`, and `<svg onload>`. Legitimate formatting survived.
 
 ### QA-003 — Critical — pressing Enter in a spreadsheet cell silently discards the edit, and Ctrl+S then reports "Saved"
+
+> **Status: RETRACTED as a defect — test artefact.** Re-tested on 2026-09-07 against the
+> pre-fix build with a genuine Enter keydown (`e.key === "Enter"`, trusted): the cell commits,
+> focus is released, Save enables and "Unsaved changes" appears. The original observation came
+> from the browser automation's `key "Return"`, which delivers a keydown with an **empty** key
+> name, so the handler never ran. The change in `3127237` (commit directly on Enter instead of
+> via `blur()`) is retained as harmless hardening and has a regression test, but it fixed no
+> user-facing bug. **The companion finding QA-003b is real:** `save()` had no `dirty` guard, so
+> Ctrl+S with nothing changed re-serialised the file and toasted "Saved" — misleading, not
+> data loss. Severity for 003b: **Low**. Fixed in `3127237` and verified in the browser
+> (a no-op Ctrl+S now produces no toast).
 
 **Area:** documents / spreadsheet · **Suspected:** `components/documents/spreadsheet-editor.tsx`,
 the cell `onKeyDown` Enter branch (`e.currentTarget.blur()`) vs the `onBlur` commit.
@@ -102,6 +117,8 @@ editor rather than the shared document shell.
 
 ### QA-004 — Critical — anyone who can create a project can seize any restricted project
 
+> **Status: FIXED** in `018588b`.
+
 **Area:** RBAC / per-resource access · **Suspected:** `lib/store.tsx` `setProjectAccess` ~899-915
 · Found by automated suite A2 · Full detail: `docs/superpowers/qa/layer1-findings.md` (L1-005)
 
@@ -119,6 +136,8 @@ Contrast `setChannelAccess`, which correctly requires `channelIsManageable()` �
 
 ### QA-005 — High — a project viewer can rename, recolour and reprioritise a restricted project
 
+> **Status: FIXED** in `018588b`.
+
 **Area:** RBAC / per-resource access · **Suspected:** `lib/store.tsx` `updateProject` ~843-851
 · Found by automated suite A2 · Detail: L1-004
 
@@ -135,6 +154,8 @@ creator, editor member, or `members.manage` — likely closes both.
 
 ### QA-006 — Medium — any channel named "general" silently becomes undeletable after a reload
 
+> **Status: FIXED** in `018588b`.
+
 **Area:** persistence / migration · **Suspected:** `lib/store.tsx` `migrate()` ~297 and the
 hydration effect ~344-360 · Found by automated suite A3 · Detail: L1-006
 
@@ -149,6 +170,8 @@ channel as the team channel, which is undeletable by design. With no rename acti
 store, the channel is stuck forever.
 
 ### QA-007 — High — a partially-corrupt saved workspace migrates "successfully", then crashes the app
+
+> **Status: FIXED** in `018588b`.
 
 **Area:** persistence / migration · **Suspected:** `lib/store.tsx` `migrate()` ~340-342
 · Found by automated suite A6 · Detail: L1-008
@@ -172,6 +195,8 @@ core action, from a state the app itself accepted as valid.
 
 ### QA-008 — Medium — moving a task between columns leaves permanent gaps in the source column
 
+> **Status: FIXED** in `018588b`.
+
 **Area:** kanban / ordering · **Suspected:** `lib/store.tsx` `moveTask` ~977-1011
 · Found by automated suite A5 · Detail: L1-007
 
@@ -184,6 +209,8 @@ life, which breaks anything computing a position from column length.
 
 ### QA-009 — Low — `createTask` returns a task whose `order` is always 0
 
+> **Status: FIXED** in `018588b`.
+
 **Area:** store API · **Suspected:** `lib/store.tsx` `createTask` ~923-952
 · Found by automated suite A5 · Detail: L1-010
 
@@ -192,6 +219,8 @@ The persisted value is correct; only the returned object is wrong. It is built b
 inside the updater. Any caller trusting the return value gets a lie.
 
 ### QA-010 — Medium — several icon-only buttons have no accessible name
+
+> **Status: FIXED** in `3127237`.
 
 **Area:** accessibility · **Suspected:** `app/page.tsx` (task quick-complete), plus four
 icon buttons in `components/app-shell.tsx`
@@ -209,6 +238,8 @@ icon buttons in the shell.
 worth adding but is a lesser issue than the unnamed controls.
 
 ### QA-011 — Medium — the whole workspace is re-serialised on every state change, freezing the UI as attachments accumulate
+
+> **Status: DEFERRED.** Deferred to Plan 2/3 — the persist effect and embedded file bytes both disappear. See docs/superpowers/plans/2026-09-07-qa-fixes.md.
 
 **Area:** performance / persistence · **Suspected:** `lib/store.tsx:372-385` (the persist effect)
 
