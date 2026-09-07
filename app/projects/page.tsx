@@ -39,6 +39,7 @@ import { Board } from "@/components/kanban/board";
 import { ListView } from "@/components/kanban/list-view";
 import { useUI } from "@/components/ui-context";
 import { emptySpreadsheetDataUrl, dataUrlByteLength, MIME, textToDataUrl, withExtension } from "@/lib/documents";
+import { isMine } from "@/lib/permissions";
 import { fileHref } from "@/lib/routes";
 import { uid, useStore } from "@/lib/store";
 import { PRIORITIES, PRIORITY_META, type Attachment, type Priority } from "@/lib/types";
@@ -150,7 +151,7 @@ function ProjectPageInner() {
       (assigneeFilter === "all" ||
         (assigneeFilter === "unassigned"
           ? t.assigneeId === null
-          : t.assigneeId === assigneeFilter)) &&
+          : isMine(t, assigneeFilter))) &&
       (priorityFilter === "all" || t.priority === priorityFilter)
   );
 

@@ -2,15 +2,18 @@
 //
 // Suite A9 — pure helpers with no store/permission involvement:
 // lib/calendar.ts's iCalendar generation (RFC 5545 text escaping and
-// well-formed VEVENT/VALARM structure) and components/chat/rich-text.tsx's
+// well-formed VEVENT/VALARM structure), components/chat/rich-text.tsx's
 // single-pass regex tokenizer (bold/italic/code/mention, and the
-// no-nesting-support case recorded as actual behavior, not assumed).
+// no-nesting-support case recorded as actual behavior, not assumed), and
+// lib/permissions.ts's isMine / isMineOrUnclaimed "is this task mine?"
+// helpers (Plan "task-collaborators", Task 3).
 import * as React from "react";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { taskToICS, tasksToICS } from "@/lib/calendar";
 import { RichText } from "@/components/chat/rich-text";
+import { isMine, isMineOrUnclaimed } from "@/lib/permissions";
 import type { Task, User } from "@/lib/types";
 
 afterEach(() => {
@@ -211,5 +214,65 @@ describe("components/chat/rich-text.tsx — nesting is NOT supported (actual, no
 
     // "italic" itself ends up as unstyled plain text, not emphasized.
     expect(container.textContent).toBe("*bold italic still bold*");
+  });
+});
+
+describe("lib/permissions.ts — isMine (owner or collaborator)", () => {
+  it("matches the owner (assignee)", () => {
+    const task = baseTask({ assigneeId: "u_maya", collaboratorIds: [] });
+    expect(isMine(task, "u_maya")).toBe(true);
+  });
+
+  it("matches a collaborator", () => {
+    const task = baseTask({ assigneeId: "u_sam", collaboratorIds: ["u_priya", "u_jonas"] });
+    expect(isMine(task, "u_priya")).toBe(true);
+  });
+
+  it("does not match an unrelated user", () => {
+    const task = baseTask({ assigneeId: "u_sam", collaboratorIds: ["u_priya"] });
+    expect(isMine(task, "u_jonas")).toBe(false);
+  });
+
+  it("does not match an unassigned task's creator (no fallback here)", () => {
+    const task = baseTask({ assigneeId: null, collaboratorIds: [], createdBy: "u_vlad" });
+    expect(isMine(task, "u_vlad")).toBe(false);
+  });
+
+  it("an empty collaboratorIds list matches no one via collaboration", () => {
+    const task = baseTask({ assigneeId: "u_sam", collaboratorIds: [] });
+    expect(isMine(task, "u_priya")).toBe(false);
+  });
+});
+
+describe("lib/permissions.ts — isMineOrUnclaimed (isMine + unassigned-and-I-created-it)", () => {
+  it("matches the owner (assignee)", () => {
+    const task = baseTask({ assigneeId: "u_maya", collaboratorIds: [] });
+    expect(isMineOrUnclaimed(task, "u_maya")).toBe(true);
+  });
+
+  it("matches a collaborator", () => {
+    const task = baseTask({ assigneeId: "u_sam", collaboratorIds: ["u_priya"] });
+    expect(isMineOrUnclaimed(task, "u_priya")).toBe(true);
+  });
+
+  it("does not match an unrelated user", () => {
+    const task = baseTask({ assigneeId: "u_sam", collaboratorIds: ["u_priya"] });
+    expect(isMineOrUnclaimed(task, "u_jonas")).toBe(false);
+  });
+
+  it("matches an unassigned task's creator via the fallback", () => {
+    const task = baseTask({ assigneeId: null, collaboratorIds: [], createdBy: "u_vlad" });
+    expect(isMineOrUnclaimed(task, "u_vlad")).toBe(true);
+  });
+
+  it("an unassigned task does NOT match a non-creator, even as a listed collaborator's neighbor", () => {
+    const task = baseTask({ assigneeId: null, collaboratorIds: [], createdBy: "u_vlad" });
+    expect(isMineOrUnclaimed(task, "u_maya")).toBe(false);
+  });
+
+  it("an empty collaboratorIds list falls through to the creator fallback correctly", () => {
+    const task = baseTask({ assigneeId: null, collaboratorIds: [], createdBy: "u_sam" });
+    expect(isMineOrUnclaimed(task, "u_sam")).toBe(true);
+    expect(isMineOrUnclaimed(task, "u_priya")).toBe(false);
   });
 });

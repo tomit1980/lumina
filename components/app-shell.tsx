@@ -55,6 +55,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
+import { isMineOrUnclaimed } from "@/lib/permissions";
 import { getUnreadCount, useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { chatHref, dmHref, projectHref, useCurrentRoute, useIsViewing } from "@/lib/routes";
@@ -210,10 +211,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const myScheduledTasks = React.useMemo(
     () =>
       state.tasks.filter(
-        (t) =>
-          t.dueDate != null &&
-          (t.assigneeId === currentUser.id ||
-            (t.assigneeId == null && t.createdBy === currentUser.id))
+        (t) => t.dueDate != null && isMineOrUnclaimed(t, currentUser.id)
       ),
     [state.tasks, currentUser.id]
   );

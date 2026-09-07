@@ -6,6 +6,7 @@ import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 
 import { taskEvent } from "@/lib/calendar";
+import { isMineOrUnclaimed } from "@/lib/permissions";
 import { useStore } from "@/lib/store";
 
 /**
@@ -15,7 +16,8 @@ import { useStore } from "@/lib/store";
  * lightweight poll: a sonner toast (always), a desktop Notification (when the
  * user has granted permission), and a short WebAudio chime (unless muted). It
  * always reads live task data, so there's no import/export loop to keep current.
- * Only timed tasks assigned to (or personally owned by) the current user fire.
+ * Only timed tasks the current user owns, collaborates on, or (if unassigned)
+ * created fire.
  */
 
 const SOUND_KEY = "lumina:reminder-sound";
@@ -141,10 +143,7 @@ export function Reminders() {
         ) {
           continue;
         }
-        const mine =
-          task.assigneeId === userId ||
-          (task.assigneeId == null && task.createdBy === userId);
-        if (!mine) continue;
+        if (!isMineOrUnclaimed(task, userId)) continue;
 
         const ev = taskEvent(task);
         if (!ev || ev.allDay) continue;

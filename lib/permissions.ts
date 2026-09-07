@@ -4,6 +4,7 @@ import type {
   Permission,
   ResourceMember,
   RoleDef,
+  Task,
   User,
 } from "./types";
 
@@ -107,6 +108,27 @@ export function roleHas(role: RoleDef | undefined, permission: Permission): bool
 /** You can always edit your own messages. */
 export function canEditMessage(user: User, message: Message): boolean {
   return message.authorId === user.id;
+}
+
+/** The subset of Task fields "mine"-style checks need — lets callers pass a
+ *  partial/seed task without pulling in the full Task shape. */
+type TaskAssignment = Pick<Task, "assigneeId" | "collaboratorIds" | "createdBy">;
+
+/** True when this user owns the task (is its assignee) or is one of its
+ *  collaborators. Does not treat an unassigned task as anyone's — see
+ *  `isMineOrUnclaimed` for the "unassigned task I created" fallback used by
+ *  the schedule/calendar export and the reminder gate. */
+export function isMine(task: TaskAssignment, userId: string): boolean {
+  return task.assigneeId === userId || task.collaboratorIds.includes(userId);
+}
+
+/** `isMine`, plus an unassigned task this user created — the fallback the
+ *  home schedule export and reminder toasts use so a task nobody has
+ *  claimed yet still surfaces for its creator. */
+export function isMineOrUnclaimed(task: TaskAssignment, userId: string): boolean {
+  return (
+    isMine(task, userId) || (task.assigneeId == null && task.createdBy === userId)
+  );
 }
 
 /** This person's explicit access level on a resource's member list, if any. */
