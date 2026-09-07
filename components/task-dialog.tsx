@@ -124,6 +124,23 @@ export function TaskDialog() {
     setPruneNotice(null);
     if (editing) {
       setMode("edit");
+      // The project may have been restricted (or the collaborator's access
+      // revoked) since this task last saved, without the user touching the
+      // collaborator list themselves. Prune on open — same treatment as
+      // changeProject gives a collaborator who can't see a newly-picked
+      // project — so the task isn't silently uneditable: every save would
+      // otherwise be refused over a person the user never chose to add and
+      // is never told to remove.
+      const editingProjectAtOpen = state.projects.find((p) => p.id === editing.projectId);
+      const stillVisibleOnOpen = editing.collaboratorIds.filter(
+        (id) => !editingProjectAtOpen || canUserSeeProject(state, editingProjectAtOpen, id)
+      );
+      const removedOnOpen = editing.collaboratorIds.length - stillVisibleOnOpen.length;
+      if (removedOnOpen > 0) {
+        setPruneNotice(
+          `Removed ${removedOnOpen} ${removedOnOpen === 1 ? "person" : "people"} who can't see this project`
+        );
+      }
       setForm({
         title: editing.title,
         description: editing.description,
@@ -131,7 +148,7 @@ export function TaskDialog() {
         status: editing.status,
         priority: editing.priority,
         assigneeId: editing.assigneeId ?? "none",
-        collaboratorIds: [...editing.collaboratorIds],
+        collaboratorIds: normaliseCollaborators(editing.assigneeId, stillVisibleOnOpen),
         dueDate: editing.dueDate ? format(editing.dueDate, "yyyy-MM-dd") : "",
         startTime: editing.startTime ?? "",
         duration: String(editing.durationMinutes ?? 60),
@@ -273,14 +290,21 @@ export function TaskDialog() {
       attachments: form.attachments,
     };
     if (editing) {
-      updateTask(editing.id, payload);
+      // The store may refuse the write (e.g. a collaborator lost visibility
+      // into the project since the dialog opened) — it already shows the
+      // reason via its own deny toast, so don't also claim success, and
+      // don't close the dialog and discard what the user typed on an edit
+      // that was never persisted.
+      const ok = updateTask(editing.id, payload);
+      if (!ok) return;
       toast.success("Task updated");
     } else {
       if (!form.projectId) {
         toast.error("Pick a project for this task.");
         return;
       }
-      createTask({ ...payload, projectId: form.projectId });
+      const created = createTask({ ...payload, projectId: form.projectId });
+      if (!created) return;
       toast.success("Task created", { description: title });
     }
     closeTaskDialog();

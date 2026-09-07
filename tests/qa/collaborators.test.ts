@@ -245,6 +245,72 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
     expect(result.current.state.activities.length).toBe(beforeActivities);
   });
 
+  // fix-b001: task-dialog.tsx used to toast "Task updated" and close/discard
+  // the edit regardless of what updateTask returned. These two pin down the
+  // exact repro — a collaborator (Priya) added while the project was open,
+  // the project restricted afterwards without anyone touching the task's
+  // collaborator list, then a save that doesn't even mention
+  // collaboratorIds — proving updateTask itself returns falsy/truthy
+  // correctly so the dialog has something honest to check.
+  it("refuses a title-only patch when an existing collaborator lost visibility after the project was later restricted", () => {
+    let state = addProject(baseState(), {
+      id: "p_later_restricted",
+      name: "Later Restricted",
+      createdBy: "u_sam",
+      restricted: false, // Priya could see it at the time she was added
+    });
+    state = addTask(state, {
+      id: "t_pr",
+      projectId: "p_later_restricted",
+      title: "Existing task",
+      createdBy: "u_sam",
+      assigneeId: null,
+      collaboratorIds: ["u_priya"],
+    });
+    // Restrict the project afterwards without anyone touching the task's
+    // collaborator list — Priya is now a member-list omission, not a
+    // deliberate removal.
+    state = {
+      ...state,
+      projects: state.projects.map((p) =>
+        p.id === "p_later_restricted"
+          ? { ...p, restricted: true, members: [{ userId: "u_maya", level: "editor" }] }
+          : p
+      ),
+    };
+    const { result } = mount(asUser(state, "u_maya"));
+    const beforeTask = result.current.state.tasks.find((t) => t.id === "t_pr")!;
+    // The patch only changes the title — collaboratorIds isn't in it at all
+    // — but the *resulting* list (task0's existing collaborators) still
+    // includes someone who can't see the project, so the write must still
+    // be refused.
+    const ok = run(() => result.current.updateTask("t_pr", { title: "Renamed" }));
+    expect(ok).toBe(false);
+    expect(result.current.state.tasks.find((t) => t.id === "t_pr")).toEqual(beforeTask);
+  });
+
+  it("succeeds a title-only patch once the ineligible collaborator has been pruned from the task", () => {
+    const state = addProject(baseState(), {
+      id: "p_later_restricted2",
+      name: "Later Restricted",
+      createdBy: "u_sam",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "editor" }],
+    });
+    const withTask = addTask(state, {
+      id: "t_pr2",
+      projectId: "p_later_restricted2",
+      title: "Existing task",
+      createdBy: "u_sam",
+      assigneeId: null,
+      collaboratorIds: [], // already pruned, as the dialog now does on open
+    });
+    const { result } = mount(asUser(withTask, "u_maya"));
+    const ok = run(() => result.current.updateTask("t_pr2", { title: "Renamed" }));
+    expect(ok).toBe(true);
+    expect(result.current.state.tasks.find((t) => t.id === "t_pr2")?.title).toBe("Renamed");
+  });
+
   it("a restricted project's creator can be a collaborator even when not explicitly listed as a member", () => {
     let state = addProject(baseState(), {
       id: "p_restricted",
