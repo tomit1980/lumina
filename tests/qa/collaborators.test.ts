@@ -475,3 +475,61 @@ describe("activity log — owner and collaborator changes, per person", () => {
     expect(added[0].text).toBe("created “Brand new task”");
   });
 });
+
+
+// ---------------------------------------------------------------------
+// B-002 — the other two false-success paths, found while verifying B-001
+// in a real browser. A UI may only report success for a write the store
+// actually applied, so every guarded task write must SAY when it refused.
+// `deleteTask` returned void, so the dialog could not tell.
+// ---------------------------------------------------------------------
+describe("deleteTask reports refusal to its caller (B-002)", () => {
+  it("returns false for a viewer-only member and leaves the task in place", () => {
+    let state = addProject(baseState(), {
+      id: "p_restricted",
+      name: "Restricted",
+      createdBy: "u_vlad",
+      restricted: true,
+      members: [{ userId: "u_maya", level: "viewer" }],
+    });
+    state = addTask(state, {
+      id: "t_b002_del",
+      projectId: "p_restricted",
+      title: "Keep me",
+      createdBy: "u_vlad",
+    });
+    const { result } = mount(asUser(state, "u_maya"));
+
+    const returned = run(() => result.current.deleteTask("t_b002_del"));
+
+    expect(returned).toBe(false);
+    expect(result.current.state.tasks.some((t) => t.id === "t_b002_del")).toBe(true);
+  });
+
+  it("returns true when the delete actually happens", () => {
+    let state = addProject(baseState(), {
+      id: "p_open",
+      name: "Open",
+      createdBy: "u_vlad",
+      restricted: false,
+      members: [],
+    });
+    state = addTask(state, {
+      id: "t_b002_ok",
+      projectId: "p_open",
+      title: "Bye",
+      createdBy: "u_vlad",
+    });
+    const { result } = mount(asUser(state, "u_vlad"));
+
+    const returned = run(() => result.current.deleteTask("t_b002_ok"));
+
+    expect(returned).toBe(true);
+    expect(result.current.state.tasks.some((t) => t.id === "t_b002_ok")).toBe(false);
+  });
+
+  it("returns false for a task that does not exist", () => {
+    const { result } = mount(asUser(baseState(), "u_vlad"));
+    expect(run(() => result.current.deleteTask("t_nope"))).toBe(false);
+  });
+});

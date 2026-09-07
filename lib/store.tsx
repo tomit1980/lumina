@@ -164,7 +164,7 @@ interface StoreValue {
     patch: Partial<Omit<Task, "id" | "projectId">>
   ) => boolean;
   moveTask: (taskId: string, toStatus: TaskStatus, toIndex: number) => void;
-  deleteTask: (taskId: string) => void;
+  deleteTask: (taskId: string) => boolean;
 }
 
 const StoreContext = React.createContext<StoreValue | null>(null);
@@ -1165,15 +1165,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       });
     };
 
-    const deleteTask = (taskId: string) => {
-      if (!guard("task.delete")) return;
+    const deleteTask = (taskId: string): boolean => {
+      if (!guard("task.delete")) return false;
       const s0 = stateRef.current;
       const task0 = s0?.tasks.find((t) => t.id === taskId);
       const project0 = task0 && s0?.projects.find((p) => p.id === task0.projectId);
       if (s0 && project0 && projectIsViewerOnly(s0, project0)) {
         deny("You have view-only access to this project.");
-        return;
+        return false;
       }
+      if (!task0) return false;
       update((s) => {
         const task = s.tasks.find((t) => t.id === taskId);
         if (!task) return s;
@@ -1183,6 +1184,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           activities: activity(s, "task", `deleted “${task.title}”`),
         };
       });
+      return true;
     };
 
     return {

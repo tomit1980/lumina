@@ -312,7 +312,9 @@ export function TaskDialog() {
 
   const remove = () => {
     if (!editing) return;
-    deleteTask(editing.id);
+    // The store refuses a delete the caller isn't entitled to (and says why).
+    // Reporting success anyway would be the same lie the save path used to tell.
+    if (!deleteTask(editing.id)) return;
     toast.success("Task deleted", { description: editing.title });
     closeTaskDialog();
   };
