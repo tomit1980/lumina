@@ -41,9 +41,12 @@ export function DmDialog() {
                   key={user.id}
                   value={`${user.name} ${user.handle} ${user.title} ${userRole(user).name}`}
                   onSelect={() => {
-                    const dm = openDm(user.id);
                     setDmDialogOpen(false);
-                    router.push(dmHref(dm.id));
+                    // Fire-and-forget: the picker closes at once, and the
+                    // store toasts if the thread couldn't be opened.
+                    void openDm(user.id).then((dm) => {
+                      if (dm) router.push(dmHref(dm.id));
+                    });
                   }}
                 >
                   <UserAvatar user={user} size="sm" showPresence />

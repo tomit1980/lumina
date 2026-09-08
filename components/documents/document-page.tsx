@@ -81,7 +81,7 @@ export function DocumentPage({
         );
         return;
       }
-      const ok = updateProject(project.id, {
+      const ok = await updateProject(project.id, {
         attachments: project.attachments.map((a) =>
           a.id === file.id
             ? { ...a, dataUrl, size, editedBy: currentUser.id, editedAt: Date.now() }

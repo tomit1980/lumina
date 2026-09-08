@@ -12,7 +12,7 @@ export function SessionBridge() {
   const { currentUser, switchUser } = useStore();
 
   React.useEffect(() => {
-    if (session && session !== currentUser.id) switchUser(session);
+    if (session && session !== currentUser.id) void switchUser(session);
   }, [session, currentUser.id, switchUser]);
 
   return null;

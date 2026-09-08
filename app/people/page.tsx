@@ -226,13 +226,20 @@ export default function PeoplePage() {
   const memberCount = (roleId: string) =>
     state.users.filter((u) => u.roleId === roleId).length;
 
-  const messageUser = (userId: string) => {
-    const dm = openDm(userId);
+  const messageUser = async (userId: string) => {
+    // openDm resolves null when the thread couldn't be created — never
+    // navigate to a conversation that doesn't exist.
+    const dm = await openDm(userId);
+    if (!dm) return;
     router.push(dmHref(dm.id));
   };
 
-  const togglePermission = (role: RoleDef, permission: Permission, enabled: boolean) => {
-    if (!setRolePermission(role.id, permission, enabled)) return;
+  const togglePermission = async (
+    role: RoleDef,
+    permission: Permission,
+    enabled: boolean
+  ) => {
+    if (!(await setRolePermission(role.id, permission, enabled))) return;
     toast.success(
       `${role.name}s ${enabled ? "can now" : "can no longer"} ${PERMISSION_META[
         permission
@@ -274,7 +281,7 @@ export default function PeoplePage() {
                 )}
               >
                 <button
-                  onClick={() => !isMe && messageUser(user.id)}
+                  onClick={() => { if (!isMe) void messageUser(user.id); }}
                   className={cn(!isMe && "transition-transform hover:scale-105")}
                   disabled={isMe}
                 >
@@ -283,7 +290,7 @@ export default function PeoplePage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => !isMe && messageUser(user.id)}
+                      onClick={() => { if (!isMe) void messageUser(user.id); }}
                       disabled={isMe}
                       className={cn(
                         "truncate text-[13px] font-semibold",
@@ -309,7 +316,7 @@ export default function PeoplePage() {
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:text-foreground"
-                        onClick={() => messageUser(user.id)}
+                        onClick={() => void messageUser(user.id)}
                       >
                         <MessageCircle className="size-4" />
                       </Button>
@@ -346,8 +353,8 @@ export default function PeoplePage() {
                 {manageRoles && !isMe ? (
                   <Select
                     value={user.roleId}
-                    onValueChange={(roleId) => {
-                      if (!setUserRole(user.id, roleId)) return;
+                    onValueChange={async (roleId) => {
+                      if (!(await setUserRole(user.id, roleId))) return;
                       const next = getRole(roleId);
                       toast.success(`${user.name} is now a ${next.name}`, {
                         description: next.description,
@@ -468,14 +475,14 @@ export default function PeoplePage() {
                         variant="ghost"
                         size="icon"
                         className="size-7 text-muted-foreground hover:text-destructive"
-                        onClick={() => {
+                        onClick={async () => {
                           if (count > 0) {
                             toast.error("This role still has members", {
                               description: "Reassign them to another role first.",
                             });
                             return;
                           }
-                          if (!deleteRole(role.id)) return;
+                          if (!(await deleteRole(role.id))) return;
                           toast.success(`Role “${role.name}” deleted`);
                         }}
                       >
@@ -532,7 +539,7 @@ export default function PeoplePage() {
                           permission={permission}
                           editable={manageRoles}
                           onToggle={(enabled) =>
-                            togglePermission(role, permission, enabled)
+                            void togglePermission(role, permission, enabled)
                           }
                         />
                       ))}

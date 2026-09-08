@@ -136,9 +136,9 @@ function assertCoherentShape(state: AppState) {
 }
 
 describe("migrate() backfills collaboratorIds for pre-collaborator tasks", () => {
-  it("a version-10 blob whose tasks lack collaboratorIds migrates to collaboratorIds: [] on every task", () => {
+  it("a version-10 blob whose tasks lack collaboratorIds migrates to collaboratorIds: [] on every task", async () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyBlob(10)));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.tasks.length).toBeGreaterThan(0);
     for (const t of result.current.state.tasks) {
       expect(t.collaboratorIds).toEqual([]);
@@ -148,9 +148,9 @@ describe("migrate() backfills collaboratorIds for pre-collaborator tasks", () =>
 
 describe("migrate() across the accepted SEED_VERSION range (1..SEED_VERSION)", () => {
   for (let v = 1; v <= SEED_VERSION; v++) {
-    it(`a version-${v} legacy blob migrates to a coherent current-shape state`, () => {
+    it(`a version-${v} legacy blob migrates to a coherent current-shape state`, async () => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyBlob(v)));
-      const { result } = mountFromExistingStorage();
+      const { result } = await mountFromExistingStorage();
 
       expect(result.current.state.version).toBe(SEED_VERSION);
       assertCoherentShape(result.current.state);
@@ -188,49 +188,49 @@ describe("migrate() across the accepted SEED_VERSION range (1..SEED_VERSION)", (
 });
 
 describe("migrate() failure paths fall back to a fresh seed without throwing", () => {
-  it("corrupt (unparseable) JSON falls back to a fresh seed", () => {
+  it("corrupt (unparseable) JSON falls back to a fresh seed", async () => {
     localStorage.setItem(STORAGE_KEY, "{this is not valid JSON at all");
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.version).toBe(SEED_VERSION);
     expect(result.current.state.users.some((u) => u.id === "u_vlad")).toBe(true);
   });
 
-  it("version 0 (below the accepted range) falls back to a fresh seed", () => {
+  it("version 0 (below the accepted range) falls back to a fresh seed", async () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyBlob(0)));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.users.some((u) => u.id === "u_legacy")).toBe(false);
     expect(result.current.state.users.some((u) => u.id === "u_vlad")).toBe(true);
   });
 
-  it("a version newer than SEED_VERSION falls back to a fresh seed", () => {
+  it("a version newer than SEED_VERSION falls back to a fresh seed", async () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(legacyBlob(SEED_VERSION + 1)));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.users.some((u) => u.id === "u_legacy")).toBe(false);
     expect(result.current.state.users.some((u) => u.id === "u_vlad")).toBe(true);
   });
 
-  it("a blob missing the whole `users` array falls back to a fresh seed instead of throwing", () => {
+  it("a blob missing the whole `users` array falls back to a fresh seed instead of throwing", async () => {
     const blob = legacyBlob(SEED_VERSION) as Record<string, unknown>;
     delete blob.users;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.users.some((u) => u.id === "u_vlad")).toBe(true);
   });
 
-  it("a blob missing the whole `channels` array falls back to a fresh seed instead of throwing", () => {
+  it("a blob missing the whole `channels` array falls back to a fresh seed instead of throwing", async () => {
     const blob = legacyBlob(SEED_VERSION) as Record<string, unknown>;
     delete blob.channels;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.channels.some((c) => c.id === "c_general")).toBe(true);
   });
 
-  it("a blob missing the whole `projects` and `tasks` arrays falls back to a fresh seed instead of throwing", () => {
+  it("a blob missing the whole `projects` and `tasks` arrays falls back to a fresh seed instead of throwing", async () => {
     const blob = legacyBlob(SEED_VERSION) as Record<string, unknown>;
     delete blob.projects;
     delete blob.tasks;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.projects.some((p) => p.id === "p_website")).toBe(true);
   });
 
@@ -249,11 +249,11 @@ describe("migrate() failure paths fall back to a fresh seed without throwing", (
   // `undefined`.
   it(
     "L1-008: a blob missing only `activities` should fall back to a fresh seed (or backfill []), but yields activities: undefined",
-    () => {
+    async () => {
       const blob = legacyBlob(SEED_VERSION) as Record<string, unknown>;
       delete blob.activities;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
-      const { result } = mountFromExistingStorage();
+      const { result } = await mountFromExistingStorage();
       expect(Array.isArray(result.current.state.activities)).toBe(true);
     }
   );
@@ -265,11 +265,11 @@ describe("migrate() failure paths fall back to a fresh seed without throwing", (
   // TypeError waiting to happen the next time unread counts are read.
   it(
     "L1-008: a blob missing only `lastRead` should fall back to a fresh seed (or backfill {}), but yields lastRead: undefined",
-    () => {
+    async () => {
       const blob = legacyBlob(SEED_VERSION) as Record<string, unknown>;
       delete blob.lastRead;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
-      const { result } = mountFromExistingStorage();
+      const { result } = await mountFromExistingStorage();
       expect(result.current.state.lastRead).not.toBeUndefined();
       expect(typeof result.current.state.lastRead).toBe("object");
     }
@@ -277,12 +277,12 @@ describe("migrate() failure paths fall back to a fresh seed without throwing", (
 });
 
 describe("lumina:auth desync — a valid lumina:v1 alongside a corrupt lumina:auth", () => {
-  it("the workspace store hydrates normally regardless of a corrupt auth blob", () => {
+  it("the workspace store hydrates normally regardless of a corrupt auth blob", async () => {
     const seed = createSeed();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
     localStorage.setItem("lumina:auth", "{this is not valid JSON either");
 
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     expect(result.current.state.version).toBe(SEED_VERSION);
     expect(result.current.state.users.length).toBe(seed.users.length);
   });

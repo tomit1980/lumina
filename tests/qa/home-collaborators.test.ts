@@ -6,7 +6,7 @@
 // ahead of collaborated-on ones. Renders the real HomePage against the real
 // store, following tests/qa/accessible-names.test.ts's next/navigation mock.
 import * as React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 
@@ -27,15 +27,22 @@ import { StoreProvider } from "@/lib/store";
 import { UIProvider } from "@/components/ui-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import HomePage from "@/app/page";
-import { addProject, addTask, asUser, baseState, STORAGE_KEY } from "./_support";
+import {
+  addProject,
+  addTask,
+  asUser,
+  baseState,
+  renderHydrated,
+  STORAGE_KEY,
+} from "./_support";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
 
-function renderHome() {
-  render(
+async function renderHome() {
+  await renderHydrated(
     React.createElement(
       StoreProvider,
       null,
@@ -49,7 +56,7 @@ function renderHome() {
 }
 
 describe("app/page.tsx — 'My tasks' includes collaborator tasks, owned tasks first", () => {
-  it("lists a task the user only collaborates on, sorted after a task the user owns", () => {
+  it("lists a task the user only collaborates on, sorted after a task the user owns", async () => {
     let state = addProject(baseState(), {
       id: "p_home_collab",
       name: "Home Collab Project",
@@ -81,7 +88,7 @@ describe("app/page.tsx — 'My tasks' includes collaborator tasks, owned tasks f
     });
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(asUser(state, "u_maya")));
 
-    renderHome();
+    await renderHome();
 
     expect(screen.getByText("Owned by me")).toBeInTheDocument();
     expect(screen.getByText("Collaborating with me")).toBeInTheDocument();
@@ -92,7 +99,7 @@ describe("app/page.tsx — 'My tasks' includes collaborator tasks, owned tasks f
     expect(titles).toEqual(["Owned by me", "Collaborating with me"]);
   });
 
-  it("does not list a task for a user who is neither owner nor collaborator", () => {
+  it("does not list a task for a user who is neither owner nor collaborator", async () => {
     let state = addProject(baseState(), {
       id: "p_home_collab2",
       name: "Home Collab Project 2",
@@ -110,7 +117,7 @@ describe("app/page.tsx — 'My tasks' includes collaborator tasks, owned tasks f
     });
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(asUser(state, "u_jonas")));
 
-    renderHome();
+    await renderHome();
 
     expect(screen.queryByText("Definitely not Jonas's task")).not.toBeInTheDocument();
   });

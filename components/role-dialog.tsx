@@ -62,7 +62,7 @@ export function RoleDialog({
       perms.includes(p) ? perms.filter((x) => x !== p) : [...perms, p]
     );
 
-  const save = () => {
+  const save = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       toast.error("Give the role a name first.");
@@ -76,7 +76,7 @@ export function RoleDialog({
       return;
     }
     if (editRole) {
-      const ok = updateRole(editRole.id, {
+      const ok = await updateRole(editRole.id, {
         name: trimmed,
         description: description.trim(),
         color,
@@ -85,7 +85,7 @@ export function RoleDialog({
       if (!ok) return;
       toast.success(`Role “${trimmed}” updated`);
     } else {
-      const role = createRole({
+      const role = await createRole({
         name: trimmed,
         description: description.trim(),
         color,

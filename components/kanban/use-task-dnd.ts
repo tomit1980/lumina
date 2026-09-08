@@ -66,7 +66,7 @@ export function useTaskDnd(tasks: Task[]) {
     const overIndex = overId.startsWith(COLUMN_PREFIX)
       ? overColumn.length
       : overColumn.findIndex((t) => t.id === overId);
-    moveTask(activeId, overStatus, overIndex < 0 ? overColumn.length : overIndex);
+    void moveTask(activeId, overStatus, overIndex < 0 ? overColumn.length : overIndex);
   };
 
   const onDragEnd = (event: DragEndEvent) => {
@@ -84,7 +84,7 @@ export function useTaskDnd(tasks: Task[]) {
     // Reorder within the same status.
     const column = byStatus[overStatus];
     const overIndex = column.findIndex((t) => t.id === overId);
-    if (overIndex >= 0) moveTask(activeId, overStatus, overIndex);
+    if (overIndex >= 0) void moveTask(activeId, overStatus, overIndex);
   };
 
   const onDragCancel = () => setActiveTask(null);

@@ -16,7 +16,7 @@ afterEach(() => {
 
 describe("sendMessage content rules", () => {
   it("rejects empty content with no attachments", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.messages.length;
     const ok = await run(() => result.current.sendMessage("c_engineering", ""));
     expect(ok).toBe(false);
@@ -24,7 +24,7 @@ describe("sendMessage content rules", () => {
   });
 
   it("rejects whitespace-only content with no attachments", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.messages.length;
     const ok = await run(() => result.current.sendMessage("c_engineering", "   \n  "));
     expect(ok).toBe(false);
@@ -32,7 +32,7 @@ describe("sendMessage content rules", () => {
   });
 
   it("accepts empty content when an attachment is present", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.messages.length;
     const ok = await run(() =>
       result.current.sendMessage("c_engineering", "", [
@@ -52,7 +52,7 @@ describe("sendMessage content rules", () => {
   });
 
   it("rejects both empty content and no attachments even for a DM", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.messages.length;
     const dm = await run(() => result.current.sendToUser("u_maya", ""));
     expect(dm).toBeNull();
@@ -76,7 +76,7 @@ describe("editMessage — author-only, no permission check at all", () => {
         attachments: [],
       },
     ];
-    const { result } = mount(asUser(state, "u_editor_only"));
+    const { result } = await mount(asUser(state, "u_editor_only"));
     expect(result.current.can("message.send")).toBe(false);
 
     await run(() => result.current.editMessage("m_own", "after"));
@@ -86,7 +86,7 @@ describe("editMessage — author-only, no permission check at all", () => {
   });
 
   it("a non-author cannot edit someone else's message, even an admin with message.deleteAny", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad")); // admin
+    const { result } = await mount(asUser(baseState(), "u_vlad")); // admin
     const target = result.current.state.messages.find((m) => m.authorId === "u_sam")!;
     await run(() => result.current.editMessage(target.id, "hijacked"));
     const msg = result.current.state.messages.find((m) => m.id === target.id)!;
@@ -111,13 +111,13 @@ describe("deleteMessage — author or message.deleteAny", () => {
         attachments: [],
       },
     ];
-    const { result } = mount(asUser(state, "u_none"));
+    const { result } = await mount(asUser(state, "u_none"));
     await run(() => result.current.deleteMessage("m_del_own"));
     expect(result.current.state.messages.some((m) => m.id === "m_del_own")).toBe(false);
   });
 
   it("a non-author without message.deleteAny cannot delete another user's message", async () => {
-    const { result } = mount(asUser(baseState(), "u_maya")); // member: no message.deleteAny
+    const { result } = await mount(asUser(baseState(), "u_maya")); // member: no message.deleteAny
     const target = result.current.state.messages.find((m) => m.authorId === "u_sam")!;
     const before = result.current.state.messages.length;
     await run(() => result.current.deleteMessage(target.id));
@@ -126,7 +126,7 @@ describe("deleteMessage — author or message.deleteAny", () => {
   });
 
   it("a non-author with message.deleteAny can delete another user's message", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad")); // admin: has message.deleteAny
+    const { result } = await mount(asUser(baseState(), "u_vlad")); // admin: has message.deleteAny
     const target = result.current.state.messages.find((m) => m.authorId === "u_sam")!;
     await run(() => result.current.deleteMessage(target.id));
     expect(result.current.state.messages.some((m) => m.id === target.id)).toBe(false);
@@ -141,7 +141,7 @@ describe("toggleReaction — gated by conversation visibility only", () => {
         ? { ...c, members: [...c.members, { userId: "u_maya", level: "viewer" as const }] }
         : c
     );
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const target = result.current.state.messages.find((m) => m.channelId === "c_leadership")!;
     await run(() => result.current.toggleReaction(target.id, "🔥"));
     const reacted = result.current.state.messages.find((m) => m.id === target.id)!;
@@ -149,7 +149,7 @@ describe("toggleReaction — gated by conversation visibility only", () => {
   });
 
   it("a non-member who cannot see a private channel cannot react to its messages", async () => {
-    const { result } = mount(asUser(baseState(), "u_maya")); // not a member of c_leadership
+    const { result } = await mount(asUser(baseState(), "u_maya")); // not a member of c_leadership
     const target = result.current.state.messages.find((m) => m.channelId === "c_leadership")!;
     await run(() => result.current.toggleReaction(target.id, "🔥"));
     const untouched = result.current.state.messages.find((m) => m.id === target.id)!;
@@ -157,7 +157,7 @@ describe("toggleReaction — gated by conversation visibility only", () => {
   });
 
   it("toggling twice removes the reaction (and drops the emoji entry once empty)", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const target = result.current.state.messages.find((m) => m.channelId === "c_engineering")!;
     await run(() => result.current.toggleReaction(target.id, "🔥"));
     await run(() => result.current.toggleReaction(target.id, "🔥"));
@@ -168,7 +168,7 @@ describe("toggleReaction — gated by conversation visibility only", () => {
 
 describe("DMs bypass message.send entirely", () => {
   it("a guest (message.send only in public channels) can still DM another user", async () => {
-    const { result } = mount(asUser(baseState(), "u_elena")); // guest
+    const { result } = await mount(asUser(baseState(), "u_elena")); // guest
     const dm = await run(() => result.current.sendToUser("u_vlad", "hi from guest"));
     expect(dm).not.toBeNull();
     expect(result.current.state.messages.some((m) => m.content === "hi from guest")).toBe(true);
@@ -176,7 +176,7 @@ describe("DMs bypass message.send entirely", () => {
 
   it("sendMessage into a DM the caller is not a participant of is denied", async () => {
     const state = baseState(); // d_vlad_maya exists between u_vlad and u_maya
-    const { result } = mount(asUser(state, "u_jonas")); // not a participant
+    const { result } = await mount(asUser(state, "u_jonas")); // not a participant
     const before = result.current.state.messages.length;
     const ok = await run(() => result.current.sendMessage("d_vlad_maya", "sneaking into a DM"));
     expect(ok).toBe(false);
@@ -186,7 +186,7 @@ describe("DMs bypass message.send entirely", () => {
 
 describe("sendToUser find-or-creates the DM atomically", () => {
   it("a second call between the same two users reuses the existing DM instead of creating a new one", async () => {
-    const { result } = mount(asUser(baseState(), "u_jonas"));
+    const { result } = await mount(asUser(baseState(), "u_jonas"));
     const before = result.current.state.dms.length;
     const first = await run(() => result.current.sendToUser("u_priya", "first message"));
     expect(result.current.state.dms.length).toBe(before + 1);
@@ -200,13 +200,13 @@ describe("sendToUser find-or-creates the DM atomically", () => {
   });
 
   it("returns null for a self-DM attempt", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const dm = await run(() => result.current.sendToUser("u_vlad", "talking to myself"));
     expect(dm).toBeNull();
   });
 
   it("returns null for a nonexistent target user", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const dm = await run(() => result.current.sendToUser("u_does_not_exist", "hello?"));
     expect(dm).toBeNull();
   });
@@ -214,7 +214,7 @@ describe("sendToUser find-or-creates the DM atomically", () => {
 
 describe("markChannelRead / getUnreadCount — per-user bookkeeping", () => {
   it("a new message increases the unread count for other members but never for its own author", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const before = getUnreadCount(result.current.state, "u_maya", "c_engineering");
     await run(() => result.current.sendMessage("c_engineering", "new update"));
     const afterForMaya = getUnreadCount(result.current.state, "u_maya", "c_engineering");
@@ -224,7 +224,7 @@ describe("markChannelRead / getUnreadCount — per-user bookkeeping", () => {
   });
 
   it("markChannelRead resets the reader's own unread count without affecting other users'", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     await run(() => result.current.sendMessage("c_engineering", "ping for maya"));
     expect(getUnreadCount(result.current.state, "u_maya", "c_engineering")).toBeGreaterThan(0);
 

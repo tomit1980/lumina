@@ -146,8 +146,9 @@ export function CommandPalette() {
                   value={`message dm ${u.name} ${u.handle}`}
                   onSelect={() =>
                     run(() => {
-                      const dm = openDm(u.id);
-                      router.push(dmHref(dm.id));
+                      void openDm(u.id).then((dm) => {
+                        if (dm) router.push(dmHref(dm.id));
+                      });
                     })
                   }
                 >

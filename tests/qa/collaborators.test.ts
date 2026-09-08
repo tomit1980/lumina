@@ -9,14 +9,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 
 import { canUserSeeTaskProject, normaliseCollaborators } from "@/lib/store";
-import { addProject, addTask, asUser, baseState, mount, run } from "./_support";
+import { addProject, addTask, asUser, baseState, mount, run, type Store } from "./_support";
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
 });
 
-function taskInput(overrides: Partial<Parameters<ReturnType<typeof mount>["result"]["current"]["createTask"]>[0]> = {}) {
+function taskInput(overrides: Partial<Parameters<Store["createTask"]>[0]> = {}) {
   return {
     projectId: "p_unrestricted",
     title: "New task",
@@ -35,7 +35,7 @@ function taskInput(overrides: Partial<Parameters<ReturnType<typeof mount>["resul
 }
 
 describe("normaliseCollaborators (pure)", () => {
-  it("is order-preserving for an already-clean list", () => {
+  it("is order-preserving for an already-clean list", async () => {
     expect(normaliseCollaborators(null, ["u_a", "u_b", "u_c"])).toEqual([
       "u_a",
       "u_b",
@@ -43,14 +43,14 @@ describe("normaliseCollaborators (pure)", () => {
     ]);
   });
 
-  it("drops the owner wherever it appears in the list", () => {
+  it("drops the owner wherever it appears in the list", async () => {
     expect(normaliseCollaborators("u_b", ["u_a", "u_b", "u_c"])).toEqual([
       "u_a",
       "u_c",
     ]);
   });
 
-  it("collapses duplicates, keeping the first occurrence's position", () => {
+  it("collapses duplicates, keeping the first occurrence's position", async () => {
     expect(normaliseCollaborators(null, ["u_a", "u_b", "u_a", "u_c", "u_b"])).toEqual([
       "u_a",
       "u_b",
@@ -58,11 +58,11 @@ describe("normaliseCollaborators (pure)", () => {
     ]);
   });
 
-  it("handles a null owner (unassigned task) without dropping anyone", () => {
+  it("handles a null owner (unassigned task) without dropping anyone", async () => {
     expect(normaliseCollaborators(null, ["u_a", "u_b"])).toEqual(["u_a", "u_b"]);
   });
 
-  it("is pure — does not mutate its input array", () => {
+  it("is pure — does not mutate its input array", async () => {
     const input = ["u_a", "u_b"];
     normaliseCollaborators("u_a", input);
     expect(input).toEqual(["u_a", "u_b"]);
@@ -77,7 +77,7 @@ describe("createTask — owner/collaborator normalisation and visibility guard",
       createdBy: "u_sam",
       restricted: false,
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const task = await run(() =>
       result.current.createTask(
         taskInput({ assigneeId: "u_jonas", collaboratorIds: ["u_jonas", "u_priya"] })
@@ -94,7 +94,7 @@ describe("createTask — owner/collaborator normalisation and visibility guard",
       createdBy: "u_sam",
       restricted: false,
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const task = await run(() =>
       result.current.createTask(
         taskInput({ assigneeId: null, collaboratorIds: ["u_priya", "u_jonas", "u_priya"] })
@@ -110,7 +110,7 @@ describe("createTask — owner/collaborator normalisation and visibility guard",
       createdBy: "u_sam",
       restricted: false,
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const task = await run(() =>
       result.current.createTask(
         taskInput({ collaboratorIds: ["u_jonas", "u_priya", "u_elena"] })
@@ -128,7 +128,7 @@ describe("createTask — owner/collaborator normalisation and visibility guard",
       restricted: true,
       members: [{ userId: "u_maya", level: "editor" }],
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const before = result.current.state.tasks.length;
     const beforeActivities = result.current.state.activities.length;
     const task = await run(() =>
@@ -155,7 +155,7 @@ describe("createTask — owner/collaborator normalisation and visibility guard",
       restricted: true,
       members: [{ userId: "u_maya", level: "editor" }],
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const before = result.current.state.tasks.length;
     const beforeActivities = result.current.state.activities.length;
     const task = await run(() =>
@@ -177,7 +177,7 @@ describe("createTask — owner/collaborator normalisation and visibility guard",
   // refused (fail closed).
   it("fails closed — refuses the write when projectId doesn't resolve to a real project", async () => {
     const state = baseState();
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const before = result.current.state.tasks.length;
     const task = await run(() =>
       result.current.createTask(taskInput({ projectId: "p_does_not_exist" }))
@@ -214,7 +214,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
         t.id === "t_1" ? { ...t, collaboratorIds: ["u_maya", "u_jonas"] } : t
       ),
     };
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const ok = await run(() => result.current.updateTask("t_1", { assigneeId: "u_maya" }));
     expect(ok).toBe(true);
     const task = result.current.state.tasks.find((t) => t.id === "t_1")!;
@@ -232,7 +232,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
           : t
       ),
     };
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     // Sets the owner to u_priya (the old collaborator) while also submitting
     // a collaborator list that (redundantly) names both the new and old
     // owner — the resulting list must drop only the *new* owner.
@@ -250,7 +250,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
 
   it("an unrestricted project accepts any user as a collaborator on update", async () => {
     const state = unrestrictedProjectWithTask();
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const ok = await run(() =>
       result.current.updateTask("t_1", { collaboratorIds: ["u_jonas", "u_priya", "u_elena"] })
     );
@@ -275,7 +275,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
       assigneeId: null,
       collaboratorIds: [],
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const beforeTask = result.current.state.tasks.find((t) => t.id === "t_r1")!;
     const beforeActivities = result.current.state.activities.length;
     const ok = await run(() =>
@@ -324,7 +324,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
           : p
       ),
     };
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const beforeTask = result.current.state.tasks.find((t) => t.id === "t_pr")!;
     // The patch only changes the title and assigns nobody, so it goes
     // through. Priya stays on the task rather than being silently dropped —
@@ -353,7 +353,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
       assigneeId: null,
       collaboratorIds: [], // already pruned, as the dialog now does on open
     });
-    const { result } = mount(asUser(withTask, "u_maya"));
+    const { result } = await mount(asUser(withTask, "u_maya"));
     const ok = await run(() => result.current.updateTask("t_pr2", { title: "Renamed" }));
     expect(ok).toBe(true);
     expect(result.current.state.tasks.find((t) => t.id === "t_pr2")?.title).toBe("Renamed");
@@ -377,7 +377,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
       assigneeId: null,
       collaboratorIds: [],
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const beforeTask = result.current.state.tasks.find((t) => t.id === "t_owner_guard")!;
     const ok = await run(() =>
       result.current.updateTask("t_owner_guard", { assigneeId: "u_jonas" })
@@ -404,7 +404,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
       title: "Orphaned task",
       createdBy: "u_sam",
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const beforeTask = result.current.state.tasks.find((t) => t.id === "t_orphan")!;
     const ok = await run(() => result.current.updateTask("t_orphan", { title: "Renamed" }));
     expect(ok).toBe(false);
@@ -427,7 +427,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
       assigneeId: null,
       collaboratorIds: [],
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const ok = await run(() =>
       result.current.updateTask("t_r2", { collaboratorIds: ["u_sam"] })
     );
@@ -439,7 +439,7 @@ describe("updateTask — owner/collaborator normalisation and visibility guard",
 });
 
 describe("canSeeProject / canUserSeeProject agree for the current user", () => {
-  it("a restricted project's creator, not listed as a member, can see their own project", () => {
+  it("a restricted project's creator, not listed as a member, can see their own project", async () => {
     const state = addProject(baseState(), {
       id: "p_restricted",
       name: "Restricted Project",
@@ -447,7 +447,7 @@ describe("canSeeProject / canUserSeeProject agree for the current user", () => {
       restricted: true,
       members: [{ userId: "u_maya", level: "viewer" }], // creator omitted
     });
-    const { result } = mount(asUser(state, "u_sam"));
+    const { result } = await mount(asUser(state, "u_sam"));
     const project = result.current.state.projects.find((p) => p.id === "p_restricted")!;
     expect(result.current.canSeeProject(project)).toBe(true);
   });
@@ -474,7 +474,7 @@ describe("setProjectAccess prunes stray collaborators on revocation (F2)", () =>
       assigneeId: "u_sam",
       collaboratorIds: ["u_jonas"],
     });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     // Restrict the project without inviting jonas back — the exact
     // revocation shape final-review.md's probe A3 exercised directly
@@ -505,7 +505,7 @@ describe("setProjectAccess prunes stray collaborators on revocation (F2)", () =>
       assigneeId: "u_sam",
       collaboratorIds: ["u_jonas"],
     });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     const ok = await run(() =>
       result.current.setProjectAccess("p_keep", {
@@ -544,7 +544,7 @@ describe("setProjectAccess prunes stray collaborators on revocation (F2)", () =>
       status: "todo",
       order: 0,
     });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     await run(() =>
       result.current.setProjectAccess("p_asym", {
@@ -577,7 +577,7 @@ describe("setProjectAccess prunes stray collaborators on revocation (F2)", () =>
 // real call site.
 // ---------------------------------------------------------------------
 describe("canUserSeeTaskProject (F1 helper)", () => {
-  it("is false for a revoked collaborator once their project access is gone", () => {
+  it("is false for a revoked collaborator once their project access is gone", async () => {
     let state = addProject(baseState(), {
       id: "p_ctp",
       name: "CTP",
@@ -596,7 +596,7 @@ describe("canUserSeeTaskProject (F1 helper)", () => {
     expect(canUserSeeTaskProject(state, task, "u_jonas")).toBe(false);
   });
 
-  it("is true once the same user can see the project", () => {
+  it("is true once the same user can see the project", async () => {
     let state = addProject(baseState(), {
       id: "p_ctp2",
       name: "CTP2",
@@ -614,7 +614,7 @@ describe("canUserSeeTaskProject (F1 helper)", () => {
     expect(canUserSeeTaskProject(state, task, "u_jonas")).toBe(true);
   });
 
-  it("fails closed when the task's project can't be resolved at all", () => {
+  it("fails closed when the task's project can't be resolved at all", async () => {
     const state = addTask(baseState(), {
       id: "t_ctp3",
       projectId: "p_missing_entirely",
@@ -647,7 +647,7 @@ describe("activity log — owner and collaborator changes, per person", () => {
 
   it("assigning an owner logs 'assigned “title” to Name'", async () => {
     const state = unrestrictedProjectWithTask();
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     await run(() => result.current.updateTask("t_1", { assigneeId: "u_jonas" }));
     const last = result.current.state.activities.at(-1)!;
     expect(last.kind).toBe("task");
@@ -660,7 +660,7 @@ describe("activity log — owner and collaborator changes, per person", () => {
       ...state,
       tasks: state.tasks.map((t) => (t.id === "t_1" ? { ...t, assigneeId: "u_jonas" } : t)),
     };
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     await run(() => result.current.updateTask("t_1", { assigneeId: null }));
     const last = result.current.state.activities.at(-1)!;
     expect(last.text).toBe("unassigned “Ship the launch page”");
@@ -668,7 +668,7 @@ describe("activity log — owner and collaborator changes, per person", () => {
 
   it("adding a collaborator logs 'added Name to “title”'", async () => {
     const state = unrestrictedProjectWithTask();
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     await run(() => result.current.updateTask("t_1", { collaboratorIds: ["u_priya"] }));
     const last = result.current.state.activities.at(-1)!;
     expect(last.text).toBe("added Priya Sharma to “Ship the launch page”");
@@ -682,7 +682,7 @@ describe("activity log — owner and collaborator changes, per person", () => {
         t.id === "t_1" ? { ...t, collaboratorIds: ["u_priya"] } : t
       ),
     };
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     await run(() => result.current.updateTask("t_1", { collaboratorIds: [] }));
     const last = result.current.state.activities.at(-1)!;
     expect(last.text).toBe("removed Priya Sharma from “Ship the launch page”");
@@ -696,7 +696,7 @@ describe("activity log — owner and collaborator changes, per person", () => {
         t.id === "t_1" ? { ...t, assigneeId: "u_jonas", collaboratorIds: ["u_priya"] } : t
       ),
     };
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const before = result.current.state.activities.length;
     await run(() =>
       result.current.updateTask("t_1", {
@@ -719,7 +719,7 @@ describe("activity log — owner and collaborator changes, per person", () => {
         t.id === "t_1" ? { ...t, collaboratorIds: ["u_priya", "u_jonas"] } : t
       ),
     };
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const before = result.current.state.activities.length;
     await run(() => result.current.updateTask("t_1", { assigneeId: "u_priya" }));
     const added = result.current.state.activities.slice(before);
@@ -736,7 +736,7 @@ describe("activity log — owner and collaborator changes, per person", () => {
       createdBy: "u_sam",
       restricted: false,
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const before = result.current.state.activities.length;
     await run(() =>
       result.current.createTask(
@@ -771,7 +771,7 @@ describe("deleteTask reports refusal to its caller (B-002)", () => {
       title: "Keep me",
       createdBy: "u_vlad",
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
 
     const returned = await run(() => result.current.deleteTask("t_b002_del"));
 
@@ -793,7 +793,7 @@ describe("deleteTask reports refusal to its caller (B-002)", () => {
       title: "Bye",
       createdBy: "u_vlad",
     });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     const returned = await run(() => result.current.deleteTask("t_b002_ok"));
 
@@ -802,7 +802,7 @@ describe("deleteTask reports refusal to its caller (B-002)", () => {
   });
 
   it("returns false for a task that does not exist", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     expect(await run(() => result.current.deleteTask("t_nope"))).toBe(false);
   });
 });
@@ -815,7 +815,7 @@ describe("deleteTask reports refusal to its caller (B-002)", () => {
 // including the home page's quick-complete, which assigns nobody at all.
 // ---------------------------------------------------------------------
 describe("a stale assignment does not block unrelated edits (B-003)", () => {
-  function restrictedProjectWith(taskFields: Record<string, unknown>) {
+  async function restrictedProjectWith(taskFields: Record<string, unknown>) {
     let state = addProject(baseState(), {
       id: "p_stale",
       name: "Restricted",
@@ -830,11 +830,11 @@ describe("a stale assignment does not block unrelated edits (B-003)", () => {
       createdBy: "u_vlad",
       ...taskFields,
     });
-    return mount(asUser(state, "u_vlad"));
+    return await mount(asUser(state, "u_vlad"));
   }
 
   it("an owner who lost visibility does not block a status change", async () => {
-    const { result } = restrictedProjectWith({
+    const { result } = await restrictedProjectWith({
       assigneeId: "u_priya",
       collaboratorIds: [],
     });
@@ -843,7 +843,7 @@ describe("a stale assignment does not block unrelated edits (B-003)", () => {
   });
 
   it("a collaborator who lost visibility does not block a status change", async () => {
-    const { result } = restrictedProjectWith({
+    const { result } = await restrictedProjectWith({
       assigneeId: "u_vlad",
       collaboratorIds: ["u_priya"],
     });
@@ -852,7 +852,7 @@ describe("a stale assignment does not block unrelated edits (B-003)", () => {
   });
 
   it("but newly ASSIGNING someone who cannot see the project is still refused", async () => {
-    const { result } = restrictedProjectWith({
+    const { result } = await restrictedProjectWith({
       assigneeId: "u_vlad",
       collaboratorIds: [],
     });
@@ -863,7 +863,7 @@ describe("a stale assignment does not block unrelated edits (B-003)", () => {
   });
 
   it("and newly ADDING a collaborator who cannot see the project is still refused", async () => {
-    const { result } = restrictedProjectWith({
+    const { result } = await restrictedProjectWith({
       assigneeId: "u_vlad",
       collaboratorIds: [],
     });

@@ -63,7 +63,7 @@ export function ShareFileDialog() {
   const people = state.users.filter((u) => u.id !== currentUser.id);
   const isImage = file.type.startsWith("image/");
 
-  const share = () => {
+  const share = async () => {
     const [kind, id] = target.split(":");
     if (!kind || !id) return;
     const payload: MessageAttachment = { ...file, dataUrl: "", sourceProjectId: project.id };
@@ -72,13 +72,13 @@ export function ShareFileDialog() {
     if (kind === "channel") {
       const channel = channels.find((c) => c.id === id);
       if (!channel) return;
-      if (!sendMessage(channel.id, note.trim(), [payload])) return;
+      if (!(await sendMessage(channel.id, note.trim(), [payload]))) return;
       label = `#${channel.name}`;
       href = chatHref(channel.id);
     } else {
       const user = people.find((u) => u.id === id);
       if (!user) return;
-      const dm = sendToUser(user.id, note.trim(), [payload]);
+      const dm = await sendToUser(user.id, note.trim(), [payload]);
       if (!dm) return;
       label = user.name;
       href = dmHref(dm.id);

@@ -74,25 +74,29 @@ export function ProjectDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectDialog.open, projectDialog.editId]);
 
-  const save = () => {
+  const save = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       toast.error("Give the project a name first.");
       return;
     }
     if (editing) {
-      updateProject(editing.id, {
+      // The store refuses an edit the acting user isn't entitled to (and
+      // says why) — don't close the dialog or claim success over a write
+      // that never happened.
+      const ok = await updateProject(editing.id, {
         name: trimmed,
         description: description.trim(),
         emoji,
         color,
         priority,
       });
+      if (!ok) return;
       closeProjectDialog();
       toast.success(`Project “${trimmed}” updated`);
       return;
     }
-    const project = createProject({
+    const project = await createProject({
       name: trimmed,
       description: description.trim(),
       emoji,

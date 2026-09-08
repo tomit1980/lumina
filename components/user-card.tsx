@@ -71,9 +71,10 @@ export function UserCard({
               size="sm"
               className="h-7 gap-1.5 px-2.5 text-xs"
               onClick={() => {
-                const dm = openDm(user.id);
                 setOpen(false);
-                router.push(dmHref(dm.id));
+                void openDm(user.id).then((dm) => {
+                  if (dm) router.push(dmHref(dm.id));
+                });
               }}
             >
               <MessageCircle className="size-3.5" />

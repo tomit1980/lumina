@@ -76,10 +76,10 @@ export function AccessDialog() {
     setAddUserId("");
   };
 
-  const save = () => {
+  const save = async () => {
     const ok = channel
-      ? setChannelAccess(channel.id, { isPrivate: restricted, members })
-      : setProjectAccess(project!.id, { restricted, members });
+      ? await setChannelAccess(channel.id, { isPrivate: restricted, members })
+      : await setProjectAccess(project!.id, { restricted, members });
     if (!ok) return;
     toast.success(`Access updated for ${label}`);
     closeAccessDialog();

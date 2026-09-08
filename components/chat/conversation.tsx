@@ -42,7 +42,7 @@ export function MessageList({
   );
 
   React.useEffect(() => {
-    markChannelRead(conversationId);
+    void markChannelRead(conversationId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, messages.length]);
 
@@ -126,11 +126,22 @@ export function Composer({
 
   const send = () => {
     if (!canSend) return;
-    const ok = sendMessage(conversationId, draft.trim(), pending);
-    if (!ok) return;
+    const content = draft.trim();
+    const files = pending;
+    // Fire-and-forget so typing feels instant: the composer clears now and
+    // the message is already on screen. The store never rejects — it resolves
+    // false (and toasts why) for a refusal or a failed write, and rolls the
+    // optimistic message back — so restore what was typed rather than
+    // silently swallowing it. Only restore into a composer the user hasn't
+    // started refilling.
     setDraft("");
     setPending([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
+    void sendMessage(conversationId, content, files).then((ok) => {
+      if (ok) return;
+      setDraft((d) => (d ? d : content));
+      setPending((p) => (p.length > 0 ? p : files));
+    });
   };
 
   const addFiles = async (files: FileList | null) => {

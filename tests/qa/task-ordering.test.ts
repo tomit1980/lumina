@@ -46,7 +46,7 @@ function ordersOf(tasks: { projectId: string; status: TaskStatus; order: number 
 describe("createTask appends at the end of its status column", () => {
   it("the persisted task gets order === the column size at the time of creation", async () => {
     const { state } = seedProjectWithTasks(3, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     const created = await run(() =>
       result.current.createTask({
         projectId: PROJECT_ID,
@@ -71,7 +71,7 @@ describe("createTask appends at the end of its status column", () => {
 
   it("a new task in an empty column gets order 0, independent of other columns' counts", async () => {
     const { state } = seedProjectWithTasks(5, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     const created = await run(() =>
       result.current.createTask({
         projectId: PROJECT_ID,
@@ -105,7 +105,7 @@ describe("createTask appends at the end of its status column", () => {
     "L1-010: createTask's return value should carry the real order, but always reports 0",
     async () => {
       const { state } = seedProjectWithTasks(3, "todo");
-      const { result } = mount(asUser(state, "u_vlad"));
+      const { result } = await mount(asUser(state, "u_vlad"));
       const created = await run(() =>
         result.current.createTask({
           projectId: PROJECT_ID,
@@ -130,7 +130,7 @@ describe("createTask appends at the end of its status column", () => {
 describe("moveTask within a single column produces a dense 0..n-1 sequence", () => {
   it("moving the last task to the front renumbers everyone densely", async () => {
     const { state, ids } = seedProjectWithTasks(4, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     await run(() => result.current.moveTask(ids[3], "todo", 0));
 
     const tasks = result.current.state.tasks;
@@ -144,7 +144,7 @@ describe("moveTask within a single column produces a dense 0..n-1 sequence", () 
 
   it("moving the first task to the end renumbers everyone densely", async () => {
     const { state, ids } = seedProjectWithTasks(4, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     await run(() => result.current.moveTask(ids[0], "todo", 3));
 
     const tasks = result.current.state.tasks;
@@ -158,7 +158,7 @@ describe("moveTask within a single column produces a dense 0..n-1 sequence", () 
 
   it("moveTask clamps an out-of-range destination index to the column bounds", async () => {
     const { state, ids } = seedProjectWithTasks(3, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     await run(() => result.current.moveTask(ids[0], "todo", 999));
     const tasks = result.current.state.tasks;
     expect(ordersOf(tasks, "todo")).toEqual([0, 1, 2]);
@@ -174,7 +174,7 @@ describe("moveTask within a single column produces a dense 0..n-1 sequence", () 
 describe("moveTask across columns opens a dense slot in the destination", () => {
   it("the destination column is a dense 0..n-1 sequence after the move", async () => {
     const { state, ids } = seedProjectWithTasks(3, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     await run(() => result.current.moveTask(ids[1], "in-progress", 0));
 
     const tasks = result.current.state.tasks;
@@ -195,7 +195,7 @@ describe("moveTask across columns opens a dense slot in the destination", () => 
     "L1-007: moving a task out of a column should close the gap left behind, but does not",
     async () => {
       const { state, ids } = seedProjectWithTasks(3, "todo"); // orders 0, 1, 2
-      const { result } = mount(asUser(state, "u_vlad"));
+      const { result } = await mount(asUser(state, "u_vlad"));
       await run(() => result.current.moveTask(ids[1], "in-progress", 0)); // remove the middle task
 
       const tasks = result.current.state.tasks;
@@ -207,7 +207,7 @@ describe("moveTask across columns opens a dense slot in the destination", () => 
 describe("ordering is stable under repeated moves", () => {
   it("a sequence of moves never produces duplicate or out-of-range orders in the destination column", async () => {
     const { state, ids } = seedProjectWithTasks(5, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     await run(() => result.current.moveTask(ids[2], "todo", 0));
     await run(() => result.current.moveTask(ids[4], "todo", 2));
@@ -219,7 +219,7 @@ describe("ordering is stable under repeated moves", () => {
 
   it("moving a task back to the same index twice is idempotent", async () => {
     const { state, ids } = seedProjectWithTasks(4, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     await run(() => result.current.moveTask(ids[1], "todo", 2));
     const after1 = [...result.current.state.tasks]
       .filter((t) => t.projectId === PROJECT_ID && t.status === "todo")
@@ -237,7 +237,7 @@ describe("ordering is stable under repeated moves", () => {
 
   it("moving a nonexistent task id is a silent no-op that leaves every column untouched", async () => {
     const { state } = seedProjectWithTasks(3, "todo");
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     const before = [...result.current.state.tasks];
     await run(() => result.current.moveTask("t_does_not_exist", "in-progress", 0));
     expect(result.current.state.tasks).toEqual(before);

@@ -134,7 +134,7 @@ export function ChatView({ channel }: { channel: Channel }) {
                   <DropdownMenuItem
                     variant="destructive"
                     onSelect={() => {
-                      deleteChannel(channel.id);
+                      void deleteChannel(channel.id);
                       toast.success(`Channel #${channel.name} deleted`);
                       router.push("/");
                     }}

@@ -44,7 +44,7 @@ export function ChannelDialog() {
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-_]/g, "");
 
-  const create = () => {
+  const create = async () => {
     if (!slug) {
       toast.error("Give the channel a name first.");
       return;
@@ -53,7 +53,7 @@ export function ChannelDialog() {
       toast.error(`#${slug} already exists.`);
       return;
     }
-    const channel = createChannel({
+    const channel = await createChannel({
       name: slug,
       description: description.trim(),
       isPrivate,

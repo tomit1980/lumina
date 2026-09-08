@@ -141,7 +141,12 @@ function ProjectPageInner() {
       uploadedBy: currentUser.id,
       uploadedAt: Date.now(),
     };
-    updateProject(project.id, { attachments: [...project.attachments, attachment] });
+    // Awaited: the next line navigates to the file's page, which only
+    // exists once the write has actually gone through.
+    const ok = await updateProject(project.id, {
+      attachments: [...project.attachments, attachment],
+    });
+    if (!ok) return;
     setNewFile(null);
     router.push(fileHref(project.id, attachment.id));
   };
@@ -255,7 +260,7 @@ function ProjectPageInner() {
                     <DropdownMenuItem
                       variant="destructive"
                       onSelect={() => {
-                        deleteProject(project.id);
+                        void deleteProject(project.id);
                         toast.success(`Project “${project.name}” deleted`);
                         router.push("/");
                       }}
@@ -384,12 +389,12 @@ function ProjectPageInner() {
                   : undefined
               }
               onAdd={(added) =>
-                updateProject(project.id, {
+                void updateProject(project.id, {
                   attachments: [...project.attachments, ...added],
                 })
               }
               onRemove={(id) =>
-                updateProject(project.id, {
+                void updateProject(project.id, {
                   attachments: project.attachments.filter((a) => a.id !== id),
                 })
               }

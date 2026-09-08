@@ -1,0 +1,304 @@
+/**
+ * `LocalBackend` — the browser-only backend the public demo runs on, and the
+ * default until the Phase 3 cutover.
+ *
+ * It holds the whole workspace as one JSON blob in localStorage, so its
+ * per-action methods have nothing of their own to do: the write happens in
+ * `persist()`, which the store calls after every state change. That is why
+ * every operation here resolves immediately — it is a fast path, not a stub.
+ *
+ * The hydrate effect, the persist effect and `migrate()` moved here from
+ * `lib/store.tsx` unchanged in behaviour, including the edge-triggered quota
+ * toast (see `persist`).
+ */
+import { toast } from "sonner";
+
+import { DEFAULT_ROLES } from "../permissions";
+import { createSeed, SEED_VERSION } from "../seed";
+import type {
+  AppState,
+  Attachment,
+  Channel,
+  DM,
+  Message,
+  MessageAttachment,
+  Permission,
+  Priority,
+  Project,
+  ResourceMember,
+  RoleDef,
+  Task,
+  User,
+} from "../types";
+import type { Backend } from "./types";
+
+export const STORAGE_KEY = "lumina:v1";
+
+/** Legacy (pre-v4) persisted shapes we migrate from. */
+interface LegacyState
+  extends Omit<
+    AppState,
+    "roles" | "users" | "projects" | "tasks" | "channels" | "messages"
+  > {
+  messages: Array<Omit<Message, "attachments"> & { attachments?: MessageAttachment[] }>;
+  users: Array<Omit<User, "roleId"> & { roleId?: string; role?: string }>;
+  roles?: RoleDef[];
+  rolePermissions?: Record<string, Permission[]>;
+  projects: Array<
+    Omit<Project, "priority" | "restricted" | "members" | "attachments"> & {
+      priority?: Priority;
+      restricted?: boolean;
+      members?: ResourceMember[];
+      attachments?: Attachment[];
+    }
+  >;
+  tasks: Array<
+    Omit<
+      Task,
+      | "priority"
+      | "attachments"
+      | "startTime"
+      | "durationMinutes"
+      | "reminderMinutes"
+      | "collaboratorIds"
+    > & {
+      priority: Priority | "urgent";
+      attachments?: Attachment[];
+      startTime?: string | null;
+      durationMinutes?: number | null;
+      reminderMinutes?: number | null;
+      collaboratorIds?: string[];
+    }
+  >;
+  channels: Array<
+    Omit<Channel, "members"> & { members?: ResourceMember[]; memberIds?: string[] }
+  >;
+}
+
+export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
+  const roles: RoleDef[] =
+    parsed.roles ??
+    DEFAULT_ROLES.map((r) => ({
+      ...r,
+      permissions: r.locked
+        ? [...r.permissions]
+        : [...(parsed.rolePermissions?.[r.id] ?? r.permissions)],
+    }));
+  return {
+    version: SEED_VERSION,
+    currentUserId: parsed.currentUserId,
+    users: parsed.users.map((u) => {
+      const { role, ...rest } = u;
+      return { ...rest, roleId: u.roleId ?? role ?? "member" };
+    }),
+    channels: parsed.channels.map((c) => ({
+      id: c.id,
+      name: c.name,
+      description: c.description,
+      isPrivate: c.isPrivate,
+      // Backfill the team flag for workspaces created before it existed.
+      // Only for genuinely legacy data — the current schema always sets
+      // isTeam explicitly, so re-running this on every load (regardless of
+      // version) would wrongly re-flag a brand-new channel just named
+      // "general" as the undeletable team channel.
+      isTeam: c.isTeam ?? (parsedVersion < SEED_VERSION && c.name === "general" ? true : undefined),
+      // Flat memberIds → per-member access, defaulting existing members to editor.
+      members:
+        c.members ?? (c.memberIds ?? []).map((userId) => ({ userId, level: "editor" as const })),
+      createdBy: c.createdBy,
+      createdAt: c.createdAt,
+    })),
+    dms: parsed.dms ?? [],
+    // Message attachments are new — older messages have none.
+    messages: parsed.messages.map((m) => ({ ...m, attachments: m.attachments ?? [] })),
+    // Priority dropped the "urgent" tier — fold it into "high".
+    // Project access-control is new — default fully open (unchanged behavior).
+    projects: parsed.projects.map((p) => ({
+      ...p,
+      priority: p.priority ?? "medium",
+      restricted: p.restricted ?? false,
+      members: p.members ?? [],
+      attachments: p.attachments ?? [],
+    })),
+    tasks: parsed.tasks.map((t) => ({
+      ...t,
+      priority: t.priority === "urgent" ? "high" : t.priority,
+      attachments: t.attachments ?? [],
+      // Scheduling is new — older tasks are unscheduled (date-only at most).
+      startTime: t.startTime ?? null,
+      durationMinutes: t.durationMinutes ?? null,
+      reminderMinutes: t.reminderMinutes ?? null,
+      // Collaborators are new — older tasks have none.
+      collaboratorIds: t.collaboratorIds ?? [],
+    })),
+    activities: parsed.activities ?? [],
+    roles,
+    lastRead: parsed.lastRead ?? {},
+  };
+}
+
+/** Reads and migrates the persisted workspace, falling back to a fresh seed.
+ *  This is the body of the store's old hydrate effect, verbatim. */
+function readPersisted(): AppState {
+  let next: AppState | null = null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as LegacyState;
+      if (
+        typeof parsed?.version === "number" &&
+        parsed.version >= 1 &&
+        parsed.version <= SEED_VERSION
+      ) {
+        next = migrate(parsed, parsed.version);
+      }
+    }
+  } catch {
+    // Corrupt storage → fall through to a fresh seed.
+  }
+  return next ?? createSeed();
+}
+
+export class LocalBackend implements Backend {
+  /** Edge-triggered: only warn on the transition into failure, so a large
+   *  attachment doesn't re-toast on every unrelated state change afterward.
+   *  Was a `React.useRef` in the provider; one instance per provider keeps
+   *  that per-mount lifetime exactly. */
+  private lastPersistOk = true;
+
+  hydrate(): Promise<AppState> {
+    return Promise.resolve(readPersisted());
+  }
+
+  reset(): Promise<AppState> {
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {}
+    return Promise.resolve(createSeed());
+  }
+
+  persist(state: AppState): void {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      this.lastPersistOk = true;
+    } catch {
+      if (this.lastPersistOk) {
+        toast.error("Couldn't save — local storage is full", {
+          description: "Your last change only exists for this tab. Try removing a large attachment.",
+        });
+      }
+      this.lastPersistOk = false;
+    }
+  }
+
+  // Everything below is a no-op that resolves immediately: the workspace is
+  // written whole by `persist` above. A method that ignores its arguments
+  // declares none — TypeScript still matches it against the `Backend`
+  // signature, and `lib/backend/types.ts` remains the single place the
+  // contract's parameters are named and documented. `SupabaseBackend` is
+  // where they start doing work.
+
+  switchUser(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  setUserRole(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  createRole(role: RoleDef): Promise<RoleDef> {
+    return Promise.resolve(role);
+  }
+
+  updateRole(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  setRolePermission(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteRole(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  sendMessage(message: Message): Promise<Message> {
+    return Promise.resolve(message);
+  }
+
+  sendToUser(dm: DM): Promise<DM> {
+    return Promise.resolve(dm);
+  }
+
+  editMessage(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteMessage(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  toggleReaction(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  markChannelRead(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  createChannel(channel: Channel): Promise<Channel> {
+    return Promise.resolve(channel);
+  }
+
+  deleteChannel(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  setChannelAccess(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  openDm(dm: DM): Promise<DM> {
+    return Promise.resolve(dm);
+  }
+
+  createProject(project: Project): Promise<Project> {
+    return Promise.resolve(project);
+  }
+
+  updateProject(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteProject(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  setProjectAccess(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  createTask(task: Task): Promise<Task> {
+    return Promise.resolve(task);
+  }
+
+  updateTask(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  moveTask(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteTask(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  putAttachment(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteAttachment(): Promise<void> {
+    return Promise.resolve();
+  }
+}

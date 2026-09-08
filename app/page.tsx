@@ -226,12 +226,14 @@ export default function HomePage() {
                             <button
                               className="text-muted-foreground/50 transition-colors hover:text-emerald-500"
                               aria-label={`Mark "${task.title}" complete`}
-                              onClick={() => {
+                              onClick={async () => {
                                 // `task.edit` gates this button, but the store
                                 // also refuses viewer-only members of a
                                 // restricted project — don't celebrate a write
                                 // that was turned down.
-                                if (!updateTask(task.id, { status: "done" })) return;
+                                if (!(await updateTask(task.id, { status: "done" }))) {
+                                  return;
+                                }
                                 toast.success("Nice — task completed!", {
                                   description: task.title,
                                 });

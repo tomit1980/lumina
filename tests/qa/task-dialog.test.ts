@@ -17,7 +17,7 @@
 // second actor *while the dialog is already open* — exactly the situation
 // task-dialog.tsx cannot see until the user actually presses Save.
 import * as React from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 
@@ -181,7 +181,13 @@ describe("TaskDialog — prunes an ineligible collaborator on open (fix-b001)", 
     fireEvent.change(titleInput, { target: { value: "Fixed now" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    expect(toastMock.success).toHaveBeenCalledWith("Task updated");
+    // The save is a promise now (the store awaits the backend before
+    // resolving), so the success toast lands a tick after the click. It is
+    // still asserted to be the *only* outcome — a refused save toasts an
+    // error and never a success, which is what this test pins.
+    await waitFor(() =>
+      expect(toastMock.success).toHaveBeenCalledWith("Task updated")
+    );
     expect(toastMock.error).not.toHaveBeenCalled();
     const saved = storeRef.current!.state.tasks.find((t) => t.id === "t_trap")!;
     expect(saved.title).toBe("Fixed now");

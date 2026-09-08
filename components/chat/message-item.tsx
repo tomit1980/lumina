@@ -71,7 +71,7 @@ export function MessageItem({
   const saveEdit = () => {
     const content = draft.trim();
     if (!content) return;
-    editMessage(message.id, content);
+    void editMessage(message.id, content);
     setEditing(false);
   };
 
@@ -174,7 +174,7 @@ export function MessageItem({
                 <Tooltip key={reaction.emoji}>
                   <TooltipTrigger asChild>
                     <button
-                      onClick={() => toggleReaction(message.id, reaction.emoji)}
+                      onClick={() => void toggleReaction(message.id, reaction.emoji)}
                       className={cn(
                         "flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] transition-colors",
                         mine
@@ -190,7 +190,7 @@ export function MessageItem({
                 </Tooltip>
               );
             })}
-            <EmojiPicker onPick={(emoji) => toggleReaction(message.id, emoji)}>
+            <EmojiPicker onPick={(emoji) => void toggleReaction(message.id, emoji)}>
               <button
                 aria-label="Add reaction"
                 className="flex h-6 items-center rounded-full border border-dashed px-1.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:border-foreground/25 hover:text-foreground"
@@ -205,7 +205,7 @@ export function MessageItem({
       {/* Hover toolbar */}
       {!editing && (
         <div className="absolute -top-3 right-4 hidden items-center rounded-lg border bg-background shadow-sm group-hover:flex">
-          <EmojiPicker onPick={(emoji) => toggleReaction(message.id, emoji)}>
+          <EmojiPicker onPick={(emoji) => void toggleReaction(message.id, emoji)}>
             <Button variant="ghost" size="icon" className="size-7 rounded-lg" aria-label="Add reaction">
               <SmilePlus className="size-3.5" />
             </Button>
@@ -231,7 +231,7 @@ export function MessageItem({
               className="size-7 rounded-lg text-destructive hover:text-destructive"
               aria-label="Delete message"
               onClick={() => {
-                deleteMessage(message.id);
+                void deleteMessage(message.id);
                 toast("Message deleted");
               }}
             >

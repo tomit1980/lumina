@@ -3,8 +3,16 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-import { DEFAULT_ROLES, PERMISSION_META, resourceMemberLevel, roleHas } from "./permissions";
-import { createSeed, SEED_VERSION } from "./seed";
+import { createBackend } from "./backend";
+import type {
+  Backend,
+  ChannelAccessPatch,
+  ProjectAccessPatch,
+  ProjectPatch,
+  RolePatch,
+  TaskPatch,
+} from "./backend/types";
+import { PERMISSION_META, resourceMemberLevel, roleHas } from "./permissions";
 import type {
   AccessLevel,
   Activity,
@@ -25,7 +33,6 @@ import type {
   User,
 } from "./types";
 
-const STORAGE_KEY = "lumina:v1";
 const MAX_ACTIVITIES = 60;
 
 export function uid(prefix: string): string {
@@ -86,51 +93,65 @@ interface StoreValue {
   canSeeProject: (project: Project, user?: User) => boolean;
   projectAccessLevel: (project: Project, user?: User) => AccessLevel;
 
-  switchUser: (userId: string) => void;
-  /** These return false when the action was denied by a guard, so callers
-   *  only announce success when something actually changed. */
-  setUserRole: (userId: string, roleId: string) => boolean;
-  createRole: (input: RoleInput) => RoleDef | null;
-  updateRole: (roleId: string, patch: Partial<RoleInput>) => boolean;
+  // ---------------------------------------------------------------------
+  // Write actions. Every one of them is optimistic: the patch is applied to
+  // `AppState` synchronously, the returned promise settles once the backend
+  // has accepted (or refused) the write.
+  //
+  // A guard refusal and a backend failure both resolve with the same falsy
+  // value — `false` / `null` / `undefined` — so a caller that announces
+  // success only when the result is truthy cannot claim a write that did not
+  // happen. The store toasts the reason itself in both cases; nothing here
+  // ever rejects, so fire-and-forget call sites (chat send, reactions, drag
+  // & drop) stay safe and instant.
+  // ---------------------------------------------------------------------
+  switchUser: (userId: string) => Promise<void>;
+  setUserRole: (userId: string, roleId: string) => Promise<boolean>;
+  createRole: (input: RoleInput) => Promise<RoleDef | null>;
+  updateRole: (roleId: string, patch: RolePatch) => Promise<boolean>;
   setRolePermission: (
     roleId: string,
     permission: Permission,
     enabled: boolean
-  ) => boolean;
-  deleteRole: (roleId: string) => boolean;
-  resetDemo: () => void;
+  ) => Promise<boolean>;
+  deleteRole: (roleId: string) => Promise<boolean>;
+  resetDemo: () => Promise<void>;
 
   /** Post to a channel or DM. Empty content is allowed when files are attached.
-   *  Returns false when denied. */
+   *  Resolves false when denied or when the write failed. */
   sendMessage: (
     conversationId: string,
     content: string,
     attachments?: MessageAttachment[]
-  ) => boolean;
+  ) => Promise<boolean>;
   /** Find-or-create the DM with `otherUserId` and post into it atomically
    *  (safe to call right after picking a person, unlike openDm + sendMessage). */
   sendToUser: (
     otherUserId: string,
     content: string,
     attachments?: MessageAttachment[]
-  ) => DM | null;
-  editMessage: (messageId: string, content: string) => void;
-  deleteMessage: (messageId: string) => void;
-  toggleReaction: (messageId: string, emoji: string) => void;
-  markChannelRead: (conversationId: string) => void;
+  ) => Promise<DM | null>;
+  editMessage: (messageId: string, content: string) => Promise<void>;
+  deleteMessage: (messageId: string) => Promise<void>;
+  toggleReaction: (messageId: string, emoji: string) => Promise<void>;
+  markChannelRead: (conversationId: string) => Promise<void>;
   createChannel: (input: {
     name: string;
     description: string;
     isPrivate: boolean;
-  }) => Channel | null;
-  deleteChannel: (channelId: string) => void;
+  }) => Promise<Channel | null>;
+  deleteChannel: (channelId: string) => Promise<void>;
   /** Sets privacy + the per-member access list in one go. The channel's
    *  creator is always kept as an editor so they can't lock themselves out. */
   setChannelAccess: (
     channelId: string,
-    patch: { isPrivate: boolean; members: ResourceMember[] }
-  ) => boolean;
-  openDm: (otherUserId: string) => DM;
+    patch: ChannelAccessPatch
+  ) => Promise<boolean>;
+  /** Find-or-create the DM with `otherUserId`. Resolves null when the store
+   *  isn't hydrated yet or the thread couldn't be created — callers navigate
+   *  to the returned thread, so they must not be handed one that doesn't
+   *  exist. */
+  openDm: (otherUserId: string) => Promise<DM | null>;
 
   createProject: (input: {
     name: string;
@@ -138,33 +159,26 @@ interface StoreValue {
     emoji: string;
     color: string;
     priority: Priority;
-  }) => Project | null;
-  updateProject: (
-    projectId: string,
-    patch: Partial<
-      Pick<
-        Project,
-        "name" | "description" | "emoji" | "color" | "priority" | "attachments"
-      >
-    >
-  ) => boolean;
-  deleteProject: (projectId: string) => void;
+  }) => Promise<Project | null>;
+  updateProject: (projectId: string, patch: ProjectPatch) => Promise<boolean>;
+  deleteProject: (projectId: string) => Promise<void>;
   /** Sets restriction + the per-member access list in one go. The project's
    *  creator is always kept as an editor so they can't lock themselves out. */
   setProjectAccess: (
     projectId: string,
-    patch: { restricted: boolean; members: ResourceMember[] }
-  ) => boolean;
+    patch: ProjectAccessPatch
+  ) => Promise<boolean>;
 
-  createTask: (input: TaskInput) => Task | null;
-  /** Returns false when denied (no permission, view-only project, or a
+  createTask: (input: TaskInput) => Promise<Task | null>;
+  /** Resolves false when denied (no permission, view-only project, or a
    *  collaborator in the resulting list can't see the project). */
-  updateTask: (
+  updateTask: (taskId: string, patch: TaskPatch) => Promise<boolean>;
+  moveTask: (
     taskId: string,
-    patch: Partial<Omit<Task, "id" | "projectId">>
-  ) => boolean;
-  moveTask: (taskId: string, toStatus: TaskStatus, toIndex: number) => void;
-  deleteTask: (taskId: string) => boolean;
+    toStatus: TaskStatus,
+    toIndex: number
+  ) => Promise<void>;
+  deleteTask: (taskId: string) => Promise<boolean>;
 }
 
 const StoreContext = React.createContext<StoreValue | null>(null);
@@ -359,158 +373,62 @@ export function getUnreadCount(
   return count;
 }
 
-/** Legacy (pre-v4) persisted shapes we migrate from. */
-interface LegacyState
-  extends Omit<
-    AppState,
-    "roles" | "users" | "projects" | "tasks" | "channels" | "messages"
-  > {
-  messages: Array<Omit<Message, "attachments"> & { attachments?: MessageAttachment[] }>;
-  users: Array<Omit<User, "roleId"> & { roleId?: string; role?: string }>;
-  roles?: RoleDef[];
-  rolePermissions?: Record<string, Permission[]>;
-  projects: Array<
-    Omit<Project, "priority" | "restricted" | "members" | "attachments"> & {
-      priority?: Priority;
-      restricted?: boolean;
-      members?: ResourceMember[];
-      attachments?: Attachment[];
-    }
-  >;
-  tasks: Array<
-    Omit<
-      Task,
-      | "priority"
-      | "attachments"
-      | "startTime"
-      | "durationMinutes"
-      | "reminderMinutes"
-      | "collaboratorIds"
-    > & {
-      priority: Priority | "urgent";
-      attachments?: Attachment[];
-      startTime?: string | null;
-      durationMinutes?: number | null;
-      reminderMinutes?: number | null;
-      collaboratorIds?: string[];
-    }
-  >;
-  channels: Array<
-    Omit<Channel, "members"> & { members?: ResourceMember[]; memberIds?: string[] }
-  >;
-}
 
-function migrate(parsed: LegacyState, parsedVersion: number): AppState {
-  const roles: RoleDef[] =
-    parsed.roles ??
-    DEFAULT_ROLES.map((r) => ({
-      ...r,
-      permissions: r.locked
-        ? [...r.permissions]
-        : [...(parsed.rolePermissions?.[r.id] ?? r.permissions)],
-    }));
-  return {
-    version: SEED_VERSION,
-    currentUserId: parsed.currentUserId,
-    users: parsed.users.map((u) => {
-      const { role, ...rest } = u;
-      return { ...rest, roleId: u.roleId ?? role ?? "member" };
-    }),
-    channels: parsed.channels.map((c) => ({
-      id: c.id,
-      name: c.name,
-      description: c.description,
-      isPrivate: c.isPrivate,
-      // Backfill the team flag for workspaces created before it existed.
-      // Only for genuinely legacy data — the current schema always sets
-      // isTeam explicitly, so re-running this on every load (regardless of
-      // version) would wrongly re-flag a brand-new channel just named
-      // "general" as the undeletable team channel.
-      isTeam: c.isTeam ?? (parsedVersion < SEED_VERSION && c.name === "general" ? true : undefined),
-      // Flat memberIds → per-member access, defaulting existing members to editor.
-      members:
-        c.members ?? (c.memberIds ?? []).map((userId) => ({ userId, level: "editor" as const })),
-      createdBy: c.createdBy,
-      createdAt: c.createdAt,
-    })),
-    dms: parsed.dms ?? [],
-    // Message attachments are new — older messages have none.
-    messages: parsed.messages.map((m) => ({ ...m, attachments: m.attachments ?? [] })),
-    // Priority dropped the "urgent" tier — fold it into "high".
-    // Project access-control is new — default fully open (unchanged behavior).
-    projects: parsed.projects.map((p) => ({
-      ...p,
-      priority: p.priority ?? "medium",
-      restricted: p.restricted ?? false,
-      members: p.members ?? [],
-      attachments: p.attachments ?? [],
-    })),
-    tasks: parsed.tasks.map((t) => ({
-      ...t,
-      priority: t.priority === "urgent" ? "high" : t.priority,
-      attachments: t.attachments ?? [],
-      // Scheduling is new — older tasks are unscheduled (date-only at most).
-      startTime: t.startTime ?? null,
-      durationMinutes: t.durationMinutes ?? null,
-      reminderMinutes: t.reminderMinutes ?? null,
-      // Collaborators are new — older tasks have none.
-      collaboratorIds: t.collaboratorIds ?? [],
-    })),
-    activities: parsed.activities ?? [],
-    roles,
-    lastRead: parsed.lastRead ?? {},
-  };
-}
-
-export function StoreProvider({ children }: { children: React.ReactNode }) {
+export function StoreProvider({
+  children,
+  backend: injectedBackend,
+}: React.PropsWithChildren<{
+  /** Test seam: swap in a `Backend` double (see `FailingBackend` in
+   *  tests/qa/_support.ts). Production always takes the flag's backend. */
+  backend?: Backend;
+}>) {
+  const backend = React.useMemo(
+    () => injectedBackend ?? createBackend(),
+    [injectedBackend]
+  );
   const [state, setState] = React.useState<AppState | null>(null);
 
-  React.useEffect(() => {
-    let next: AppState | null = null;
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as LegacyState;
-        if (
-          typeof parsed?.version === "number" &&
-          parsed.version >= 1 &&
-          parsed.version <= SEED_VERSION
-        ) {
-          next = migrate(parsed, parsed.version);
-        }
-      }
-    } catch {
-      // Corrupt storage → fall through to a fresh seed.
-    }
-    setState(next ?? createSeed());
+  // `stateRef` — not `state` — is the synchronous source of truth actions
+  // read and patch from. React defers the re-render that would refresh a
+  // render-time ref assignment, so two writes dispatched in the same tick
+  // would otherwise both see (and both patch) the pre-first-write state.
+  // Every path that changes the workspace goes through `adopt`.
+  const stateRef = React.useRef<AppState | null>(null);
+
+  const adopt = React.useCallback((next: AppState) => {
+    stateRef.current = next;
+    setState(next);
   }, []);
 
-  // Edge-triggered: only warn on the transition into failure, so a large
-  // attachment doesn't re-toast on every unrelated state change afterward.
-  const lastPersistOk = React.useRef(true);
+  // Hydration: the loading screen below shows until this resolves.
+  React.useEffect(() => {
+    let cancelled = false;
+    void backend.hydrate().then((next) => {
+      if (!cancelled) adopt(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, adopt]);
+
   React.useEffect(() => {
     if (!state) return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      lastPersistOk.current = true;
-    } catch {
-      if (lastPersistOk.current) {
-        toast.error("Couldn't save — local storage is full", {
-          description: "Your last change only exists for this tab. Try removing a large attachment.",
-        });
-      }
-      lastPersistOk.current = false;
-    }
-  }, [state]);
+    backend.persist(state);
+  }, [state, backend]);
 
-  const update = React.useCallback((fn: (s: AppState) => AppState) => {
-    setState((s) => (s ? fn(s) : s));
-  }, []);
+  const update = React.useCallback(
+    (fn: (s: AppState) => AppState) => {
+      const base = stateRef.current;
+      if (!base) return;
+      adopt(fn(base));
+    },
+    [adopt]
+  );
 
-  // Lets actions read the latest state synchronously without invalidating
-  // the memoized actions object.
-  const stateRef = React.useRef(state);
-  stateRef.current = state;
+  /** Monotonic count of optimistic patches applied. A failing write compares
+   *  the value it took against this to find out whether anything landed on
+   *  top of it — see `commit` below. */
+  const writeSeq = React.useRef(0);
 
   const actions = React.useMemo(() => {
     /** Action-layer enforcement: every mutation is denied — with feedback —
@@ -530,42 +448,119 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const deny = (why: string) => toast.error("Not allowed", { description: why });
 
-    const switchUser = (userId: string) =>
-      update((s) => ({ ...s, currentUserId: userId }));
+    /**
+     * The one implementation of the plan's write sequence. Every write action
+     * ends in a call to this — the optimistic/rollback logic exists here and
+     * nowhere else, so Tasks 5–8 change backends without re-rolling it.
+     *
+     * Steps 1 and 2 (the synchronous `guard()` fast path, and computing the
+     * patch) belong to the action, because only the action knows what it is
+     * allowed to do and what the resulting rows look like. A refused action
+     * returns `Promise.resolve(<falsy>)` without ever getting here. Steps 2–4
+     * are below:
+     *
+     * 2. apply `patch` to `AppState`, snapshotting what it replaced;
+     * 3. `await op()`;
+     * 4. resolve with `outcome.ok(result)`, or roll back, toast, and resolve
+     *    with `outcome.failed` — the same falsy value a guard refusal gives,
+     *    so callers need only one check to stay honest.
+     *
+     * Rollback rule: if no later optimistic write landed while `op` was in
+     * flight (`writeSeq` still holds this write's number), the snapshot is
+     * restored exactly. If one did, restoring would silently discard it — so
+     * the whole `AppState` is re-hydrated from the backend instead of
+     * guessing at an inverse patch.
+     */
+    function commit<R, T>(
+      patch: (s: AppState) => AppState,
+      op: () => Promise<R>,
+      outcome: {
+        /** Success value, from whatever the backend returned — the seam a
+         *  real backend hands server-assigned ids and positions back through. */
+        ok: (result: R) => T;
+        /** Failure value. Must match what this action's guards return. */
+        failed: T;
+        /** Verb phrase for the failure toast: "We couldn't ${describe}." */
+        describe: string;
+      }
+    ): Promise<T> {
+      const snapshot = stateRef.current;
+      if (!snapshot) return Promise.resolve(outcome.failed);
+      update(patch);
+      const seq = (writeSeq.current += 1);
+      return op().then(
+        (result) => outcome.ok(result),
+        () => {
+          toast.error("Couldn't save", {
+            description: `We couldn't ${outcome.describe}. Your change has been undone.`,
+          });
+          if (writeSeq.current === seq) {
+            adopt(snapshot);
+            return outcome.failed;
+          }
+          return backend.hydrate().then(
+            (fresh) => {
+              adopt(fresh);
+              return outcome.failed;
+            },
+            () => {
+              toast.error("Out of sync", {
+                description: "Reload the page to see the current workspace.",
+              });
+              return outcome.failed;
+            }
+          );
+        }
+      );
+    }
 
-    const setUserRole = (userId: string, roleId: string): boolean => {
+    const switchUser: StoreValue["switchUser"] = (userId) =>
+      commit(
+        (s) => ({ ...s, currentUserId: userId }),
+        () => backend.switchUser(userId),
+        { ok: () => undefined, failed: undefined, describe: "switch user" }
+      );
+
+    const setUserRole: StoreValue["setUserRole"] = (userId, roleId) => {
       const s = stateRef.current;
-      if (!s || !guard("members.manage")) return false;
+      if (!s || !guard("members.manage")) return Promise.resolve(false);
       if (userId === s.currentUserId) {
         deny("You can't change your own role.");
-        return false;
+        return Promise.resolve(false);
       }
       const target = s.users.find((u) => u.id === userId);
       const role = findRole(s, roleId);
-      if (!target || !role || target.roleId === roleId) return false;
+      if (!target || !role || target.roleId === roleId) return Promise.resolve(false);
       const targetRole = findRole(s, target.roleId);
       if (targetRole?.locked) {
         const admins = s.users.filter((u) => findRole(s, u.roleId)?.locked);
         if (admins.length <= 1) {
           deny("A workspace needs at least one admin.");
-          return false;
+          return Promise.resolve(false);
         }
       }
-      update((st) => ({
-        ...st,
-        users: st.users.map((u) => (u.id === userId ? { ...u, roleId } : u)),
-        activities: activity(st, "member", `made ${target.name} a ${role.name}`),
-      }));
-      return true;
+      return commit(
+        (st) => ({
+          ...st,
+          users: st.users.map((u) => (u.id === userId ? { ...u, roleId } : u)),
+          activities: activity(st, "member", `made ${target.name} a ${role.name}`),
+        }),
+        () => backend.setUserRole(userId, roleId),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `make ${target.name} a ${role.name}`,
+        }
+      );
     };
 
     const createRole: StoreValue["createRole"] = (input) => {
       const s = stateRef.current;
-      if (!s || !guard("members.manage")) return null;
+      if (!s || !guard("members.manage")) return Promise.resolve(null);
       const name = input.name.trim();
       if (s.roles.some((r) => r.name.toLowerCase() === name.toLowerCase())) {
         deny(`A role called “${name}” already exists.`);
-        return null;
+        return Promise.resolve(null);
       }
       const role: RoleDef = {
         id: uid("r"),
@@ -574,22 +569,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         color: input.color,
         permissions: [...input.permissions],
       };
-      update((st) => ({
-        ...st,
-        roles: [...st.roles, role],
-        activities: activity(st, "member", `created the ${name} role`),
-      }));
-      return role;
+      return commit(
+        (st) => ({
+          ...st,
+          roles: [...st.roles, role],
+          activities: activity(st, "member", `created the ${name} role`),
+        }),
+        () => backend.createRole(role),
+        {
+          ok: (created) => created,
+          failed: null,
+          describe: `create the ${name} role`,
+        }
+      );
     };
 
     const updateRole: StoreValue["updateRole"] = (roleId, patch) => {
       const s = stateRef.current;
-      if (!s || !guard("members.manage")) return false;
+      if (!s || !guard("members.manage")) return Promise.resolve(false);
       const role = findRole(s, roleId);
-      if (!role) return false;
+      if (!role) return Promise.resolve(false);
       if (role.locked) {
         deny("The admin role is locked.");
-        return false;
+        return Promise.resolve(false);
       }
       const nextName = patch.name?.trim();
       if (
@@ -599,23 +601,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         )
       ) {
         deny(`A role called “${nextName}” already exists.`);
-        return false;
+        return Promise.resolve(false);
       }
-      update((st) => ({
-        ...st,
-        roles: st.roles.map((r) =>
-          r.id === roleId
-            ? {
-                ...r,
-                name: nextName ?? r.name,
-                description: patch.description ?? r.description,
-                color: patch.color ?? r.color,
-                permissions: patch.permissions ?? r.permissions,
-              }
-            : r
-        ),
-      }));
-      return true;
+      return commit(
+        (st) => ({
+          ...st,
+          roles: st.roles.map((r) =>
+            r.id === roleId
+              ? {
+                  ...r,
+                  name: nextName ?? r.name,
+                  description: patch.description ?? r.description,
+                  color: patch.color ?? r.color,
+                  permissions: patch.permissions ?? r.permissions,
+                }
+              : r
+          ),
+        }),
+        () => backend.updateRole(roleId, patch),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `update the ${role.name} role`,
+        }
+      );
     };
 
     const setRolePermission: StoreValue["setRolePermission"] = (
@@ -624,62 +633,74 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       enabled
     ) => {
       const s = stateRef.current;
-      if (!s || !guard("members.manage")) return false;
+      if (!s || !guard("members.manage")) return Promise.resolve(false);
       const role = findRole(s, roleId);
-      if (!role) return false;
+      if (!role) return Promise.resolve(false);
       if (role.locked) {
         deny("The admin role is locked at full access.");
-        return false;
+        return Promise.resolve(false);
       }
-      if (enabled === role.permissions.includes(permission)) return false;
-      update((st) => ({
-        ...st,
-        roles: st.roles.map((r) =>
-          r.id === roleId
-            ? {
-                ...r,
-                permissions: enabled
-                  ? [...r.permissions, permission]
-                  : r.permissions.filter((p) => p !== permission),
-              }
-            : r
-        ),
-        activities: activity(
-          st,
-          "member",
-          `${enabled ? "granted" : "revoked"} “${PERMISSION_META[permission].label}” ${enabled ? "to" : "for"} ${role.name}s`
-        ),
-      }));
-      return true;
+      if (enabled === role.permissions.includes(permission)) return Promise.resolve(false);
+      return commit(
+        (st) => ({
+          ...st,
+          roles: st.roles.map((r) =>
+            r.id === roleId
+              ? {
+                  ...r,
+                  permissions: enabled
+                    ? [...r.permissions, permission]
+                    : r.permissions.filter((p) => p !== permission),
+                }
+              : r
+          ),
+          activities: activity(
+            st,
+            "member",
+            `${enabled ? "granted" : "revoked"} “${PERMISSION_META[permission].label}” ${enabled ? "to" : "for"} ${role.name}s`
+          ),
+        }),
+        () => backend.setRolePermission(roleId, permission, enabled),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `change what ${role.name}s can do`,
+        }
+      );
     };
 
-    const deleteRole = (roleId: string): boolean => {
+    const deleteRole: StoreValue["deleteRole"] = (roleId) => {
       const s = stateRef.current;
-      if (!s || !guard("members.manage")) return false;
+      if (!s || !guard("members.manage")) return Promise.resolve(false);
       const role = findRole(s, roleId);
-      if (!role) return false;
+      if (!role) return Promise.resolve(false);
       if (role.isSystem || role.locked) {
         deny(`${role.name} is a built-in role and can't be deleted.`);
-        return false;
+        return Promise.resolve(false);
       }
       if (s.users.some((u) => u.roleId === roleId)) {
         deny("Reassign its members to another role first.");
-        return false;
+        return Promise.resolve(false);
       }
-      update((st) => ({
-        ...st,
-        roles: st.roles.filter((r) => r.id !== roleId),
-        activities: activity(st, "member", `deleted the ${role.name} role`),
-      }));
-      return true;
+      return commit(
+        (st) => ({
+          ...st,
+          roles: st.roles.filter((r) => r.id !== roleId),
+          activities: activity(st, "member", `deleted the ${role.name} role`),
+        }),
+        () => backend.deleteRole(roleId),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `delete the ${role.name} role`,
+        }
+      );
     };
 
-    const resetDemo = () => {
-      try {
-        window.localStorage.removeItem(STORAGE_KEY);
-      } catch {}
-      setState(createSeed());
-    };
+    const resetDemo: StoreValue["resetDemo"] = () =>
+      backend.reset().then((fresh) => {
+        adopt(fresh);
+      });
 
     /** Builds the activity line for a message that carries files. */
     const shareNote = (
@@ -695,29 +716,34 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return `shared “${attachments[0].name}”${extra} ${where}`.trim();
     };
 
-    const appendMessage = (
-      st: AppState,
+    /** The message row, built before the patch so the optimistic copy and the
+     *  one handed to the backend are the same object — a real backend must
+     *  not be sent a second `Date.now()` or a second `uid()`. */
+    const buildMessage = (
+      s: AppState,
       conversationId: string,
       content: string,
-      attachments: MessageAttachment[],
+      attachments: MessageAttachment[]
+    ): Message => ({
+      id: uid("m"),
+      channelId: conversationId,
+      authorId: s.currentUserId,
+      content,
+      createdAt: Date.now(),
+      reactions: [],
+      attachments,
+    });
+
+    const appendMessage = (
+      st: AppState,
+      message: Message,
       note: string | null
     ): AppState => ({
       ...st,
-      messages: [
-        ...st.messages,
-        {
-          id: uid("m"),
-          channelId: conversationId,
-          authorId: st.currentUserId,
-          content,
-          createdAt: Date.now(),
-          reactions: [],
-          attachments,
-        },
-      ],
+      messages: [...st.messages, message],
       lastRead: {
         ...st.lastRead,
-        [`${st.currentUserId}:${conversationId}`]: Date.now(),
+        [`${st.currentUserId}:${message.channelId}`]: message.createdAt,
       },
       activities: note ? activity(st, "message", note) : st.activities,
     });
@@ -728,26 +754,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       attachments = []
     ) => {
       const s = stateRef.current;
-      if (!s) return false;
-      if (!content.trim() && attachments.length === 0) return false;
+      if (!s) return Promise.resolve(false);
+      if (!content.trim() && attachments.length === 0) return Promise.resolve(false);
       // DMs are open to everyone (but only their two participants); posting
       // in channels is gated by a permission.
       const channel = s.channels.find((c) => c.id === conversationId);
       let otherUserId: string | undefined;
       if (channel) {
-        if (!guard("message.send")) return false;
+        if (!guard("message.send")) return Promise.resolve(false);
         if (channelIsViewerOnly(s, channel)) {
           deny("You have view-only access to this channel.");
-          return false;
+          return Promise.resolve(false);
         }
       } else {
         const dm = s.dms.find((d) => d.id === conversationId);
-        if (!dm || !dm.memberIds.includes(s.currentUserId)) return false;
+        if (!dm || !dm.memberIds.includes(s.currentUserId)) return Promise.resolve(false);
         otherUserId = dm.memberIds.find((id) => id !== s.currentUserId);
       }
       const note = shareNote(s, attachments, channel, otherUserId);
-      update((st) => appendMessage(st, conversationId, content, attachments, note));
-      return true;
+      const message = buildMessage(s, conversationId, content, attachments);
+      return commit(
+        (st) => appendMessage(st, message, note),
+        () => backend.sendMessage(message),
+        { ok: () => true, failed: false, describe: "send your message" }
+      );
     };
 
     const sendToUser: StoreValue["sendToUser"] = (
@@ -756,10 +786,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       attachments = []
     ) => {
       const s = stateRef.current;
-      if (!s) return null;
-      if (!content.trim() && attachments.length === 0) return null;
+      if (!s) return Promise.resolve(null);
+      if (!content.trim() && attachments.length === 0) return Promise.resolve(null);
       if (otherUserId === s.currentUserId || !s.users.some((u) => u.id === otherUserId)) {
-        return null;
+        return Promise.resolve(null);
       }
       const me = s.currentUserId;
       const existing = s.dms.find(
@@ -771,90 +801,115 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         createdAt: Date.now(),
       };
       const note = shareNote(s, attachments, undefined, otherUserId);
-      update((st) =>
-        appendMessage(
-          existing ? st : { ...st, dms: [...st.dms, dm] },
-          dm.id,
-          content,
-          attachments,
-          note
-        )
+      const message = buildMessage(s, dm.id, content, attachments);
+      return commit(
+        (st) =>
+          appendMessage(existing ? st : { ...st, dms: [...st.dms, dm] }, message, note),
+        // One operation: creating the thread and posting the first message
+        // must succeed or fail together.
+        () => backend.sendToUser(dm, !existing, message),
+        { ok: (row) => row, failed: null, describe: "send your message" }
       );
-      return dm;
     };
 
-    const editMessage = (messageId: string, content: string) => {
+    const editMessage: StoreValue["editMessage"] = (messageId, content) => {
       const s = stateRef.current;
-      if (!s) return;
+      if (!s) return Promise.resolve();
       const message = s.messages.find((m) => m.id === messageId);
       if (!message || message.authorId !== s.currentUserId) {
         deny("You can only edit your own messages.");
-        return;
+        return Promise.resolve();
       }
-      update((st) => ({
-        ...st,
-        messages: st.messages.map((m) =>
-          m.id === messageId ? { ...m, content, editedAt: Date.now() } : m
-        ),
-      }));
+      const editedAt = Date.now();
+      return commit(
+        (st) => ({
+          ...st,
+          messages: st.messages.map((m) =>
+            m.id === messageId ? { ...m, content, editedAt } : m
+          ),
+        }),
+        () => backend.editMessage(messageId, content, editedAt),
+        { ok: () => undefined, failed: undefined, describe: "edit that message" }
+      );
     };
 
-    const deleteMessage = (messageId: string) => {
+    const deleteMessage: StoreValue["deleteMessage"] = (messageId) => {
       const s = stateRef.current;
-      if (!s) return;
+      if (!s) return Promise.resolve();
       const message = s.messages.find((m) => m.id === messageId);
-      if (!message) return;
-      if (message.authorId !== s.currentUserId && !guard("message.deleteAny")) return;
-      update((st) => ({
-        ...st,
-        messages: st.messages.filter((m) => m.id !== messageId),
-      }));
+      if (!message) return Promise.resolve();
+      if (message.authorId !== s.currentUserId && !guard("message.deleteAny")) {
+        return Promise.resolve();
+      }
+      return commit(
+        (st) => ({
+          ...st,
+          messages: st.messages.filter((m) => m.id !== messageId),
+        }),
+        () => backend.deleteMessage(messageId),
+        { ok: () => undefined, failed: undefined, describe: "delete that message" }
+      );
     };
 
-    const toggleReaction = (messageId: string, emoji: string) => {
+    const toggleReaction: StoreValue["toggleReaction"] = (messageId, emoji) => {
       const s0 = stateRef.current;
       const message0 = s0?.messages.find((m) => m.id === messageId);
-      if (!s0 || !message0 || !canSeeConversation(s0, message0.channelId)) return;
-      update((s) => ({
-        ...s,
-        messages: s.messages.map((m) => {
-          if (m.id !== messageId) return m;
-          const existing = m.reactions.find((r) => r.emoji === emoji);
-          let reactions;
-          if (!existing) {
-            reactions = [...m.reactions, { emoji, userIds: [s.currentUserId] }];
-          } else if (existing.userIds.includes(s.currentUserId)) {
-            reactions = m.reactions
-              .map((r) =>
-                r.emoji === emoji
-                  ? { ...r, userIds: r.userIds.filter((u) => u !== s.currentUserId) }
-                  : r
-              )
-              .filter((r) => r.userIds.length > 0);
-          } else {
-            reactions = m.reactions.map((r) =>
-              r.emoji === emoji ? { ...r, userIds: [...r.userIds, s.currentUserId] } : r
-            );
-          }
-          return { ...m, reactions };
+      if (!s0 || !message0 || !canSeeConversation(s0, message0.channelId)) {
+        return Promise.resolve();
+      }
+      return commit(
+        (s) => ({
+          ...s,
+          messages: s.messages.map((m) => {
+            if (m.id !== messageId) return m;
+            const existing = m.reactions.find((r) => r.emoji === emoji);
+            let reactions;
+            if (!existing) {
+              reactions = [...m.reactions, { emoji, userIds: [s.currentUserId] }];
+            } else if (existing.userIds.includes(s.currentUserId)) {
+              reactions = m.reactions
+                .map((r) =>
+                  r.emoji === emoji
+                    ? { ...r, userIds: r.userIds.filter((u) => u !== s.currentUserId) }
+                    : r
+                )
+                .filter((r) => r.userIds.length > 0);
+            } else {
+              reactions = m.reactions.map((r) =>
+                r.emoji === emoji ? { ...r, userIds: [...r.userIds, s.currentUserId] } : r
+              );
+            }
+            return { ...m, reactions };
+          }),
         }),
-      }));
+        () => backend.toggleReaction(messageId, emoji),
+        { ok: () => undefined, failed: undefined, describe: "add that reaction" }
+      );
     };
 
-    const markChannelRead = (conversationId: string) =>
-      update((s) => {
-        const key = `${s.currentUserId}:${conversationId}`;
-        const latest = s.messages.reduce(
-          (acc, m) =>
-            m.channelId === conversationId ? Math.max(acc, m.createdAt) : acc,
-          0
-        );
-        if ((s.lastRead[key] ?? 0) >= latest) return s;
-        return { ...s, lastRead: { ...s.lastRead, [key]: Date.now() } };
-      });
+    const markChannelRead: StoreValue["markChannelRead"] = (conversationId) => {
+      const s = stateRef.current;
+      if (!s) return Promise.resolve();
+      const key = `${s.currentUserId}:${conversationId}`;
+      const latest = s.messages.reduce(
+        (acc, m) => (m.channelId === conversationId ? Math.max(acc, m.createdAt) : acc),
+        0
+      );
+      // Nothing new to mark — don't burn a write on it. (Was the `return s`
+      // short-circuit inside the old updater.)
+      if ((s.lastRead[key] ?? 0) >= latest) return Promise.resolve();
+      const readAt = Date.now();
+      return commit(
+        (st) => ({ ...st, lastRead: { ...st.lastRead, [key]: readAt } }),
+        () => backend.markChannelRead(conversationId, readAt),
+        { ok: () => undefined, failed: undefined, describe: "mark this conversation read" }
+      );
+    };
 
     const createChannel: StoreValue["createChannel"] = (input) => {
-      if (!guard("channel.create")) return null;
+      if (!guard("channel.create")) return Promise.resolve(null);
+      const s = stateRef.current;
+      if (!s) return Promise.resolve(null);
       const channel: Channel = {
         id: uid("c"),
         name: input.name,
@@ -863,115 +918,147 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         // Explicit false so a channel created today never has a missing
         // isTeam key for the legacy-migration name-based backfill to catch.
         isTeam: false,
-        members: [],
-        createdBy: "",
+        members: input.isPrivate
+          ? [{ userId: s.currentUserId, level: "editor" }]
+          : [],
+        createdBy: s.currentUserId,
         createdAt: Date.now(),
       };
-      update((s) => {
-        const withOwner: Channel = {
-          ...channel,
-          createdBy: s.currentUserId,
-          members: input.isPrivate
-            ? [{ userId: s.currentUserId, level: "editor" }]
-            : [],
-        };
-        return {
-          ...s,
-          channels: [...s.channels, withOwner],
-          activities: activity(s, "channel", `created #${input.name}`),
-        };
-      });
-      return channel;
+      return commit(
+        (st) => ({
+          ...st,
+          channels: [...st.channels, channel],
+          activities: activity(st, "channel", `created #${input.name}`),
+        }),
+        () => backend.createChannel(channel),
+        {
+          ok: (created) => created,
+          failed: null,
+          describe: `create #${input.name}`,
+        }
+      );
     };
 
     const setChannelAccess: StoreValue["setChannelAccess"] = (channelId, patch) => {
       const s = stateRef.current;
-      if (!s) return false;
+      if (!s) return Promise.resolve(false);
       const channel = s.channels.find((c) => c.id === channelId);
-      if (!channel) return false;
+      if (!channel) return Promise.resolve(false);
       if (!channelIsManageable(s, channel)) {
         deny("You don't have permission to manage this channel.");
-        return false;
+        return Promise.resolve(false);
       }
       const members = patch.isPrivate
         ? ensureEditor(patch.members, channel.createdBy)
         : [];
-      update((st) => ({
-        ...st,
-        channels: st.channels.map((c) =>
-          c.id === channelId ? { ...c, isPrivate: patch.isPrivate, members } : c
-        ),
-        activities: activity(st, "channel", `updated access for #${channel.name}`),
-      }));
-      return true;
+      const resolved = { isPrivate: patch.isPrivate, members };
+      return commit(
+        (st) => ({
+          ...st,
+          channels: st.channels.map((c) =>
+            c.id === channelId ? { ...c, ...resolved } : c
+          ),
+          activities: activity(st, "channel", `updated access for #${channel.name}`),
+        }),
+        () => backend.setChannelAccess(channelId, resolved),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `update access for #${channel.name}`,
+        }
+      );
     };
 
-    const deleteChannel = (channelId: string) => {
+    const deleteChannel: StoreValue["deleteChannel"] = (channelId) => {
       const s = stateRef.current;
-      if (!s) return;
+      if (!s) return Promise.resolve();
       const channel = s.channels.find((c) => c.id === channelId);
-      if (!channel) return;
+      if (!channel) return Promise.resolve();
       if (channel.isTeam) {
         deny("The team channel can't be deleted.");
-        return;
+        return Promise.resolve();
       }
-      if (channel.createdBy !== s.currentUserId && !guard("channel.delete")) return;
-      update((st) => ({
-        ...st,
-        channels: st.channels.filter((c) => c.id !== channelId),
-        messages: st.messages.filter((m) => m.channelId !== channelId),
-        activities: activity(st, "channel", `deleted #${channel.name}`),
-      }));
+      if (channel.createdBy !== s.currentUserId && !guard("channel.delete")) {
+        return Promise.resolve();
+      }
+      return commit(
+        (st) => ({
+          ...st,
+          channels: st.channels.filter((c) => c.id !== channelId),
+          messages: st.messages.filter((m) => m.channelId !== channelId),
+          activities: activity(st, "channel", `deleted #${channel.name}`),
+        }),
+        () => backend.deleteChannel(channelId),
+        { ok: () => undefined, failed: undefined, describe: `delete #${channel.name}` }
+      );
     };
 
     const openDm: StoreValue["openDm"] = (otherUserId) => {
       const s = stateRef.current;
-      if (!s) throw new Error("Store not hydrated");
+      // Was `throw new Error("Store not hydrated")`. Inside a promise-returning
+      // action a throw is just a rejection, which every call site would have to
+      // catch to avoid an unhandled one — so an unhydrated store is reported the
+      // same way a refusal is, and the four navigation call sites check for null
+      // instead of routing to a thread that doesn't exist.
+      if (!s) return Promise.resolve(null);
       const me = s.currentUserId;
       const existing = s.dms.find(
         (d) => d.memberIds.includes(me) && d.memberIds.includes(otherUserId)
       );
-      if (existing) return existing;
+      if (existing) return Promise.resolve(existing);
       const dm: DM = {
         id: uid("d"),
         memberIds: [me, otherUserId],
         createdAt: Date.now(),
       };
-      update((st) => ({ ...st, dms: [...st.dms, dm] }));
-      return dm;
+      return commit(
+        (st) => ({ ...st, dms: [...st.dms, dm] }),
+        () => backend.openDm(dm),
+        { ok: (row) => row, failed: null, describe: "open that conversation" }
+      );
     };
 
     const createProject: StoreValue["createProject"] = (input) => {
-      if (!guard("project.create")) return null;
+      if (!guard("project.create")) return Promise.resolve(null);
+      const s = stateRef.current;
+      if (!s) return Promise.resolve(null);
       const project: Project = {
         id: uid("p"),
         ...input,
         restricted: false,
         members: [],
         attachments: [],
-        createdBy: "",
+        createdBy: s.currentUserId,
         createdAt: Date.now(),
       };
-      update((s) => ({
-        ...s,
-        projects: [...s.projects, { ...project, createdBy: s.currentUserId }],
-        activities: activity(s, "project", `created the ${input.name} project`),
-      }));
-      return project;
+      return commit(
+        (st) => ({
+          ...st,
+          projects: [...st.projects, project],
+          activities: activity(st, "project", `created the ${input.name} project`),
+        }),
+        () => backend.createProject(project),
+        {
+          ok: (created) => created,
+          failed: null,
+          describe: `create the ${input.name} project`,
+        }
+      );
     };
 
     const updateProject: StoreValue["updateProject"] = (projectId, patch) => {
       // Editing a project is part of the "manage projects" capability.
-      if (!guard("project.create")) return false;
+      if (!guard("project.create")) return Promise.resolve(false);
       // Every patch (not just attachments) is subject to the same
       // object-level manageability check as channel access changes.
       const cur = stateRef.current;
       const target = cur?.projects.find((p) => p.id === projectId);
       if (cur && target && !projectIsManageable(cur, target)) {
         deny("You don't have permission to edit this project.");
-        return false;
+        return Promise.resolve(false);
       }
-      update((s) => {
+      return commit(
+        (s) => {
         const prev = s.projects.find((p) => p.id === projectId);
         if (!prev) return s;
         const renamed =
@@ -1004,41 +1091,56 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               ? activity(s, "project", attachmentNote)
               : s.activities,
         };
-      });
-      return true;
+        },
+        () => backend.updateProject(projectId, patch),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `save ${target ? `“${target.name}”` : "this project"}`,
+        }
+      );
     };
 
-    const deleteProject = (projectId: string) => {
-      if (!guard("project.delete")) return;
-      update((s) => {
-        const project = s.projects.find((p) => p.id === projectId);
-        if (!project) return s;
-        return {
-          ...s,
-          projects: s.projects.filter((p) => p.id !== projectId),
-          tasks: s.tasks.filter((t) => t.projectId !== projectId),
-          activities: activity(s, "project", `deleted the ${project.name} project`),
-        };
-      });
+    const deleteProject: StoreValue["deleteProject"] = (projectId) => {
+      if (!guard("project.delete")) return Promise.resolve();
+      const s = stateRef.current;
+      const project = s?.projects.find((p) => p.id === projectId);
+      if (!s || !project) return Promise.resolve();
+      return commit(
+        (st) => ({
+          ...st,
+          projects: st.projects.filter((p) => p.id !== projectId),
+          tasks: st.tasks.filter((t) => t.projectId !== projectId),
+          activities: activity(st, "project", `deleted the ${project.name} project`),
+        }),
+        () => backend.deleteProject(projectId),
+        {
+          ok: () => undefined,
+          failed: undefined,
+          describe: `delete the ${project.name} project`,
+        }
+      );
     };
 
     const setProjectAccess: StoreValue["setProjectAccess"] = (projectId, patch) => {
       // Managing a project's membership is part of the "manage projects"
       // capability — same requirement updateProject already enforces.
-      if (!guard("project.create")) return false;
+      if (!guard("project.create")) return Promise.resolve(false);
       const s = stateRef.current;
-      if (!s) return false;
+      if (!s) return Promise.resolve(false);
       const project = s.projects.find((p) => p.id === projectId);
-      if (!project) return false;
+      if (!project) return Promise.resolve(false);
       if (!projectIsManageable(s, project)) {
         deny("You don't have permission to manage this project.");
-        return false;
+        return Promise.resolve(false);
       }
       const members = patch.restricted
         ? ensureEditor(patch.members, project.createdBy)
         : [];
-      const updatedProject: Project = { ...project, restricted: patch.restricted, members };
-      update((st) => {
+      const resolved = { restricted: patch.restricted, members };
+      const updatedProject: Project = { ...project, ...resolved };
+      return commit(
+        (st) => {
         // Revocation must not leave stale collaborator rows: anyone on this
         // project's tasks who can no longer see it (per the *new*
         // restricted/members state) is pruned — the same rule the write-time
@@ -1058,17 +1160,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           tasks,
           activities: activity(st, "project", `updated access for ${project.name}`),
         };
-      });
-      return true;
+        },
+        () => backend.setProjectAccess(projectId, resolved),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `update access for ${project.name}`,
+        }
+      );
     };
 
     const createTask: StoreValue["createTask"] = (input) => {
-      if (!guard("task.create")) return null;
+      if (!guard("task.create")) return Promise.resolve(null);
       const s0 = stateRef.current;
       const project0 = s0?.projects.find((p) => p.id === input.projectId);
       if (s0 && project0 && projectIsViewerOnly(s0, project0)) {
         deny("You have view-only access to this project.");
-        return null;
+        return Promise.resolve(null);
       }
       const collaboratorIds = normaliseCollaborators(
         input.assigneeId,
@@ -1080,7 +1188,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // through unchecked.
       if (!s0 || !project0) {
         deny("That project doesn't exist.");
-        return null;
+        return Promise.resolve(null);
       }
       {
         // Assignment never grants access: the owner is checked exactly like
@@ -1093,45 +1201,51 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         if (blockedId) {
           const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
           deny(`${name} can't see this project.`);
-          return null;
+          return Promise.resolve(null);
         }
       }
-      const columnSize = s0
-        ? s0.tasks.filter((t) => t.projectId === input.projectId && t.status === input.status)
-            .length
-        : 0;
+      const columnSize = s0.tasks.filter(
+        (t) => t.projectId === input.projectId && t.status === input.status
+      ).length;
       const task: Task = {
         id: uid("t"),
         ...input,
         collaboratorIds,
         order: columnSize,
         createdAt: Date.now(),
-        createdBy: "",
+        createdBy: s0.currentUserId,
       };
-      update((s) => ({
-        ...s,
-        tasks: [...s.tasks, { ...task, createdBy: s.currentUserId }],
-        activities: activity(s, "task", `created “${input.title}”`),
-      }));
-      return task;
+      return commit(
+        (s) => ({
+          ...s,
+          tasks: [...s.tasks, task],
+          activities: activity(s, "task", `created “${input.title}”`),
+        }),
+        () => backend.createTask(task),
+        {
+          ok: (created) => created,
+          failed: null,
+          describe: `create “${input.title}”`,
+        }
+      );
     };
 
     const updateTask: StoreValue["updateTask"] = (taskId, patch) => {
-      if (!guard("task.edit")) return false;
+      if (!guard("task.edit")) return Promise.resolve(false);
       const s0 = stateRef.current;
       const task0 = s0?.tasks.find((t) => t.id === taskId);
       const project0 = task0 && s0?.projects.find((p) => p.id === task0.projectId);
       if (s0 && project0 && projectIsViewerOnly(s0, project0)) {
         deny("You have view-only access to this project.");
-        return false;
+        return Promise.resolve(false);
       }
-      if (!s0 || !task0) return false;
+      if (!s0 || !task0) return Promise.resolve(false);
       // Fail closed: a task whose project can't be resolved can't have its
       // owner/collaborators checked against anything, so the write must be
       // refused rather than let the check fall through unrun.
       if (!project0) {
         deny("That project doesn't exist.");
-        return false;
+        return Promise.resolve(false);
       }
       // Resolve against the *resulting* owner — a patch may change both the
       // owner and the collaborator list in the same call.
@@ -1165,39 +1279,47 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (blockedId) {
         const name = s0.users.find((u) => u.id === blockedId)?.name ?? "That person";
         deny(`${name} can't see this project.`);
-        return false;
+        return Promise.resolve(false);
       }
-      update((s) => {
-        const prev = s.tasks.find((t) => t.id === taskId);
-        if (!prev) return s;
-        const completed = patch.status === "done" && prev.status !== "done";
-        const next: Task = { ...prev, ...patch, collaboratorIds: resultingCollaborators };
-        const assignmentTexts = assignmentActivityTexts(s, prev, next);
-        let activities = completed
-          ? activity(s, "task", `completed “${prev.title}”`)
-          : s.activities;
-        for (const text of assignmentTexts) {
-          activities = activity({ ...s, activities }, "task", text);
-        }
-        return {
-          ...s,
-          tasks: s.tasks.map((t) => (t.id === taskId ? next : t)),
-          activities,
-        };
-      });
-      return true;
+      // The collaborator list the guards just approved is part of the write,
+      // so the backend gets the same resolved patch the optimistic copy did.
+      const resolved: TaskPatch = { ...patch, collaboratorIds: resultingCollaborators };
+      return commit(
+        (s) => {
+          const prev = s.tasks.find((t) => t.id === taskId);
+          if (!prev) return s;
+          const completed = patch.status === "done" && prev.status !== "done";
+          const next: Task = { ...prev, ...resolved };
+          const assignmentTexts = assignmentActivityTexts(s, prev, next);
+          let activities = completed
+            ? activity(s, "task", `completed “${prev.title}”`)
+            : s.activities;
+          for (const text of assignmentTexts) {
+            activities = activity({ ...s, activities }, "task", text);
+          }
+          return {
+            ...s,
+            tasks: s.tasks.map((t) => (t.id === taskId ? next : t)),
+            activities,
+          };
+        },
+        () => backend.updateTask(taskId, resolved),
+        { ok: () => true, failed: false, describe: `save “${task0.title}”` }
+      );
     };
 
     const moveTask: StoreValue["moveTask"] = (taskId, toStatus, toIndex) => {
-      if (!guard("task.move")) return;
+      if (!guard("task.move")) return Promise.resolve();
       const s0 = stateRef.current;
       const task0 = s0?.tasks.find((t) => t.id === taskId);
       const project0 = task0 && s0?.projects.find((p) => p.id === task0.projectId);
       if (s0 && project0 && projectIsViewerOnly(s0, project0)) {
         deny("You have view-only access to this project.");
-        return;
+        return Promise.resolve();
       }
-      update((s) => {
+      if (!s0 || !task0) return Promise.resolve();
+      return commit(
+        (s) => {
         const task = s.tasks.find((t) => t.id === taskId);
         if (!task) return s;
         const column = s.tasks
@@ -1235,29 +1357,35 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             ? activity(s, "task", `completed “${task.title}”`)
             : s.activities,
         };
-      });
+        },
+        () => backend.moveTask(taskId, toStatus, toIndex),
+        { ok: () => undefined, failed: undefined, describe: `move “${task0.title}”` }
+      );
     };
 
-    const deleteTask = (taskId: string): boolean => {
-      if (!guard("task.delete")) return false;
+    const deleteTask: StoreValue["deleteTask"] = (taskId) => {
+      if (!guard("task.delete")) return Promise.resolve(false);
       const s0 = stateRef.current;
       const task0 = s0?.tasks.find((t) => t.id === taskId);
       const project0 = task0 && s0?.projects.find((p) => p.id === task0.projectId);
       if (s0 && project0 && projectIsViewerOnly(s0, project0)) {
         deny("You have view-only access to this project.");
-        return false;
+        return Promise.resolve(false);
       }
-      if (!task0) return false;
-      update((s) => {
-        const task = s.tasks.find((t) => t.id === taskId);
-        if (!task) return s;
-        return {
-          ...s,
-          tasks: s.tasks.filter((t) => t.id !== taskId),
-          activities: activity(s, "task", `deleted “${task.title}”`),
-        };
-      });
-      return true;
+      if (!task0) return Promise.resolve(false);
+      return commit(
+        (s) => {
+          const task = s.tasks.find((t) => t.id === taskId);
+          if (!task) return s;
+          return {
+            ...s,
+            tasks: s.tasks.filter((t) => t.id !== taskId),
+            activities: activity(s, "task", `deleted “${task.title}”`),
+          };
+        },
+        () => backend.deleteTask(taskId),
+        { ok: () => true, failed: false, describe: `delete “${task0.title}”` }
+      );
     };
 
     return {
@@ -1287,7 +1415,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       moveTask,
       deleteTask,
     };
-  }, [update]);
+  }, [update, adopt, backend]);
 
   if (!state) {
     return (

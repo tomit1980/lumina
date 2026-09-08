@@ -14,7 +14,7 @@
 // that don't import React themselves, relying on the runtime Next provides,
 // no longer need a `globalThis.React` workaround here.)
 import * as React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 
@@ -48,7 +48,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import HomePage from "@/app/page";
 import { AppShell } from "@/components/app-shell";
 import { MessageItem } from "@/components/chat/message-item";
-import { STORAGE_KEY, asUser, baseState } from "./_support";
+import { STORAGE_KEY, asUser, baseState, renderHydrated } from "./_support";
 
 afterEach(() => {
   cleanup();
@@ -62,10 +62,10 @@ function iconOnlyButtons(): HTMLElement[] {
 }
 
 describe("app/page.tsx — task quick-complete buttons (QA-010)", () => {
-  it("each icon-only quick-complete button names the task it completes", () => {
+  it("each icon-only quick-complete button names the task it completes", async () => {
     const state = baseState();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    render(
+    await renderHydrated(
       React.createElement(
         StoreProvider,
         null,
@@ -95,10 +95,10 @@ describe("app/page.tsx — task quick-complete buttons (QA-010)", () => {
 });
 
 describe("components/app-shell.tsx — icon buttons (QA-010)", () => {
-  it("every icon-only button in the sidebar shell has an accessible name", () => {
+  it("every icon-only button in the sidebar shell has an accessible name", async () => {
     const state = baseState();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    render(
+    await renderHydrated(
       React.createElement(
         StoreProvider,
         null,
@@ -125,7 +125,7 @@ describe("components/app-shell.tsx — icon buttons (QA-010)", () => {
 });
 
 describe("components/chat/message-item.tsx — hover toolbar (QA-010)", () => {
-  it("the emoji/edit/delete hover-toolbar buttons all have accessible names", () => {
+  it("the emoji/edit/delete hover-toolbar buttons all have accessible names", async () => {
     const seed = baseState();
     const message = seed.messages[0];
     // Editing your own message needs currentUser.id === message.authorId.
@@ -133,7 +133,7 @@ describe("components/chat/message-item.tsx — hover toolbar (QA-010)", () => {
     const author = state.users.find((u) => u.id === message.authorId)!;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 
-    render(
+    await renderHydrated(
       React.createElement(
         StoreProvider,
         null,

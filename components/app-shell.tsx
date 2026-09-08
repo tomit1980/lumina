@@ -279,10 +279,12 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         ? viewing("/chat", confirm.id)
         : viewing("/projects", confirm.id);
     if (confirm.kind === "channel") {
-      deleteChannel(confirm.id);
+      // Optimistic: the row disappears at once and the store rolls it back
+      // (with a toast) if the write is refused or fails.
+      void deleteChannel(confirm.id);
       toast.success(`Channel #${confirm.name} deleted`);
     } else {
-      deleteProject(confirm.id);
+      void deleteProject(confirm.id);
       toast.success(`Project “${confirm.name}” deleted`);
     }
     if (viewingIt) router.push("/");
@@ -661,7 +663,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => {
-                resetDemo();
+                void resetDemo();
                 void resetAll();
                 router.push("/");
                 toast.success("Demo data reset — signed out");

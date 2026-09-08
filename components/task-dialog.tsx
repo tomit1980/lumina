@@ -267,7 +267,7 @@ export function TaskDialog() {
     );
   };
 
-  const save = () => {
+  const save = async () => {
     if (readOnly) return;
     const title = form.title.trim();
     if (!title) {
@@ -310,7 +310,7 @@ export function TaskDialog() {
       // reason via its own deny toast, so don't also claim success, and
       // don't close the dialog and discard what the user typed on an edit
       // that was never persisted.
-      const ok = updateTask(editing.id, payload);
+      const ok = await updateTask(editing.id, payload);
       if (!ok) return;
       toast.success("Task updated");
     } else {
@@ -318,18 +318,18 @@ export function TaskDialog() {
         toast.error("Pick a project for this task.");
         return;
       }
-      const created = createTask({ ...payload, projectId: form.projectId });
+      const created = await createTask({ ...payload, projectId: form.projectId });
       if (!created) return;
       toast.success("Task created", { description: title });
     }
     closeTaskDialog();
   };
 
-  const remove = () => {
+  const remove = async () => {
     if (!editing) return;
     // The store refuses a delete the caller isn't entitled to (and says why).
     // Reporting success anyway would be the same lie the save path used to tell.
-    if (!deleteTask(editing.id)) return;
+    if (!(await deleteTask(editing.id))) return;
     toast.success("Task deleted", { description: editing.title });
     closeTaskDialog();
   };

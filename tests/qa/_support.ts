@@ -1,13 +1,16 @@
 // Shared harness for the QA suites in tests/qa/. Not a test file itself
 // (doesn't match tests/**/*.test.ts), just imported by the ones that are.
 import * as React from "react";
-import { act, renderHook } from "@testing-library/react";
+import { act, render, renderHook } from "@testing-library/react";
 
+import { LocalBackend } from "@/lib/backend/local";
+import type { Backend } from "@/lib/backend/types";
 import { StoreProvider, useStore } from "@/lib/store";
 import { createSeed } from "@/lib/seed";
 import type {
   AppState,
   Channel,
+  Message,
   Permission,
   Project,
   RoleDef,
@@ -126,27 +129,139 @@ export function addTask(
   return { ...state, tasks: [...state.tasks, withDefaults] };
 }
 
+/** `render()` plus the microtask that resolves `backend.hydrate()`, for the
+ *  suites that render real components under a `StoreProvider` rather than
+ *  taking the hook handle. Without this the store is still showing its
+ *  loading screen — and rendering none of its children — when the first
+ *  synchronous query runs. */
+export async function renderHydrated(ui: React.ReactElement) {
+  let out!: ReturnType<typeof render>;
+  await act(async () => {
+    out = render(ui);
+  });
+  return out;
+}
+
+/** Mounts StoreProvider and waits for `backend.hydrate()` to resolve.
+ *
+ *  Awaiting is required, not cosmetic: `StoreProvider` renders its loading
+ *  screen — and no context, so `useStore()` never runs — until hydration
+ *  resolves, and that is a promise now that the store reads through the
+ *  `Backend` seam. `act` flushes both the microtask and the render it
+ *  schedules, so `result.current` is a live store by the time this returns. */
+async function mountWith(backend?: Backend) {
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    return React.createElement(StoreProvider, { backend }, children);
+  }
+  let handle!: ReturnType<typeof renderHook<Store, unknown>>;
+  await act(async () => {
+    handle = renderHook(() => useStore(), { wrapper: Wrapper });
+  });
+  return { result: handle.result, unmount: handle.unmount };
+}
+
 /** Seeds localStorage and mounts StoreProvider, returning the live
  *  (auto-refreshing) store handle. Wrap actions in `run()` to flush them. */
-export function mount(state: AppState) {
+export function mount(state: AppState, backend?: Backend) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  function Wrapper({ children }: { children: React.ReactNode }) {
-    return React.createElement(StoreProvider, null, children);
-  }
-  const { result, unmount } = renderHook(() => useStore(), { wrapper: Wrapper });
-  return { result, unmount };
+  return mountWith(backend);
 }
 
 /** Mounts StoreProvider against whatever is already in localStorage,
  *  without writing to it first — for tests that craft a raw (pre-migration
  *  shaped) payload by hand and want to see how `migrate()` handles it. */
 export function mountFromExistingStorage() {
-  function Wrapper({ children }: { children: React.ReactNode }) {
-    return React.createElement(StoreProvider, null, children);
-  }
-  const { result, unmount } = renderHook(() => useStore(), { wrapper: Wrapper });
-  return { result, unmount };
+  return mountWith();
 }
+
+/** A `Backend` that behaves exactly like `LocalBackend` except for the one
+ *  operation named in `failing`, which rejects. Used to drive the store's
+ *  rollback rule (lib/store.tsx `commit`) from the tests.
+ *
+ *  `hydrate()` is the *re-hydrate* path's answer as well as the initial one,
+ *  so `hydrateWith` lets a test hand back a state distinguishable from any
+ *  snapshot — that is how "re-hydrated" is told apart from "restored". */
+export class FailingBackend extends LocalBackend {
+  /** Every hydrate() this backend has answered, for assertions about
+   *  whether the rollback re-hydrated or restored a snapshot. */
+  hydrateCalls = 0;
+
+  constructor(
+    private readonly failing: FailingOp,
+    /** Returned by `hydrate()` from the second call onward. Omit to keep
+     *  reading localStorage like `LocalBackend` does. */
+    private readonly hydrateWith?: () => AppState
+  ) {
+    super();
+  }
+
+  private run<T>(op: FailingOp, value: T): Promise<T> {
+    return op === this.failing
+      ? Promise.reject(new Error(`${op} failed`))
+      : Promise.resolve(value);
+  }
+
+  override hydrate(): Promise<AppState> {
+    this.hydrateCalls += 1;
+    if (this.hydrateWith && this.hydrateCalls > 1) {
+      return Promise.resolve(this.hydrateWith());
+    }
+    return super.hydrate();
+  }
+
+  override sendMessage(message: Message): Promise<Message> {
+    return this.run("sendMessage", message);
+  }
+
+  override editMessage(): Promise<void> {
+    return this.run("editMessage", undefined);
+  }
+
+  override createTask(task: Task): Promise<Task> {
+    return this.run("createTask", task);
+  }
+
+  override updateTask(): Promise<void> {
+    return this.run("updateTask", undefined);
+  }
+
+  override moveTask(): Promise<void> {
+    return this.run("moveTask", undefined);
+  }
+
+  override createProject(project: Project): Promise<Project> {
+    return this.run("createProject", project);
+  }
+
+  override updateProject(): Promise<void> {
+    return this.run("updateProject", undefined);
+  }
+
+  override createRole(role: RoleDef): Promise<RoleDef> {
+    return this.run("createRole", role);
+  }
+
+  override setUserRole(): Promise<void> {
+    return this.run("setUserRole", undefined);
+  }
+
+  override setRolePermission(): Promise<void> {
+    return this.run("setRolePermission", undefined);
+  }
+}
+
+/** The operations `FailingBackend` can be told to reject. */
+export type FailingOp =
+  | "sendMessage"
+  | "editMessage"
+  | "createTask"
+  | "updateTask"
+  | "moveTask"
+  | "createProject"
+  | "updateProject"
+  | "createRole"
+  | "setUserRole"
+  | "setRolePermission";
 
 /** Runs a store action inside act() and returns whatever it returned, so
  *  `result.current` reflects the resulting state by the time this resolves.

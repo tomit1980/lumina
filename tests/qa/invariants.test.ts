@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe("you cannot change your own role", () => {
   it("admin cannot set their own role, even to another admin-equivalent", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const ok = await run(() => result.current.setUserRole("u_vlad", "member"));
     expect(ok).toBe(false);
     expect(result.current.state.users.find((u) => u.id === "u_vlad")?.roleId).toBe("admin");
@@ -41,7 +41,7 @@ describe("you cannot demote the last admin", () => {
       permissions: ["members.manage"],
     });
     state = addUser(state, { id: "u_ops", roleId: "r_ops" });
-    const { result } = mount(asUser(state, "u_ops"));
+    const { result } = await mount(asUser(state, "u_ops"));
 
     const ok = await run(() => result.current.setUserRole("u_vlad", "member"));
     expect(ok).toBe(false);
@@ -50,7 +50,7 @@ describe("you cannot demote the last admin", () => {
 
   it("demoting one of two admins is allowed", async () => {
     const state = addUser(baseState(), { id: "u_admin2", roleId: "admin" });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     const ok = await run(() => result.current.setUserRole("u_admin2", "member"));
     expect(ok).toBe(true);
@@ -60,14 +60,14 @@ describe("you cannot demote the last admin", () => {
 
 describe("locked role (admin)", () => {
   it("cannot be renamed via updateRole", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const ok = await run(() => result.current.updateRole("admin", { name: "SuperAdmin" }));
     expect(ok).toBe(false);
     expect(result.current.state.roles.find((r) => r.id === "admin")?.name).toBe("Admin");
   });
 
   it("cannot have a permission toggled via setRolePermission", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.roles.find((r) => r.id === "admin")?.permissions.length;
     const ok = await run(() => result.current.setRolePermission("admin", "task.delete", false));
     expect(ok).toBe(false);
@@ -87,7 +87,7 @@ describe("system role", () => {
     // check from the separate has-members check tested below.
     const state = baseState();
     state.users = state.users.map((u) => (u.id === "u_elena" ? { ...u, roleId: "member" } : u));
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     expect(result.current.state.users.some((u) => u.roleId === "guest")).toBe(false);
 
     const ok = await run(() => result.current.deleteRole("guest"));
@@ -100,7 +100,7 @@ describe("a role with members assigned", () => {
   it("cannot be deleted even though it's a custom (non-system) role", async () => {
     let state = addRole(baseState(), { id: "r_custom", name: "Custom", permissions: [] });
     state = addUser(state, { id: "u_custom_member", roleId: "r_custom" });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     const ok = await run(() => result.current.deleteRole("r_custom"));
     expect(ok).toBe(false);
@@ -110,7 +110,7 @@ describe("a role with members assigned", () => {
   it("can be deleted once its members are reassigned", async () => {
     let state = addRole(baseState(), { id: "r_custom2", name: "Custom2", permissions: [] });
     state = addUser(state, { id: "u_custom_member2", roleId: "r_custom2" });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
 
     await run(() => result.current.setUserRole("u_custom_member2", "member"));
     const ok = await run(() => result.current.deleteRole("r_custom2"));
@@ -121,7 +121,7 @@ describe("a role with members assigned", () => {
 
 describe("role name clashes are case-insensitive", () => {
   it("on create", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.roles.length;
     const role = await run(() =>
       result.current.createRole({ name: "MEMBER", description: "", color: "#000", permissions: [] })
@@ -131,14 +131,14 @@ describe("role name clashes are case-insensitive", () => {
   });
 
   it("on update", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const ok = await run(() => result.current.updateRole("guest", { name: "member" }));
     expect(ok).toBe(false);
     expect(result.current.state.roles.find((r) => r.id === "guest")?.name).toBe("Guest");
   });
 
   it("updating a role to its own current name (same id) is not a clash", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const ok = await run(() => result.current.updateRole("guest", { name: "Guest" }));
     expect(ok).toBe(true);
   });
@@ -146,7 +146,7 @@ describe("role name clashes are case-insensitive", () => {
 
 describe("the team channel", () => {
   it("cannot be deleted, even by an admin", async () => {
-    const { result } = mount(asUser(baseState(), "u_vlad"));
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
     const channel = result.current.state.channels.find((c) => c.id === "c_general")!;
     expect(result.current.canDeleteChannel(channel)).toBe(false);
 
@@ -165,7 +165,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
     expect(general.name).toBe("general");
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(raw));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
 
     const channel = result.current.state.channels.find((c) => c.id === "c_general")!;
     expect(channel.isTeam).toBe(true);
@@ -175,7 +175,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
     expect(result.current.state.channels.some((c) => c.id === "c_general")).toBe(true);
   });
 
-  it("a *different* channel named general (not the seeded id) still gets backfilled by name alone", () => {
+  it("a *different* channel named general (not the seeded id) still gets backfilled by name alone", async () => {
     const state = addChannel(baseState(), {
       id: "c_general_2",
       name: "general",
@@ -189,7 +189,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
     delete dup.isTeam;
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(raw));
-    const { result } = mountFromExistingStorage();
+    const { result } = await mountFromExistingStorage();
     const channel = result.current.state.channels.find((c) => c.id === "c_general_2")!;
     // By design, but surprising: the backfill matches on the *name* "general"
     // alone, not on being the original team channel — see
@@ -208,7 +208,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
   it(
     "L1-006: a newly created channel named 'general' should stay deletable after a reload, but does not",
     async () => {
-      const { result, unmount } = mount(asUser(baseState(), "u_vlad"));
+      const { result, unmount } = await mount(asUser(baseState(), "u_vlad"));
       const created = await run(() =>
         result.current.createChannel({ name: "general", description: "", isPrivate: false })
       );
@@ -216,7 +216,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
       unmount();
 
       // Simulate a reload from whatever the persistence effect just wrote.
-      const { result: reloaded } = mountFromExistingStorage();
+      const { result: reloaded } = await mountFromExistingStorage();
       const dup = reloaded.current.state.channels.find((c) => c.id === created!.id)!;
       expect(dup.isTeam).toBeFalsy();
       expect(reloaded.current.canDeleteChannel(dup)).toBe(true);

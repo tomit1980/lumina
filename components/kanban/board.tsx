@@ -126,7 +126,7 @@ export function Board({
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
     const toStatus: TaskStatus = task.status === "done" ? "todo" : "done";
-    moveTask(taskId, toStatus, Number.MAX_SAFE_INTEGER);
+    void moveTask(taskId, toStatus, Number.MAX_SAFE_INTEGER);
     toast(
       toStatus === "done"
         ? `“${task.title}” marked as done`

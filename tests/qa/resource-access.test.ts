@@ -46,14 +46,14 @@ function attachment(id: string, name: string): Attachment {
 }
 
 describe("private channels", () => {
-  it("a non-member cannot see the channel", () => {
-    const { result } = mount(asUser(baseState(), "u_maya"));
+  it("a non-member cannot see the channel", async () => {
+    const { result } = await mount(asUser(baseState(), "u_maya"));
     const channel = result.current.state.channels.find((c) => c.id === "c_leadership")!;
     expect(result.current.canSeeChannel(channel)).toBe(false);
   });
 
   it("a non-member cannot post to the channel", async () => {
-    const { result } = mount(asUser(baseState(), "u_maya"));
+    const { result } = await mount(asUser(baseState(), "u_maya"));
     const before = result.current.state.messages.length;
     const ok = await run(() => result.current.sendMessage("c_leadership", "sneaking in"));
     expect(ok).toBe(false);
@@ -67,7 +67,7 @@ describe("private channels", () => {
         ? { ...c, members: [...c.members, { userId: "u_maya", level: "viewer" as const }] }
         : c
     );
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const channel = result.current.state.channels.find((c) => c.id === "c_leadership")!;
     expect(result.current.canSeeChannel(channel)).toBe(true);
     expect(result.current.channelAccessLevel(channel)).toBe("viewer");
@@ -85,7 +85,7 @@ describe("private channels", () => {
         ? { ...c, members: [...c.members, { userId: "u_maya", level: "editor" as const }] }
         : c
     );
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const channel = result.current.state.channels.find((c) => c.id === "c_leadership")!;
     expect(result.current.channelAccessLevel(channel)).toBe("editor");
 
@@ -103,7 +103,7 @@ describe("private channels", () => {
       isPrivate: true,
       members: [{ userId: "u_priya", level: "editor" }],
     });
-    const { result } = mount(asUser(state, "u_vlad")); // admin, not a member of c_secret
+    const { result } = await mount(asUser(state, "u_vlad")); // admin, not a member of c_secret
     const channel = result.current.state.channels.find((c) => c.id === "c_secret")!;
     expect(result.current.canSeeChannel(channel)).toBe(true);
     expect(result.current.channelAccessLevel(channel)).toBe("editor");
@@ -117,7 +117,7 @@ describe("private channels", () => {
     // to manage its own access under channelIsManageable even without
     // channel.delete.
     const state = addChannel(baseState(), { id: "c_owned", name: "owned", createdBy: "u_sam" });
-    const { result } = mount(asUser(state, "u_sam"));
+    const { result } = await mount(asUser(state, "u_sam"));
     const ok = await run(() =>
       result.current.setChannelAccess("c_owned", {
         isPrivate: true,
@@ -145,7 +145,7 @@ describe("restricted projects", () => {
       });
   }
 
-  it("a non-member cannot see the project", () => {
+  it("a non-member cannot see the project", async () => {
     const state = addProject(baseState(), {
       id: "p_restricted",
       name: "Restricted Project",
@@ -153,7 +153,7 @@ describe("restricted projects", () => {
       restricted: true,
       members: [{ userId: "u_maya", level: "viewer" }],
     });
-    const { result } = mount(asUser(state, "u_jonas")); // not in the members list
+    const { result } = await mount(asUser(state, "u_jonas")); // not in the members list
     const project = result.current.state.projects.find((p) => p.id === "p_restricted")!;
     expect(result.current.canSeeProject(project)).toBe(false);
   });
@@ -166,7 +166,7 @@ describe("restricted projects", () => {
       restricted: true,
       members: [{ userId: "u_maya", level: "viewer" }],
     });
-    const { result } = mount(asUser(state, "u_jonas")); // member role, has task.create, not a project member
+    const { result } = await mount(asUser(state, "u_jonas")); // member role, has task.create, not a project member
     const before = result.current.state.tasks.length;
     const task = await run(() =>
       result.current.createTask({
@@ -193,7 +193,7 @@ describe("restricted projects", () => {
       restrictedProject("u_maya")(baseState()),
       { id: "t_r1", projectId: "p_restricted", title: "Existing", createdBy: "u_sam", status: "todo" }
     );
-    const { result } = mount(asUser(state, "u_maya")); // member role: has task.create/edit/move
+    const { result } = await mount(asUser(state, "u_maya")); // member role: has task.create/edit/move
     const project = result.current.state.projects.find((p) => p.id === "p_restricted")!;
     expect(result.current.canSeeProject(project)).toBe(true);
     expect(result.current.projectAccessLevel(project)).toBe("viewer");
@@ -242,7 +242,7 @@ describe("restricted projects", () => {
       createdBy: "u_sam",
       status: "todo",
     });
-    const { result } = mount(asUser(state, "u_maya"));
+    const { result } = await mount(asUser(state, "u_maya"));
     const project = result.current.state.projects.find((p) => p.id === "p_restricted")!;
     expect(result.current.projectAccessLevel(project)).toBe("editor");
 
@@ -279,7 +279,7 @@ describe("restricted projects", () => {
       restricted: true,
       members: [{ userId: "u_priya", level: "editor" }],
     });
-    const { result } = mount(asUser(state, "u_vlad"));
+    const { result } = await mount(asUser(state, "u_vlad"));
     const project = result.current.state.projects.find((p) => p.id === "p_admin_bypass")!;
     expect(result.current.canSeeProject(project)).toBe(true);
     expect(result.current.projectAccessLevel(project)).toBe("editor");
@@ -309,7 +309,7 @@ describe("restricted projects", () => {
       name: "Owned Project",
       createdBy: "u_sam",
     });
-    const { result } = mount(asUser(state, "u_vlad")); // needs project.create; only admin has it here
+    const { result } = await mount(asUser(state, "u_vlad")); // needs project.create; only admin has it here
     const ok = await run(() =>
       result.current.setProjectAccess("p_owned", {
         restricted: true,
@@ -348,7 +348,7 @@ describe("restricted projects", () => {
       createdBy: "u_sam",
     });
 
-    const { result } = mount(asUser(state, "u_deleter"));
+    const { result } = await mount(asUser(state, "u_deleter"));
     await run(() => result.current.deleteTask("t_del_gate"));
     expect(result.current.state.tasks.some((t) => t.id === "t_del_gate")).toBe(true); // viewer: denied
 
@@ -382,7 +382,7 @@ describe("restricted projects", () => {
       attachments: [attachment("att1", "spec.txt")],
     });
 
-    const { result } = mount(asUser(state, "u_pm"));
+    const { result } = await mount(asUser(state, "u_pm"));
     await run(() =>
       result.current.updateProject("p_att_gate", {
         attachments: [attachment("att1", "spec.txt"), attachment("att2", "new-file.txt")],
@@ -416,7 +416,7 @@ describe("restricted projects", () => {
         members: [{ userId: "u_pm2", level: "viewer" }],
       });
 
-      const { result } = mount(asUser(state, "u_pm2"));
+      const { result } = await mount(asUser(state, "u_pm2"));
       await run(() => result.current.updateProject("p_name_gate", { name: "Renamed By Viewer" }));
       expect(result.current.state.projects.find((p) => p.id === "p_name_gate")?.name).toBe(
         "Original Name"
@@ -447,7 +447,7 @@ describe("restricted projects", () => {
         members: [{ userId: "u_priya", level: "editor" }], // u_pm3 has no membership here at all
       });
 
-      const { result } = mount(asUser(state, "u_pm3"));
+      const { result } = await mount(asUser(state, "u_pm3"));
       const ok = await run(() =>
         result.current.setProjectAccess("p_unrelated", {
           restricted: true,
@@ -477,7 +477,7 @@ describe("message-level guards — by design, but surprising (see findings doc)"
         attachments: [],
       },
     ];
-    const { result } = mount(asUser(state, "u_none"));
+    const { result } = await mount(asUser(state, "u_none"));
     expect(result.current.can("message.send")).toBe(false);
 
     await run(() => result.current.editMessage("m_by_none", "edited"));
@@ -487,7 +487,7 @@ describe("message-level guards — by design, but surprising (see findings doc)"
   it("toggleReaction is gated only by conversation visibility, not by any permission", async () => {
     let state = addRole(baseState(), { id: "r_none2", name: "No Perms 2", permissions: [] });
     state = addUser(state, { id: "u_none2", roleId: "r_none2" });
-    const { result } = mount(asUser(state, "u_none2"));
+    const { result } = await mount(asUser(state, "u_none2"));
     expect(result.current.can("message.send")).toBe(false);
 
     const target = result.current.state.messages.find((m) => m.channelId === "c_engineering")!;
@@ -499,7 +499,7 @@ describe("message-level guards — by design, but surprising (see findings doc)"
   it("sendMessage to a DM bypasses the message.send guard entirely", async () => {
     let state = addRole(baseState(), { id: "r_none3", name: "No Perms 3", permissions: [] });
     state = addUser(state, { id: "u_none3", roleId: "r_none3" });
-    const { result } = mount(asUser(state, "u_none3"));
+    const { result } = await mount(asUser(state, "u_none3"));
     expect(result.current.can("message.send")).toBe(false);
 
     const dm = await run(() => result.current.sendToUser("u_vlad", "hi from a zero-permission user"));
