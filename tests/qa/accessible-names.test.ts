@@ -33,10 +33,13 @@ vi.mock("next/navigation", () => ({
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "light", resolvedTheme: "light", setTheme: vi.fn() }),
 }));
+// The shape app-shell.tsx consumes from `AuthValue`. `twoFactorStatus` answers
+// "off" — the local flag's answer, and the one that keeps the sidebar's
+// two-factor affordances in their default state for this render.
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
-    requestSwitch: vi.fn(),
-    twoFactorStatus: () => "none",
+    requestSwitch: vi.fn(async () => {}),
+    twoFactorStatus: () => "off",
     logout: vi.fn(),
     resetAll: vi.fn(async () => {}),
   }),

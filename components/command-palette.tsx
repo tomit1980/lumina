@@ -34,10 +34,15 @@ import {
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
+import { backendKind } from "@/lib/backend";
 import { useStore } from "@/lib/store";
 import { chatHref, dmHref, projectHref } from "@/lib/routes";
 
 export function CommandPalette() {
+  // Read per render, not once at module load: `backendKind` is a build-time
+  // constant in production either way, and this keeps the flag observable to
+  // tests that mount the component under both values.
+  const isDemo = backendKind !== "supabase";
   const router = useRouter();
   const { setTheme, resolvedTheme } = useTheme();
   const {
@@ -204,29 +209,32 @@ export function CommandPalette() {
 
           <CommandSeparator />
 
-          <CommandGroup heading="View as (demo roles)">
-            {state.users.map((u) => (
-              <CommandItem
-                key={u.id}
-                value={`view as ${u.name} ${userRole(u).name}`}
-                disabled={u.id === currentUser.id}
-                onSelect={() =>
-                  run(() => {
-                    const needs2fa = twoFactorStatus(u.id) === "enrolled";
-                    requestSwitch(u.id);
-                    if (!needs2fa) {
-                      toast(`Now viewing as ${u.name}`, {
-                        description: userRole(u).description,
-                      });
-                    }
-                  })
-                }
-              >
-                <UserAvatar user={u} size="xs" />
-                {u.name}
-                <RoleBadge role={userRole(u)} className="ml-auto" />
-              </CommandItem>
-            ))}
+          <CommandGroup heading={isDemo ? "View as (demo roles)" : "Account"}>
+            {/* Demo-only: on a real backend you are one account, so the
+                switcher is not rendered and `requestSwitch` never runs. */}
+            {isDemo &&
+              state.users.map((u) => (
+                <CommandItem
+                  key={u.id}
+                  value={`view as ${u.name} ${userRole(u).name}`}
+                  disabled={u.id === currentUser.id}
+                  onSelect={() =>
+                    run(() => {
+                      const needs2fa = twoFactorStatus(u.id) === "enrolled";
+                      requestSwitch(u.id);
+                      if (!needs2fa) {
+                        toast(`Now viewing as ${u.name}`, {
+                          description: userRole(u).description,
+                        });
+                      }
+                    })
+                  }
+                >
+                  <UserAvatar user={u} size="xs" />
+                  {u.name}
+                  <RoleBadge role={userRole(u)} className="ml-auto" />
+                </CommandItem>
+              ))}
             <CommandItem value="profile current" disabled>
               <UserRound />
               Signed in as {currentUser.name}

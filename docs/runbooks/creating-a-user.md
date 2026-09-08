@@ -10,6 +10,9 @@ This runbook covers three things, in the order you need them:
 2. [Promote the first admin](#2-promote-the-first-admin) — do this once, for yourself.
 3. [Add a teammate](#3-add-a-teammate) — do this for every person after that.
 
+Then, when you need it: [Two-factor](#two-factor) — what the app's controls do,
+and the one case you have to handle in the dashboard.
+
 Everything below happens in the Supabase dashboard for the project you are
 running (**lumina-dev** `nsioivydefazicxnozqw` for development; the production
 project is separate — check the ref in the URL before you touch anything).
@@ -24,12 +27,27 @@ give them a Member profile with real access to your team's channels and boards.
 
 **Authentication → Sign In / Providers → Email**
 
-- Turn **Allow new users to sign up** (also shown as "Enable sign ups") **off**.
+- Turn **Enable email signups** off. Depending on your dashboard's age the same
+  switch is labelled **Allow new users to sign up** or **Enable sign ups**; there
+  is only one, and it lives in the Email provider's panel.
 - Leave **Confirm email** as you find it; with sign-ups off, nobody reaches it.
 - Save.
 
 With this off, the only way an account comes into existence is an admin adding
 one by hand — which is the point.
+
+Do it on **lumina-dev** now, and again on **lumina-prod** at cutover. The setting
+is per project, so turning it off on one says nothing about the other.
+
+**Why the app cannot do this for you.** Lumina ships as a static site with only
+the publishable key. Sign-up is an Auth *server* setting; nothing the browser
+holds can change it, and nothing in the app can stop `signUp()` being called
+against your project directly with a key that is, by design, public. The
+dashboard switch is the only thing that actually closes the door. The app never
+calls `signUp()` — that is a design decision, not a control.
+
+To confirm it took effect, look for a new account you did not create in
+**Authentication → Users**. There should never be one.
 
 ---
 
@@ -153,4 +171,41 @@ cascades and removes their profile too).
 That is the `profiles.mfa_required` column, set from the app by a holder of
 `members.manage`. It is deliberately not settable by the person it applies to —
 a member cannot clear their own requirement, and the database refuses the write
-even though members can otherwise edit their own profile.
+even though members can otherwise edit their own profile. See
+[Two-factor](#two-factor) below for exactly what the app's controls can do.
+
+---
+
+## Two-factor
+
+Two-factor is Supabase's own TOTP MFA. A person enrols from **their account
+menu → Set up two-factor**, or is walked through enrolment at sign-in when you
+have required it of them. Codes are verified by Supabase, not by the browser.
+
+### What the People page can do
+
+**Members → (person) → the two-factor button** writes `profiles.mfa_required`:
+
+| Control | Effect |
+|---|---|
+| Require two-factor | `mfa_required = true`. They must enrol at their next sign-in before they reach the app. |
+| Cancel requirement | `mfa_required = false`. An authenticator they already set up keeps working. |
+
+### What it cannot do, and why
+
+**You cannot see whether someone else has actually enrolled, and you cannot
+remove their authenticator.** Both are `auth.admin` operations, and those need
+the secret key — which bypasses every RLS policy and must never be in a browser
+bundle. The app holds only the publishable key, so it does not pretend to know:
+another person's badge reports *required* or *not required*, never *enrolled*.
+The reset and disable actions therefore appear only on your own account, where
+unenrolling is an ordinary self-service call.
+
+**So: when someone loses their phone**, do it in the dashboard —
+**Authentication → Users → (the person) → Remove MFA factor** (older dashboards
+list it under the row's ⋯ menu). Leave `mfa_required` on, and they will be made
+to enrol a new authenticator the next time they sign in.
+
+Giving the app that button needs a server that can hold the secret key — an Edge
+Function gated on `members.manage`. That is Phase 2 work; until then the
+dashboard is the documented path, not a workaround.

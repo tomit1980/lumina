@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { OtpInput } from "@/components/auth/otp-input";
 import { TwoFactorQr } from "@/components/auth/two-factor-qr";
 import { DEMO_PASSWORD, useAuth, type LoginOutcome } from "@/lib/auth";
+import { backendKind } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 type Step = "credentials" | "totp" | "enroll";
@@ -29,6 +30,12 @@ const DEMO_ACCOUNTS = [
 ];
 
 export function LoginScreen() {
+  /** The demo is the *only* thing the one-click logins and the printed
+   *  password are for. On a real backend they are not rendered — and
+   *  `fillDemo` below, their only caller, therefore cannot run. Read per
+   *  render so tests can mount this screen under either flag. */
+  const isDemo = backendKind !== "supabase";
+
   const {
     login,
     submitLoginTotp,
@@ -122,12 +129,14 @@ export function LoginScreen() {
           {step === "credentials" && (
             <form onSubmit={submitCredentials} className="flex flex-col gap-4">
               <div className="grid gap-1.5">
-                <Label htmlFor="login-id">Username or email</Label>
+                <Label htmlFor="login-id">
+                  {isDemo ? "Username or email" : "Work email"}
+                </Label>
                 <Input
                   id="login-id"
                   autoFocus
-                  autoComplete="username"
-                  placeholder="vlad"
+                  autoComplete={isDemo ? "username" : "email"}
+                  placeholder={isDemo ? "vlad" : "you@company.com"}
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                 />
@@ -174,6 +183,7 @@ export function LoginScreen() {
                   <TwoFactorQr
                     uri={loginEnrollment.uri}
                     secret={loginEnrollment.secret}
+                    qrCode={loginEnrollment.qrCode}
                   />
                 </div>
               )}
@@ -225,7 +235,7 @@ export function LoginScreen() {
           )}
         </div>
 
-        {step === "credentials" && (
+        {isDemo && step === "credentials" && (
           <div className="mt-4 rounded-xl border border-dashed bg-muted/30 p-3">
             <p className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
               Demo accounts · password{" "}
@@ -250,8 +260,9 @@ export function LoginScreen() {
         )}
 
         <p className="mt-4 text-center text-[11px] text-muted-foreground/70">
-          Local demo · passwords are PBKDF2-hashed and 2FA is real TOTP, but this
-          runs entirely in your browser.
+          {isDemo
+            ? "Local demo · everything runs in your browser, and any of the accounts above signs in with the password shown."
+            : "Accounts are created by an administrator. Trouble signing in? Ask them to check your account."}
         </p>
       </motion.div>
     </div>

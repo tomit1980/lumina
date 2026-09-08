@@ -129,6 +129,34 @@ export function addTask(
   return { ...state, tasks: [...state.tasks, withDefaults] };
 }
 
+/** Teaches jsdom the three browser APIs Radix's popper-backed menus need
+ *  before they will open. Opt-in — call it at the top of a suite that opens a
+ *  dropdown; suites that don't are left alone.
+ *
+ *  Two things to know when driving one of those menus from a test:
+ *  - open it with a plain `fireEvent.keyDown(trigger, { key: "Enter" })`.
+ *    Wrapping that in an async `act()` hangs: floating-ui keeps repositioning
+ *    the open menu, `act` keeps draining the work it schedules, and the test
+ *    times out ~30s later having done everything correctly.
+ *  - unmount before the test ends, so that loop stops. */
+export function installMenuShims() {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  globalThis.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver;
+  Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.releasePointerCapture = () => {};
+  }
+  // Deliberately NOT shimming requestAnimationFrame. Replacing jsdom's 16ms
+  // repaint clock with a setTimeout(0) turns the popper's frame loop into a
+  // busy loop that starves the whole worker — every later render times out.
+}
+
 /** `render()` plus the microtask that resolves `backend.hydrate()`, for the
  *  suites that render real components under a `StoreProvider` rather than
  *  taking the hook handle. Without this the store is still showing its

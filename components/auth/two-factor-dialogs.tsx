@@ -21,7 +21,11 @@ import { useUI } from "@/components/ui-context";
 import { useAuth, type EnrollmentDraft } from "@/lib/auth";
 import { useStore } from "@/lib/store";
 
-/** Prompts for a TOTP code when switching into a 2FA-protected demo account. */
+/** Prompts for a TOTP code when switching into a 2FA-protected demo account.
+ *
+ *  Demo-only, and reached only through `requestSwitch`. Under the Supabase flag
+ *  `components/providers.tsx` does not render this at all and `pendingSwitch`
+ *  is permanently null, so there is no path that opens it. */
 export function SwitchTwoFactorPrompt() {
   const { pendingSwitch, submitSwitchTotp, cancelSwitch } = useAuth();
   const { state } = useStore();
@@ -113,12 +117,20 @@ export function SelfEnrollDialog() {
   const [error, setError] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
 
+  // Enrolling is a server round-trip now (`auth.mfa.enroll`), so the draft
+  // arrives asynchronously and the dialog shows its skeleton until it does.
   React.useEffect(() => {
-    if (securityDialogOpen && !alreadyOn) {
-      setDraft(beginSelfEnrollment(currentUser.id));
-      setCode("");
-      setError(false);
-    }
+    if (!securityDialogOpen || alreadyOn) return;
+    let cancelled = false;
+    setDraft(null);
+    setCode("");
+    setError(false);
+    void beginSelfEnrollment(currentUser.id).then((next) => {
+      if (!cancelled) setDraft(next);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [securityDialogOpen, currentUser.id, alreadyOn]);
 
@@ -161,7 +173,7 @@ export function SelfEnrollDialog() {
         ) : (
           draft && (
             <div className="flex flex-col gap-4">
-              <TwoFactorQr uri={draft.uri} secret={draft.secret} />
+              <TwoFactorQr uri={draft.uri} secret={draft.secret} qrCode={draft.qrCode} />
               <div className="grid gap-1.5">
                 <Label htmlFor="self-otp">Enter the 6-digit code to confirm</Label>
                 <OtpInput

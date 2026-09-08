@@ -55,6 +55,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
+import { backendKind } from "@/lib/backend";
 import { isMineOrUnclaimed } from "@/lib/permissions";
 import { canUserSeeTaskProject, getUnreadCount, useStore } from "@/lib/store";
 import type { AppState, Task } from "@/lib/types";
@@ -213,6 +214,14 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   } = useStore();
   const { requestSwitch, twoFactorStatus, logout, resetAll } = useAuth();
   const selfTwoFactor = twoFactorStatus(currentUser.id);
+
+  /** "View as" and "Reset demo data" are demo affordances: on a real backend
+   *  there is one account per person and the workspace is not disposable, so
+   *  neither is rendered — and `requestSwitch`/`resetAll`, whose only callers
+   *  they are, therefore never run. Two-factor is the mirror image: real and
+   *  server-enforced on Supabase, withdrawn from the demo along with the
+   *  hand-rolled TOTP that used to back it (see lib/auth.tsx). */
+  const isDemo = backendKind !== "supabase";
 
   // Reminder preferences (read from localStorage on the client after mount).
   const [soundOn, setSoundOn] = React.useState(true);
@@ -586,43 +595,49 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" className="w-64">
-            <DropdownMenuLabel className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-              View as — demo the roles
-            </DropdownMenuLabel>
-            {state.users.map((u) => (
-              <DropdownMenuItem
-                key={u.id}
-                disabled={u.id === currentUser.id}
-                onSelect={() => {
-                  const needs2fa = twoFactorStatus(u.id) === "enrolled";
-                  requestSwitch(u.id);
-                  if (!needs2fa) {
-                    toast(`Now viewing as ${u.name}`, {
-                      description: userRole(u).description,
-                    });
-                  }
-                }}
-              >
-                <UserAvatar user={u} size="xs" />
-                <span className="flex-1">{u.name}</span>
-                {twoFactorStatus(u.id) === "enrolled" && (
-                  <ShieldCheck className="size-3 text-emerald-500" />
-                )}
-                <RoleBadge role={userRole(u)} />
+            {isDemo && (
+              <>
+                <DropdownMenuLabel className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+                  View as — demo the roles
+                </DropdownMenuLabel>
+                {state.users.map((u) => (
+                  <DropdownMenuItem
+                    key={u.id}
+                    disabled={u.id === currentUser.id}
+                    onSelect={() => {
+                      const needs2fa = twoFactorStatus(u.id) === "enrolled";
+                      requestSwitch(u.id);
+                      if (!needs2fa) {
+                        toast(`Now viewing as ${u.name}`, {
+                          description: userRole(u).description,
+                        });
+                      }
+                    }}
+                  >
+                    <UserAvatar user={u} size="xs" />
+                    <span className="flex-1">{u.name}</span>
+                    {twoFactorStatus(u.id) === "enrolled" && (
+                      <ShieldCheck className="size-3 text-emerald-500" />
+                    )}
+                    <RoleBadge role={userRole(u)} />
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {!isDemo && (
+              <DropdownMenuItem onSelect={() => setSecurityDialogOpen(true)}>
+                <ShieldCheck
+                  className={cn(
+                    "size-4",
+                    selfTwoFactor === "enrolled" && "text-emerald-500"
+                  )}
+                />
+                {selfTwoFactor === "enrolled"
+                  ? "Two-factor is on"
+                  : "Set up two-factor"}
               </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => setSecurityDialogOpen(true)}>
-              <ShieldCheck
-                className={cn(
-                  "size-4",
-                  selfTwoFactor === "enrolled" && "text-emerald-500"
-                )}
-              />
-              {selfTwoFactor === "enrolled"
-                ? "Two-factor is on"
-                : "Set up two-factor"}
-            </DropdownMenuItem>
+            )}
             <DropdownMenuItem
               onSelect={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
             >
@@ -661,18 +676,22 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                 Enable desktop notifications
               </DropdownMenuItem>
             )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => {
-                void resetDemo();
-                void resetAll();
-                router.push("/");
-                toast.success("Demo data reset — signed out");
-              }}
-            >
-              <RotateCcw className="size-4" />
-              Reset demo data
-            </DropdownMenuItem>
+            {isDemo && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => {
+                    void resetDemo();
+                    void resetAll();
+                    router.push("/");
+                    toast.success("Demo data reset — signed out");
+                  }}
+                >
+                  <RotateCcw className="size-4" />
+                  Reset demo data
+                </DropdownMenuItem>
+              </>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => {

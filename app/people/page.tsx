@@ -39,6 +39,7 @@ import { RoleBadge } from "@/components/role-badge";
 import { RoleDialog } from "@/components/role-dialog";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth, type TwoFactorStatus } from "@/lib/auth";
+import { backendKind } from "@/lib/backend";
 import {
   ALL_PERMISSIONS,
   PERMISSION_GROUPS,
@@ -324,7 +325,11 @@ export default function PeoplePage() {
                     <TooltipContent>Message {user.name.split(" ")[0]}</TooltipContent>
                   </Tooltip>
                 )}
-                {manageRoles && (
+                {/* Two-factor is real only on a real backend: the local demo
+                    has no server to verify a code against (see lib/auth.tsx),
+                    so the control is not rendered there rather than offering
+                    buttons that would do nothing. */}
+                {manageRoles && backendKind === "supabase" && (
                   <TwoFactorControl
                     userName={user.name.split(" ")[0]}
                     status={twoFactorStatus(user.id)}

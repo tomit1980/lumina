@@ -7,28 +7,38 @@ import { Check, Copy } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-/** Renders the otpauth QR plus the base32 secret for manual entry. */
+/** Renders the otpauth QR plus the base32 secret for manual entry.
+ *
+ *  `qrCode` is a ready-made image (data URI): Supabase's `mfa.enroll()` returns
+ *  one, so the Supabase path never generates a QR. The local demo path has no
+ *  server to ask and passes only `uri`, which is rendered through the `qrcode`
+ *  package below — that is the sole remaining use of the dependency. */
 export function TwoFactorQr({
   uri,
   secret,
+  qrCode,
   className,
 }: {
   uri: string;
   secret: string;
+  qrCode?: string;
   className?: string;
 }) {
-  const [dataUrl, setDataUrl] = React.useState<string | null>(null);
+  const [generated, setGenerated] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
 
   React.useEffect(() => {
+    if (qrCode) return;
     let active = true;
     QRCode.toDataURL(uri, { margin: 1, width: 220, errorCorrectionLevel: "M" })
-      .then((url) => active && setDataUrl(url))
-      .catch(() => active && setDataUrl(null));
+      .then((url) => active && setGenerated(url))
+      .catch(() => active && setGenerated(null));
     return () => {
       active = false;
     };
-  }, [uri]);
+  }, [uri, qrCode]);
+
+  const dataUrl = qrCode ?? generated;
 
   const copy = () => {
     navigator.clipboard?.writeText(secret).then(() => {

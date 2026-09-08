@@ -1,45 +1,48 @@
 "use client";
 
-import * as React from "react";
+/**
+ * Authentication, in two implementations behind one context.
+ *
+ * `backendKind` (lib/backend/index.ts) picks which one mounts:
+ *
+ * - **local** — the browser-only demo the public GitHub Pages build ships.
+ *   Any seeded handle plus `DEMO_PASSWORD` signs you in. There is no
+ *   cryptography here at all any more: `lib/crypto.ts` (PBKDF2 password
+ *   hashing, hand-rolled RFC-6238 TOTP, an AES-GCM "vault" whose key shipped
+ *   in the bundle) is deleted, and with it the demo's two-factor. See the
+ *   note on `twoFactorStatus` below.
+ * - **supabase** — real accounts. `signInWithPassword` / `signOut` /
+ *   `onAuthStateChange`, and genuine server-side two-factor through
+ *   Supabase's native TOTP MFA.
+ *
+ * Both satisfy the same `AuthValue`, so `components/auth/login-screen.tsx`
+ * and its three-step machine are shared. The demo-only members of that shape
+ * (`requestSwitch`, `pendingSwitch`, `submitSwitchTotp`, `cancelSwitch`,
+ * `resetAll`) are inert no-ops under the Supabase flag *and* not rendered by
+ * any caller there — see components/app-shell.tsx, components/command-palette.tsx
+ * and components/providers.tsx. The Phase 3 cutover deletes them outright.
+ */
 
-import {
-  decryptJSON,
-  encryptJSON,
-  generateTotpSecret,
-  hashPassword,
-  totpAuthUri,
-  verifyPassword,
-  verifyTotp,
-  type EncryptedBlob,
-  type PasswordHash,
-} from "./crypto";
+import * as React from "react";
+import { toast } from "sonner";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { backendKind } from "./backend";
+import type { Database } from "./database.types";
 import { createSeed } from "./seed";
 
-const AUTH_KEY = "lumina:auth";
 const SESSION_KEY = "lumina:session";
-const AUTH_VERSION = 1;
+/** The credential blob the deleted `lib/crypto.ts` used to encrypt. Nothing
+ *  reads it any more; it is removed on sign-out so stale copies don't linger
+ *  in browsers that ran an older build. */
+const LEGACY_AUTH_KEY = "lumina:auth";
 const WORKSPACE = "Lumina";
 
-/** Demo password for every seeded account (surfaced on the login screen). */
+/** Demo password for every seeded account (surfaced on the login screen —
+ *  under the local flag only). */
 export const DEMO_PASSWORD = "lumina24";
 
 export type TwoFactorStatus = "off" | "pending" | "enrolled";
-
-interface TwoFactor {
-  status: TwoFactorStatus;
-  /** base32 secret — only present once enrolled. */
-  secret?: string;
-}
-
-interface AuthRecord {
-  passwordHash: PasswordHash;
-  twoFactor: TwoFactor;
-}
-
-interface AuthStore {
-  version: number;
-  records: Record<string, AuthRecord>;
-}
 
 /** What a login attempt needs next. */
 export type LoginOutcome =
@@ -53,11 +56,19 @@ export interface EnrollmentDraft {
   account: string;
   secret: string;
   uri: string;
+  /** A ready-made QR image (data URI). Supabase returns one from `enroll()`,
+   *  so the Supabase path never generates a QR; the local path has no server
+   *  to ask and leaves this undefined, and `TwoFactorQr` renders the `uri`
+   *  through the `qrcode` package instead. */
+  qrCode?: string;
+  /** Supabase MFA factor id — the handle `challenge`/`verify`/`unenroll` need. */
+  factorId?: string;
 }
 
-interface AuthValue {
+export interface AuthValue {
   ready: boolean;
-  /** Authenticated user id, or null when logged out. */
+  /** Authenticated user id, or null when logged out. Under Supabase this is
+   *  the `profiles.id`, which is the auth uid. */
   session: string | null;
 
   login: (identifier: string, password: string) => Promise<LoginOutcome>;
@@ -68,7 +79,7 @@ interface AuthValue {
   loginEnrollment: EnrollmentDraft | null;
   logout: () => void;
 
-  /** Demo account switch — enforces 2FA when the target has it enrolled. */
+  /** Demo account switch. Inert under the Supabase flag. */
   requestSwitch: (userId: string) => Promise<void>;
   pendingSwitch: string | null;
   submitSwitchTotp: (code: string) => Promise<boolean>;
@@ -81,86 +92,92 @@ interface AuthValue {
   clearTwoFactorRequirement: (userId: string) => void;
   /** Admin: turn 2FA off entirely. */
   disableTwoFactor: (userId: string) => void;
-  /** Admin: force re-enrollment (keeps it required, drops the secret). */
+  /** Admin: force re-enrollment (keeps it required, drops the factor). */
   resetTwoFactor: (userId: string) => void;
 
-  /** Self-service enrollment (from the account menu). */
-  beginSelfEnrollment: (userId: string) => EnrollmentDraft;
+  /** Self-service enrollment (from the account menu). Resolves null when the
+   *  backend can't start one — always, on the local path. */
+  beginSelfEnrollment: (userId: string) => Promise<EnrollmentDraft | null>;
   confirmSelfEnrollment: (draft: EnrollmentDraft, code: string) => Promise<boolean>;
 
+  /** Demo data wipe. Inert under the Supabase flag. */
   resetAll: () => Promise<void>;
 }
 
 const AuthContext = React.createContext<AuthValue | null>(null);
 
-async function buildSeedStore(): Promise<AuthStore> {
-  const seed = createSeed();
-  const records: Record<string, AuthRecord> = {};
-  // Each account gets its own salt → distinct hash for the same demo password.
-  await Promise.all(
-    seed.users.map(async (user) => {
-      records[user.id] = {
-        passwordHash: await hashPassword(DEMO_PASSWORD),
-        twoFactor: { status: "off" },
-      };
-    })
-  );
-  return { version: AUTH_VERSION, records };
+type Client = SupabaseClient<Database>;
+
+/**
+ * The browser client, loaded only when this build actually runs on Supabase.
+ *
+ * `lib/supabase.ts` throws at import time when `NEXT_PUBLIC_SUPABASE_URL` /
+ * `..._ANON_KEY` are missing, which is the correct behaviour for a real
+ * deployment and the wrong behaviour for a local-flag build or a unit test
+ * that never talks to Supabase at all. A dynamic import keeps that module out
+ * of the graph unless the Supabase provider mounts without an injected client.
+ */
+let clientPromise: Promise<Client> | null = null;
+function browserClient(): Promise<Client> {
+  clientPromise ??= import("./supabase").then((m) => m.supabase);
+  return clientPromise;
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [ready, setReady] = React.useState(false);
-  const [store, setStore] = React.useState<AuthStore | null>(null);
-  const [session, setSession] = React.useState<string | null>(null);
+export function AuthProvider({
+  children,
+  client,
+}: React.PropsWithChildren<{
+  /** Test seam, mirroring `StoreProvider`'s `backend` prop. Production never
+   *  passes it — the provider loads the real browser client itself. */
+  client?: Client;
+}>) {
+  return backendKind === "supabase" ? (
+    <SupabaseAuthProvider client={client}>{children}</SupabaseAuthProvider>
+  ) : (
+    <LocalAuthProvider>{children}</LocalAuthProvider>
+  );
+}
 
-  // Transient login state (not persisted).
-  const [pendingLoginUser, setPendingLoginUser] = React.useState<string | null>(null);
-  const [loginEnrollment, setLoginEnrollment] =
-    React.useState<EnrollmentDraft | null>(null);
+export function useAuth(): AuthValue {
+  const ctx = React.useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
+  return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// Local — the browser-only demo
+// ---------------------------------------------------------------------------
+
+/**
+ * Two-factor is not part of the local demo any more.
+ *
+ * It used to be genuine RFC-6238 TOTP, implemented by hand in `lib/crypto.ts`
+ * alongside the PBKDF2 password hashing this task retires. Deleting that
+ * module (a requirement of the auth swap: no cryptography left to maintain in
+ * a build with no server to verify against) takes the demo's TOTP with it,
+ * because there is no browser-native primitive to replace HMAC-SHA1 with. The
+ * alternative — a "2FA" screen that accepts any six digits — would be a lie in
+ * the UI, so the flow is withdrawn from the local path instead of faked: the
+ * People-page control and the account-menu security item are not rendered, and
+ * `login` never returns the `totp` or `enroll` step. Two-factor now exists only
+ * where it is real and server-enforced, on the Supabase path.
+ */
+function LocalAuthProvider({ children }: React.PropsWithChildren) {
+  const [ready, setReady] = React.useState(false);
+  const [session, setSession] = React.useState<string | null>(null);
   const [pendingSwitch, setPendingSwitch] = React.useState<string | null>(null);
 
-  // Resolve display names for otpauth accounts without importing the store.
+  // Resolve handles without importing the store.
   const usersRef = React.useRef(createSeed().users);
 
   React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let loaded: AuthStore | null = null;
-      try {
-        const raw = window.localStorage.getItem(AUTH_KEY);
-        if (raw) {
-          const blob = JSON.parse(raw) as EncryptedBlob;
-          const decoded = await decryptJSON<AuthStore>(blob);
-          if (decoded?.version === AUTH_VERSION) loaded = decoded;
-        }
-      } catch {
-        // Corrupt/undecryptable → re-seed fresh credentials.
-      }
-      if (!loaded) loaded = await buildSeedStore();
-
-      const savedSession = window.localStorage.getItem(SESSION_KEY);
-      if (cancelled) return;
-      setStore(loaded);
-      if (savedSession && loaded.records[savedSession]) setSession(savedSession);
-      setReady(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
+    let saved: string | null = null;
+    try {
+      saved = window.localStorage.getItem(SESSION_KEY);
+    } catch {}
+    if (saved && usersRef.current.some((u) => u.id === saved)) setSession(saved);
+    setReady(true);
   }, []);
-
-  // Persist the credential store, encrypted at rest.
-  React.useEffect(() => {
-    if (!store) return;
-    (async () => {
-      try {
-        const blob = await encryptJSON(store);
-        window.localStorage.setItem(AUTH_KEY, JSON.stringify(blob));
-      } catch {
-        // Storage unavailable — auth still works for this session.
-      }
-    })();
-  }, [store]);
 
   const persistSession = React.useCallback((userId: string | null) => {
     setSession(userId);
@@ -168,10 +185,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (userId) window.localStorage.setItem(SESSION_KEY, userId);
       else window.localStorage.removeItem(SESSION_KEY);
     } catch {}
-  }, []);
-
-  const accountName = React.useCallback((userId: string) => {
-    return usersRef.current.find((u) => u.id === userId)?.handle ?? userId;
   }, []);
 
   const value = React.useMemo<AuthValue>(() => {
@@ -187,46 +200,335 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return user?.id ?? null;
     };
 
-    const draftFor = (userId: string): EnrollmentDraft => {
-      const secret = generateTotpSecret();
-      const account = accountName(userId);
-      return {
-        userId,
-        account,
-        secret,
-        uri: totpAuthUri({ secret, account, issuer: WORKSPACE }),
-      };
+    const login: AuthValue["login"] = async (identifier, password) => {
+      const userId = findUserId(identifier);
+      if (!userId) return { step: "error", message: "No account matches those details." };
+      // A demo password held in a public bundle: there is nothing to protect,
+      // so a plain comparison is the honest implementation.
+      if (password !== DEMO_PASSWORD) {
+        return { step: "error", message: "Incorrect password." };
+      }
+      persistSession(userId);
+      return { step: "success" };
     };
 
-    const patchRecord = (userId: string, fn: (r: AuthRecord) => AuthRecord) =>
-      setStore((s) => {
-        if (!s || !s.records[userId]) return s;
-        return {
-          ...s,
-          records: { ...s.records, [userId]: fn(s.records[userId]) },
-        };
-      });
+    // Unreachable: `login` never returns the totp/enroll step on this path.
+    const noTwoFactor = async (): Promise<LoginOutcome> => ({
+      step: "error",
+      message: "Two-factor isn't part of the local demo.",
+    });
 
-    const login: AuthValue["login"] = async (identifier, password) => {
-      setPendingLoginUser(null);
-      setLoginEnrollment(null);
-      if (!store) return { step: "error", message: "Still loading — try again." };
-      const userId = findUserId(identifier);
-      const record = userId ? store.records[userId] : undefined;
-      if (!userId || !record) {
-        return { step: "error", message: "No account matches those details." };
+    const logout = () => {
+      persistSession(null);
+      setPendingSwitch(null);
+    };
+
+    return {
+      ready,
+      session,
+      login,
+      submitLoginTotp: noTwoFactor,
+      submitEnrollment: noTwoFactor,
+      cancelPendingLogin: () => setPendingSwitch(null),
+      loginEnrollment: null,
+      logout,
+
+      requestSwitch: async (userId) => {
+        if (userId !== session) persistSession(userId);
+      },
+      pendingSwitch,
+      submitSwitchTotp: async () => false,
+      cancelSwitch: () => setPendingSwitch(null),
+
+      twoFactorStatus: () => "off",
+      requireTwoFactor: () => {},
+      clearTwoFactorRequirement: () => {},
+      disableTwoFactor: () => {},
+      resetTwoFactor: () => {},
+      beginSelfEnrollment: async () => null,
+      confirmSelfEnrollment: async () => false,
+
+      resetAll: async () => {
+        try {
+          window.localStorage.removeItem(LEGACY_AUTH_KEY);
+        } catch {}
+        persistSession(null);
+        setPendingSwitch(null);
+      },
+    };
+  }, [ready, session, pendingSwitch, persistSession]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+// ---------------------------------------------------------------------------
+// Supabase — real accounts, native TOTP MFA
+// ---------------------------------------------------------------------------
+
+type ProfileRow = Pick<
+  Database["public"]["Tables"]["profiles"]["Row"],
+  "id" | "handle" | "email" | "mfa_required"
+>;
+
+async function fetchProfile(client: Client, uid: string): Promise<ProfileRow | null> {
+  const { data, error } = await client
+    .from("profiles")
+    .select("id, handle, email, mfa_required")
+    .eq("id", uid)
+    .maybeSingle();
+  return error ? null : data;
+}
+
+/** The user's own verified TOTP factor, if they have one. `listFactors().totp`
+ *  is already narrowed to verified factors by supabase-js. */
+async function verifiedFactorId(client: Client): Promise<string | null> {
+  try {
+    const { data, error } = await client.auth.mfa.listFactors();
+    if (error || !data) return null;
+    return data.totp[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Drops the caller's own factors. Only ever their own: removing someone
+ *  else's needs `auth.admin`, which needs the secret key, which must never
+ *  reach a browser bundle. */
+async function unenrollOwnFactors(client: Client): Promise<void> {
+  try {
+    const { data } = await client.auth.mfa.listFactors();
+    for (const factor of data?.all ?? []) {
+      await client.auth.mfa.unenroll({ factorId: factor.id });
+    }
+  } catch {}
+}
+
+async function startEnrollment(
+  client: Client,
+  userId: string,
+  account: string
+): Promise<EnrollmentDraft | null> {
+  try {
+    // Supabase keeps unverified factors around, so an abandoned attempt would
+    // pile a second one on top of the first. Clear them before enrolling.
+    const { data: existing } = await client.auth.mfa.listFactors();
+    for (const factor of existing?.all ?? []) {
+      if (factor.status !== "verified") {
+        await client.auth.mfa.unenroll({ factorId: factor.id });
       }
-      const ok = await verifyPassword(password, record.passwordHash);
-      if (!ok) return { step: "error", message: "Incorrect password." };
+    }
+    const { data, error } = await client.auth.mfa.enroll({
+      factorType: "totp",
+      issuer: WORKSPACE,
+    });
+    if (error || !data) return null;
+    return {
+      userId,
+      account,
+      secret: data.totp.secret,
+      uri: data.totp.uri,
+      qrCode: data.totp.qr_code,
+      factorId: data.id,
+    };
+  } catch {
+    return null;
+  }
+}
 
-      const { status } = record.twoFactor;
-      if (status === "enrolled") {
-        setPendingLoginUser(userId);
+async function challengeAndVerify(
+  client: Client,
+  factorId: string,
+  code: string
+): Promise<boolean> {
+  try {
+    const challenge = await client.auth.mfa.challenge({ factorId });
+    if (challenge.error || !challenge.data) return false;
+    const verified = await client.auth.mfa.verify({
+      factorId,
+      challengeId: challenge.data.id,
+      code: code.replace(/\s/g, ""),
+    });
+    return !verified.error;
+  } catch {
+    return false;
+  }
+}
+
+async function signOutQuietly(client: Client): Promise<void> {
+  try {
+    await client.auth.signOut();
+  } catch {}
+}
+
+function SupabaseAuthProvider({
+  children,
+  client: injected,
+}: React.PropsWithChildren<{ client?: Client }>) {
+  const [client, setClient] = React.useState<Client | null>(injected ?? null);
+  const [ready, setReady] = React.useState(false);
+  const [session, setSession] = React.useState<string | null>(null);
+  const [loginEnrollment, setLoginEnrollment] = React.useState<EnrollmentDraft | null>(
+    null
+  );
+  /** The half-finished login held at the TOTP/enrolment step. */
+  const [pending, setPending] = React.useState<{
+    profileId: string;
+    factorId: string;
+  } | null>(null);
+  /** `profiles.mfa_required`, by user id. Profiles are readable by any signed-in
+   *  user, so this is one small read that keeps `twoFactorStatus` synchronous. */
+  const [mfaRequired, setMfaRequired] = React.useState<Record<string, boolean>>({});
+  const [selfEnrolled, setSelfEnrolled] = React.useState(false);
+
+  /**
+   * True while a login is waiting on a second factor. Supabase has already
+   * issued a session at that point (aal1) and `onAuthStateChange` fires
+   * immediately — publishing it would let anyone skip the second factor by
+   * simply not answering it. A ref, not state: the listener must see the
+   * current value, not the one captured when it was registered.
+   */
+  const gated = React.useRef(false);
+  /** The initial `getSession()` pass owns the first answer; until it finishes,
+   *  the listener stays quiet rather than racing it. */
+  const initialised = React.useRef(false);
+
+  React.useEffect(() => {
+    if (injected) {
+      setClient(injected);
+      return;
+    }
+    let cancelled = false;
+    browserClient().then(
+      (c) => {
+        if (!cancelled) setClient(c);
+      },
+      () => {
+        // Misconfigured build: surface the login screen rather than a spinner
+        // that never resolves.
+        if (!cancelled) setReady(true);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [injected]);
+
+  React.useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+
+    const publish = async (uid: string | null) => {
+      if (cancelled || !initialised.current) return;
+      if (!uid) {
+        setSession(null);
+        setSelfEnrolled(false);
+        setMfaRequired({});
+        return;
+      }
+      if (gated.current) return;
+      const profile = await fetchProfile(client, uid);
+      if (cancelled) return;
+      setSession(profile ? profile.id : null);
+    };
+
+    void (async () => {
+      const { data } = await client.auth.getSession();
+      const uid = data.session?.user.id ?? null;
+      if (uid) {
+        const profile = await fetchProfile(client, uid);
+        const factorId = await verifiedFactorId(client);
+        if (!profile || (profile.mfa_required && !factorId)) {
+          // Either the profile row never appeared (see the runbook), or a
+          // forced enrolment was never completed. There is no safe half-state
+          // to restore into, and leaving the session would let a reload walk
+          // straight past the enrolment step — so start clean.
+          await signOutQuietly(client);
+        } else if (!cancelled) {
+          setSession(profile.id);
+          setSelfEnrolled(!!factorId);
+        }
+      }
+      initialised.current = true;
+      if (!cancelled) setReady(true);
+    })();
+
+    const { data: sub } = client.auth.onAuthStateChange((_event, next) => {
+      // Deferred: supabase-js holds an internal lock across this callback, and
+      // calling back into the client from inside it can deadlock.
+      const uid = next?.user.id ?? null;
+      setTimeout(() => void publish(uid), 0);
+    });
+
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
+  }, [client]);
+
+  // Everyone's requirement flag, plus our own enrolment state, once signed in.
+  React.useEffect(() => {
+    if (!client || !session) return;
+    let cancelled = false;
+    void (async () => {
+      const { data } = await client.from("profiles").select("id, mfa_required");
+      if (!cancelled && data) {
+        setMfaRequired(
+          Object.fromEntries(data.map((p) => [p.id, p.mfa_required] as const))
+        );
+      }
+      const factorId = await verifiedFactorId(client);
+      if (!cancelled) setSelfEnrolled(!!factorId);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, session]);
+
+  const value = React.useMemo<AuthValue>(() => {
+    const login: AuthValue["login"] = async (identifier, password) => {
+      if (!client) return { step: "error", message: "Still connecting — try again." };
+      const email = identifier.trim();
+      if (!email.includes("@")) {
+        return { step: "error", message: "Sign in with your work email address." };
+      }
+
+      setPending(null);
+      setLoginEnrollment(null);
+      // Hold the session back until we know whether a second factor is owed.
+      gated.current = true;
+
+      const { data, error } = await client.auth.signInWithPassword({ email, password });
+      if (error || !data.user) {
+        gated.current = false;
+        // One message for both "no such account" and "wrong password": telling
+        // them apart tells an attacker which addresses exist.
+        return { step: "error", message: "Incorrect email or password." };
+      }
+
+      const profile = await fetchProfile(client, data.user.id);
+      if (!profile) {
+        await signOutQuietly(client);
+        gated.current = false;
+        return {
+          step: "error",
+          message: "This account has no Lumina profile yet — ask an admin to finish setting it up.",
+        };
+      }
+
+      const factorId = await verifiedFactorId(client);
+      if (factorId) {
+        setPending({ profileId: profile.id, factorId });
         return { step: "totp" };
       }
-      if (status === "pending") {
-        const draft = draftFor(userId);
-        setPendingLoginUser(userId);
+
+      if (profile.mfa_required) {
+        const draft = await startEnrollment(client, profile.id, profile.handle);
+        if (!draft?.factorId) {
+          await signOutQuietly(client);
+          gated.current = false;
+          return { step: "error", message: "Couldn't start two-factor setup. Try again." };
+        }
+        setPending({ profileId: profile.id, factorId: draft.factorId });
         setLoginEnrollment(draft);
         return {
           step: "enroll",
@@ -235,165 +537,137 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           account: draft.account,
         };
       }
-      persistSession(userId);
+
+      gated.current = false;
+      setSession(profile.id);
       return { step: "success" };
     };
 
-    const submitLoginTotp: AuthValue["submitLoginTotp"] = async (code) => {
-      if (!store || !pendingLoginUser) {
+    const finishGatedLogin = async (code: string): Promise<LoginOutcome> => {
+      if (!client || !pending) {
         return { step: "error", message: "Session expired — start over." };
       }
-      const record = store.records[pendingLoginUser];
-      if (!record?.twoFactor.secret) {
-        return { step: "error", message: "Two-factor is not set up." };
-      }
-      const ok = await verifyTotp(record.twoFactor.secret, code);
+      const ok = await challengeAndVerify(client, pending.factorId, code);
       if (!ok) return { step: "error", message: "That code isn't valid. Try again." };
-      persistSession(pendingLoginUser);
-      setPendingLoginUser(null);
-      return { step: "success" };
-    };
-
-    const submitEnrollment: AuthValue["submitEnrollment"] = async (code) => {
-      if (!pendingLoginUser || !loginEnrollment) {
-        return { step: "error", message: "Enrollment expired — start over." };
-      }
-      const ok = await verifyTotp(loginEnrollment.secret, code);
-      if (!ok) {
-        return { step: "error", message: "That code isn't valid yet. Try again." };
-      }
-      const secret = loginEnrollment.secret;
-      patchRecord(pendingLoginUser, (r) => ({
-        ...r,
-        twoFactor: { status: "enrolled", secret },
-      }));
-      persistSession(pendingLoginUser);
-      setPendingLoginUser(null);
+      gated.current = false;
+      setSession(pending.profileId);
+      setPending(null);
       setLoginEnrollment(null);
+      setSelfEnrolled(true);
       return { step: "success" };
     };
 
     const cancelPendingLogin = () => {
-      setPendingLoginUser(null);
+      const abandoned = loginEnrollment?.factorId;
+      const c = client;
+      gated.current = false;
+      setPending(null);
       setLoginEnrollment(null);
+      setSession(null);
+      if (!c) return;
+      // A gated login still holds a real aal1 session. Backing out of the
+      // second step has to end it, or "Back to sign in" would leave the
+      // account half-open.
+      void (async () => {
+        if (abandoned) {
+          try {
+            await c.auth.mfa.unenroll({ factorId: abandoned });
+          } catch {}
+        }
+        await signOutQuietly(c);
+      })();
     };
 
     const logout = () => {
-      persistSession(null);
-      cancelPendingLogin();
-      setPendingSwitch(null);
-    };
-
-    const requestSwitch: AuthValue["requestSwitch"] = async (userId) => {
-      if (!store || userId === session) return;
-      const record = store.records[userId];
-      if (record?.twoFactor.status === "enrolled") {
-        setPendingSwitch(userId);
-        return;
-      }
-      persistSession(userId);
-    };
-
-    const submitSwitchTotp: AuthValue["submitSwitchTotp"] = async (code) => {
-      if (!store || !pendingSwitch) return false;
-      const record = store.records[pendingSwitch];
-      if (!record?.twoFactor.secret) return false;
-      const ok = await verifyTotp(record.twoFactor.secret, code);
-      if (!ok) return false;
-      persistSession(pendingSwitch);
-      setPendingSwitch(null);
-      return true;
-    };
-
-    const cancelSwitch = () => setPendingSwitch(null);
-
-    const twoFactorStatus: AuthValue["twoFactorStatus"] = (userId) =>
-      store?.records[userId]?.twoFactor.status ?? "off";
-
-    const requireTwoFactor = (userId: string) =>
-      patchRecord(userId, (r) =>
-        r.twoFactor.status === "off"
-          ? { ...r, twoFactor: { status: "pending" } }
-          : r
-      );
-
-    const clearTwoFactorRequirement = (userId: string) =>
-      patchRecord(userId, (r) =>
-        r.twoFactor.status === "pending"
-          ? { ...r, twoFactor: { status: "off" } }
-          : r
-      );
-
-    const disableTwoFactor = (userId: string) =>
-      patchRecord(userId, (r) => ({ ...r, twoFactor: { status: "off" } }));
-
-    const resetTwoFactor = (userId: string) =>
-      patchRecord(userId, (r) => ({ ...r, twoFactor: { status: "pending" } }));
-
-    const beginSelfEnrollment = (userId: string) => draftFor(userId);
-
-    const confirmSelfEnrollment: AuthValue["confirmSelfEnrollment"] = async (
-      draft,
-      code
-    ) => {
-      const ok = await verifyTotp(draft.secret, code);
-      if (!ok) return false;
-      patchRecord(draft.userId, (r) => ({
-        ...r,
-        twoFactor: { status: "enrolled", secret: draft.secret },
-      }));
-      return true;
-    };
-
-    const resetAll = async () => {
-      const fresh = await buildSeedStore();
+      gated.current = false;
+      setPending(null);
+      setLoginEnrollment(null);
+      setSession(null);
       try {
-        window.localStorage.removeItem(AUTH_KEY);
+        window.localStorage.removeItem(LEGACY_AUTH_KEY);
+        window.localStorage.removeItem(SESSION_KEY);
       } catch {}
-      setStore(fresh);
-      persistSession(null);
-      cancelPendingLogin();
-      setPendingSwitch(null);
+      if (client) void signOutQuietly(client);
+    };
+
+    const setRequirement = (userId: string, required: boolean) => {
+      if (!client) return;
+      void (async () => {
+        const { error } = await client
+          .from("profiles")
+          .update({ mfa_required: required })
+          .eq("id", userId);
+        if (error) {
+          toast.error("Couldn't change the two-factor requirement", {
+            description: error.message,
+          });
+          return;
+        }
+        setMfaRequired((m) => ({ ...m, [userId]: required }));
+      })();
+    };
+
+    /** Only ever the signed-in user's own factor — see `unenrollOwnFactors`. */
+    const dropOwnFactor = (userId: string) => {
+      if (!client || userId !== session) return;
+      void (async () => {
+        await unenrollOwnFactors(client);
+        setSelfEnrolled(false);
+      })();
     };
 
     return {
       ready,
       session,
       login,
-      submitLoginTotp,
-      submitEnrollment,
+      submitLoginTotp: finishGatedLogin,
+      submitEnrollment: finishGatedLogin,
       cancelPendingLogin,
       loginEnrollment,
       logout,
-      requestSwitch,
-      pendingSwitch,
-      submitSwitchTotp,
-      cancelSwitch,
-      twoFactorStatus,
-      requireTwoFactor,
-      clearTwoFactorRequirement,
-      disableTwoFactor,
-      resetTwoFactor,
-      beginSelfEnrollment,
-      confirmSelfEnrollment,
-      resetAll,
+
+      // Demo-only. Inert here, and rendered nowhere under this flag.
+      requestSwitch: async () => {},
+      pendingSwitch: null,
+      submitSwitchTotp: async () => false,
+      cancelSwitch: () => {},
+      resetAll: async () => {},
+
+      /**
+       * `enrolled` is only ever answerable about the signed-in user: listing
+       * anyone else's factors is an `auth.admin` call. For everyone else this
+       * reports the requirement flag, which is what an admin can actually act
+       * on — so the People page's reset/disable items, which are gated on
+       * `enrolled`, only appear for yourself, where they work.
+       */
+      twoFactorStatus: (userId) => {
+        if (userId === session && selfEnrolled) return "enrolled";
+        return mfaRequired[userId] ? "pending" : "off";
+      },
+      requireTwoFactor: (userId) => setRequirement(userId, true),
+      clearTwoFactorRequirement: (userId) => setRequirement(userId, false),
+      disableTwoFactor: (userId) => {
+        setRequirement(userId, false);
+        dropOwnFactor(userId);
+      },
+      resetTwoFactor: (userId) => {
+        setRequirement(userId, true);
+        dropOwnFactor(userId);
+      },
+
+      beginSelfEnrollment: async (userId) => {
+        if (!client) return null;
+        const profile = await fetchProfile(client, userId);
+        return startEnrollment(client, userId, profile?.handle ?? userId);
+      },
+      confirmSelfEnrollment: async (draft, code) => {
+        if (!client || !draft.factorId) return false;
+        const ok = await challengeAndVerify(client, draft.factorId, code);
+        if (ok) setSelfEnrolled(true);
+        return ok;
+      },
     };
-  }, [
-    ready,
-    store,
-    session,
-    pendingLoginUser,
-    loginEnrollment,
-    pendingSwitch,
-    persistSession,
-    accountName,
-  ]);
+  }, [client, ready, session, pending, loginEnrollment, mfaRequired, selfEnrolled]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth(): AuthValue {
-  const ctx = React.useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
-  return ctx;
 }

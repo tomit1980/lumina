@@ -22,6 +22,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UIProvider } from "@/components/ui-context";
 import { AuthProvider } from "@/lib/auth";
+import { backendKind } from "@/lib/backend";
 import { StoreProvider } from "@/lib/store";
 
 // React error boundaries (app/error.tsx, app/global-error.tsx) only catch
@@ -79,7 +80,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <AccessDialog />
                 <ShareFileDialog />
                 <SelfEnrollDialog />
-                <SwitchTwoFactorPrompt />
+                {/* Demo-account switching, and the 2FA prompt that guards it,
+                    exist only in the local demo. Not mounted on a real
+                    backend, so no code path can open it. */}
+                {backendKind !== "supabase" && <SwitchTwoFactorPrompt />}
                 <Reminders />
               </AuthGate>
             </UIProvider>
