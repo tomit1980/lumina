@@ -43,9 +43,9 @@ describe("RBAC matrix", () => {
   describe("setUserRole", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
-        const ok = run(() => result.current.setUserRole("u_jonas", "guest"));
+        const ok = await run(() => result.current.setUserRole("u_jonas", "guest"));
         const jonas = result.current.state.users.find((u) => u.id === "u_jonas");
         if (expected[actor]) {
           expect(ok).toBe(true);
@@ -62,10 +62,10 @@ describe("RBAC matrix", () => {
   describe("createRole", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
         const before = result.current.state.roles.length;
-        const role = run(() =>
+        const role = await run(() =>
           result.current.createRole({
             name: "Ops Test Role",
             description: "",
@@ -88,9 +88,9 @@ describe("RBAC matrix", () => {
   describe("updateRole", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
-        const ok = run(() => result.current.updateRole("guest", { name: "Guest Renamed" }));
+        const ok = await run(() => result.current.updateRole("guest", { name: "Guest Renamed" }));
         const guestRole = result.current.state.roles.find((r) => r.id === "guest");
         if (expected[actor]) {
           expect(ok).toBe(true);
@@ -107,9 +107,9 @@ describe("RBAC matrix", () => {
   describe("setRolePermission", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
-        const ok = run(() => result.current.setRolePermission("guest", "task.create", true));
+        const ok = await run(() => result.current.setRolePermission("guest", "task.create", true));
         const guestRole = result.current.state.roles.find((r) => r.id === "guest");
         if (expected[actor]) {
           expect(ok).toBe(true);
@@ -126,11 +126,11 @@ describe("RBAC matrix", () => {
   describe("deleteRole", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addRole(s, { id: "r_temp", name: "Temp Role", permissions: [] })
         );
-        const ok = run(() => result.current.deleteRole("r_temp"));
+        const ok = await run(() => result.current.deleteRole("r_temp"));
         const stillThere = result.current.state.roles.some((r) => r.id === "r_temp");
         if (expected[actor]) {
           expect(ok).toBe(true);
@@ -147,10 +147,10 @@ describe("RBAC matrix", () => {
   describe("sendMessage", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: true, guest: true };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
         const before = result.current.state.messages.length;
-        const ok = run(() => result.current.sendMessage("c_engineering", `hi from ${actor}`));
+        const ok = await run(() => result.current.sendMessage("c_engineering", `hi from ${actor}`));
         if (expected[actor]) {
           expect(ok).toBe(true);
           expect(result.current.state.messages.length).toBe(before + 1);
@@ -166,10 +166,10 @@ describe("RBAC matrix", () => {
   describe("createChannel", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: true, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
         const before = result.current.state.channels.length;
-        const channel = run(() =>
+        const channel = await run(() =>
           result.current.createChannel({ name: "temp-channel", description: "", isPrivate: false })
         );
         if (expected[actor]) {
@@ -188,11 +188,11 @@ describe("RBAC matrix", () => {
   describe("deleteChannel", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addChannel(s, { id: "c_temp", name: "temp", createdBy: "u_priya" })
         );
-        run(() => result.current.deleteChannel("c_temp"));
+        await run(() => result.current.deleteChannel("c_temp"));
         const stillThere = result.current.state.channels.some((c) => c.id === "c_temp");
         if (expected[actor]) {
           expect(stillThere).toBe(false);
@@ -208,11 +208,11 @@ describe("RBAC matrix", () => {
   describe("setChannelAccess", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addChannel(s, { id: "c_temp2", name: "temp2", createdBy: "u_priya" })
         );
-        const ok = run(() =>
+        const ok = await run(() =>
           result.current.setChannelAccess("c_temp2", {
             isPrivate: true,
             members: [{ userId: "u_jonas", level: "viewer" }],
@@ -234,10 +234,10 @@ describe("RBAC matrix", () => {
   describe("createProject", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
         const before = result.current.state.projects.length;
-        const project = run(() =>
+        const project = await run(() =>
           result.current.createProject({
             name: "Temp Project",
             description: "",
@@ -261,11 +261,11 @@ describe("RBAC matrix", () => {
   describe("updateProject", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addProject(s, { id: "p_temp", name: "Temp Project", createdBy: "u_priya" })
         );
-        run(() => result.current.updateProject("p_temp", { name: "Renamed Project" }));
+        await run(() => result.current.updateProject("p_temp", { name: "Renamed Project" }));
         const project = result.current.state.projects.find((p) => p.id === "p_temp");
         if (expected[actor]) {
           expect(project?.name).toBe("Renamed Project");
@@ -280,11 +280,11 @@ describe("RBAC matrix", () => {
   describe("deleteProject", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addProject(s, { id: "p_temp2", name: "Temp Project 2", createdBy: "u_priya" })
         );
-        run(() => result.current.deleteProject("p_temp2"));
+        await run(() => result.current.deleteProject("p_temp2"));
         const stillThere = result.current.state.projects.some((p) => p.id === "p_temp2");
         if (expected[actor]) {
           expect(stillThere).toBe(false);
@@ -299,11 +299,11 @@ describe("RBAC matrix", () => {
   describe("setProjectAccess", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addProject(s, { id: "p_temp3", name: "Temp Project 3", createdBy: "u_priya" })
         );
-        const ok = run(() =>
+        const ok = await run(() =>
           result.current.setProjectAccess("p_temp3", {
             restricted: true,
             members: [{ userId: "u_jonas", level: "viewer" }],
@@ -325,10 +325,10 @@ describe("RBAC matrix", () => {
   describe("createTask", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: true, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) => s);
         const before = result.current.state.tasks.length;
-        const task = run(() =>
+        const task = await run(() =>
           result.current.createTask({
             projectId: "p_website",
             title: "Temp Task",
@@ -359,11 +359,11 @@ describe("RBAC matrix", () => {
   describe("updateTask", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: true, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addTask(s, { id: "t_temp_upd", projectId: "p_website", title: "Original", createdBy: "u_priya" })
         );
-        run(() => result.current.updateTask("t_temp_upd", { title: "Updated" }));
+        await run(() => result.current.updateTask("t_temp_upd", { title: "Updated" }));
         const task = result.current.state.tasks.find((t) => t.id === "t_temp_upd");
         if (expected[actor]) {
           expect(task?.title).toBe("Updated");
@@ -378,7 +378,7 @@ describe("RBAC matrix", () => {
   describe("moveTask", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: true, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addTask(s, {
             id: "t_temp_mov",
@@ -388,7 +388,7 @@ describe("RBAC matrix", () => {
             status: "todo",
           })
         );
-        run(() => result.current.moveTask("t_temp_mov", "in-progress", 0));
+        await run(() => result.current.moveTask("t_temp_mov", "in-progress", 0));
         const task = result.current.state.tasks.find((t) => t.id === "t_temp_mov");
         if (expected[actor]) {
           expect(task?.status).toBe("in-progress");
@@ -403,11 +403,11 @@ describe("RBAC matrix", () => {
   describe("deleteTask", () => {
     const expected: Record<ActorKey, boolean> = { admin: true, member: false, guest: false };
     for (const actor of ROLES) {
-      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, () => {
+      it(`${actor} → ${expected[actor] ? "allowed" : "denied"}`, async () => {
         const { result } = setupStore(actor, (s) =>
           addTask(s, { id: "t_temp_del", projectId: "p_website", title: "Deletable", createdBy: "u_priya" })
         );
-        run(() => result.current.deleteTask("t_temp_del"));
+        await run(() => result.current.deleteTask("t_temp_del"));
         const stillThere = result.current.state.tasks.some((t) => t.id === "t_temp_del");
         if (expected[actor]) {
           expect(stillThere).toBe(false);

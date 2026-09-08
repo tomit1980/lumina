@@ -25,16 +25,16 @@ afterEach(() => {
 });
 
 describe("you cannot change your own role", () => {
-  it("admin cannot set their own role, even to another admin-equivalent", () => {
+  it("admin cannot set their own role, even to another admin-equivalent", async () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
-    const ok = run(() => result.current.setUserRole("u_vlad", "member"));
+    const ok = await run(() => result.current.setUserRole("u_vlad", "member"));
     expect(ok).toBe(false);
     expect(result.current.state.users.find((u) => u.id === "u_vlad")?.roleId).toBe("admin");
   });
 });
 
 describe("you cannot demote the last admin", () => {
-  it("a members.manage-holding non-admin cannot demote the sole admin", () => {
+  it("a members.manage-holding non-admin cannot demote the sole admin", async () => {
     let state = addRole(baseState(), {
       id: "r_ops",
       name: "Ops",
@@ -43,33 +43,33 @@ describe("you cannot demote the last admin", () => {
     state = addUser(state, { id: "u_ops", roleId: "r_ops" });
     const { result } = mount(asUser(state, "u_ops"));
 
-    const ok = run(() => result.current.setUserRole("u_vlad", "member"));
+    const ok = await run(() => result.current.setUserRole("u_vlad", "member"));
     expect(ok).toBe(false);
     expect(result.current.state.users.find((u) => u.id === "u_vlad")?.roleId).toBe("admin");
   });
 
-  it("demoting one of two admins is allowed", () => {
+  it("demoting one of two admins is allowed", async () => {
     const state = addUser(baseState(), { id: "u_admin2", roleId: "admin" });
     const { result } = mount(asUser(state, "u_vlad"));
 
-    const ok = run(() => result.current.setUserRole("u_admin2", "member"));
+    const ok = await run(() => result.current.setUserRole("u_admin2", "member"));
     expect(ok).toBe(true);
     expect(result.current.state.users.find((u) => u.id === "u_admin2")?.roleId).toBe("member");
   });
 });
 
 describe("locked role (admin)", () => {
-  it("cannot be renamed via updateRole", () => {
+  it("cannot be renamed via updateRole", async () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
-    const ok = run(() => result.current.updateRole("admin", { name: "SuperAdmin" }));
+    const ok = await run(() => result.current.updateRole("admin", { name: "SuperAdmin" }));
     expect(ok).toBe(false);
     expect(result.current.state.roles.find((r) => r.id === "admin")?.name).toBe("Admin");
   });
 
-  it("cannot have a permission toggled via setRolePermission", () => {
+  it("cannot have a permission toggled via setRolePermission", async () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.roles.find((r) => r.id === "admin")?.permissions.length;
-    const ok = run(() => result.current.setRolePermission("admin", "task.delete", false));
+    const ok = await run(() => result.current.setRolePermission("admin", "task.delete", false));
     expect(ok).toBe(false);
     expect(result.current.state.roles.find((r) => r.id === "admin")?.permissions.length).toBe(
       before
@@ -82,7 +82,7 @@ describe("locked role (admin)", () => {
 });
 
 describe("system role", () => {
-  it("cannot be deleted even with zero members assigned", () => {
+  it("cannot be deleted even with zero members assigned", async () => {
     // Reassign u_elena off "guest" first so this isolates the isSystem
     // check from the separate has-members check tested below.
     const state = baseState();
@@ -90,73 +90,73 @@ describe("system role", () => {
     const { result } = mount(asUser(state, "u_vlad"));
     expect(result.current.state.users.some((u) => u.roleId === "guest")).toBe(false);
 
-    const ok = run(() => result.current.deleteRole("guest"));
+    const ok = await run(() => result.current.deleteRole("guest"));
     expect(ok).toBe(false);
     expect(result.current.state.roles.some((r) => r.id === "guest")).toBe(true);
   });
 });
 
 describe("a role with members assigned", () => {
-  it("cannot be deleted even though it's a custom (non-system) role", () => {
+  it("cannot be deleted even though it's a custom (non-system) role", async () => {
     let state = addRole(baseState(), { id: "r_custom", name: "Custom", permissions: [] });
     state = addUser(state, { id: "u_custom_member", roleId: "r_custom" });
     const { result } = mount(asUser(state, "u_vlad"));
 
-    const ok = run(() => result.current.deleteRole("r_custom"));
+    const ok = await run(() => result.current.deleteRole("r_custom"));
     expect(ok).toBe(false);
     expect(result.current.state.roles.some((r) => r.id === "r_custom")).toBe(true);
   });
 
-  it("can be deleted once its members are reassigned", () => {
+  it("can be deleted once its members are reassigned", async () => {
     let state = addRole(baseState(), { id: "r_custom2", name: "Custom2", permissions: [] });
     state = addUser(state, { id: "u_custom_member2", roleId: "r_custom2" });
     const { result } = mount(asUser(state, "u_vlad"));
 
-    run(() => result.current.setUserRole("u_custom_member2", "member"));
-    const ok = run(() => result.current.deleteRole("r_custom2"));
+    await run(() => result.current.setUserRole("u_custom_member2", "member"));
+    const ok = await run(() => result.current.deleteRole("r_custom2"));
     expect(ok).toBe(true);
     expect(result.current.state.roles.some((r) => r.id === "r_custom2")).toBe(false);
   });
 });
 
 describe("role name clashes are case-insensitive", () => {
-  it("on create", () => {
+  it("on create", async () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
     const before = result.current.state.roles.length;
-    const role = run(() =>
+    const role = await run(() =>
       result.current.createRole({ name: "MEMBER", description: "", color: "#000", permissions: [] })
     );
     expect(role).toBeNull();
     expect(result.current.state.roles.length).toBe(before);
   });
 
-  it("on update", () => {
+  it("on update", async () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
-    const ok = run(() => result.current.updateRole("guest", { name: "member" }));
+    const ok = await run(() => result.current.updateRole("guest", { name: "member" }));
     expect(ok).toBe(false);
     expect(result.current.state.roles.find((r) => r.id === "guest")?.name).toBe("Guest");
   });
 
-  it("updating a role to its own current name (same id) is not a clash", () => {
+  it("updating a role to its own current name (same id) is not a clash", async () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
-    const ok = run(() => result.current.updateRole("guest", { name: "Guest" }));
+    const ok = await run(() => result.current.updateRole("guest", { name: "Guest" }));
     expect(ok).toBe(true);
   });
 });
 
 describe("the team channel", () => {
-  it("cannot be deleted, even by an admin", () => {
+  it("cannot be deleted, even by an admin", async () => {
     const { result } = mount(asUser(baseState(), "u_vlad"));
     const channel = result.current.state.channels.find((c) => c.id === "c_general")!;
     expect(result.current.canDeleteChannel(channel)).toBe(false);
 
-    run(() => result.current.deleteChannel("c_general"));
+    await run(() => result.current.deleteChannel("c_general"));
     expect(result.current.state.channels.some((c) => c.id === "c_general")).toBe(true);
   });
 });
 
 describe("#general is protected even in legacy (pre-isTeam) data", () => {
-  it("migrate() backfills isTeam for a channel literally named 'general' that lacks the flag", () => {
+  it("migrate() backfills isTeam for a channel literally named 'general' that lacks the flag", async () => {
     const raw = baseState() as unknown as Record<string, unknown>;
     raw.version = 1; // genuinely predates SEED_VERSION, so migrate() sees legacy data
     const channels = raw.channels as Array<Record<string, unknown>>;
@@ -171,7 +171,7 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
     expect(channel.isTeam).toBe(true);
     expect(result.current.canDeleteChannel(channel)).toBe(false);
 
-    run(() => result.current.deleteChannel("c_general"));
+    await run(() => result.current.deleteChannel("c_general"));
     expect(result.current.state.channels.some((c) => c.id === "c_general")).toBe(true);
   });
 
@@ -207,9 +207,9 @@ describe("#general is protected even in legacy (pre-isTeam) data", () => {
   // "general" channel stays deletable after a reload. Actual: it doesn't.
   it(
     "L1-006: a newly created channel named 'general' should stay deletable after a reload, but does not",
-    () => {
+    async () => {
       const { result, unmount } = mount(asUser(baseState(), "u_vlad"));
-      const created = run(() =>
+      const created = await run(() =>
         result.current.createChannel({ name: "general", description: "", isPrivate: false })
       );
       expect(created).not.toBeNull();

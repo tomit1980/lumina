@@ -44,10 +44,10 @@ function ordersOf(tasks: { projectId: string; status: TaskStatus; order: number 
 }
 
 describe("createTask appends at the end of its status column", () => {
-  it("the persisted task gets order === the column size at the time of creation", () => {
+  it("the persisted task gets order === the column size at the time of creation", async () => {
     const { state } = seedProjectWithTasks(3, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
-    const created = run(() =>
+    const created = await run(() =>
       result.current.createTask({
         projectId: PROJECT_ID,
         title: "Fourth",
@@ -69,10 +69,10 @@ describe("createTask appends at the end of its status column", () => {
     expect(ordersOf(result.current.state.tasks, "todo")).toEqual([0, 1, 2, 3]);
   });
 
-  it("a new task in an empty column gets order 0, independent of other columns' counts", () => {
+  it("a new task in an empty column gets order 0, independent of other columns' counts", async () => {
     const { state } = seedProjectWithTasks(5, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
-    const created = run(() =>
+    const created = await run(() =>
       result.current.createTask({
         projectId: PROJECT_ID,
         title: "First in-progress",
@@ -103,10 +103,10 @@ describe("createTask appends at the end of its status column", () => {
   // what actually gets persisted. Actual: it's always 0.
   it(
     "L1-010: createTask's return value should carry the real order, but always reports 0",
-    () => {
+    async () => {
       const { state } = seedProjectWithTasks(3, "todo");
       const { result } = mount(asUser(state, "u_vlad"));
-      const created = run(() =>
+      const created = await run(() =>
         result.current.createTask({
           projectId: PROJECT_ID,
           title: "Fourth",
@@ -128,10 +128,10 @@ describe("createTask appends at the end of its status column", () => {
 });
 
 describe("moveTask within a single column produces a dense 0..n-1 sequence", () => {
-  it("moving the last task to the front renumbers everyone densely", () => {
+  it("moving the last task to the front renumbers everyone densely", async () => {
     const { state, ids } = seedProjectWithTasks(4, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
-    run(() => result.current.moveTask(ids[3], "todo", 0));
+    await run(() => result.current.moveTask(ids[3], "todo", 0));
 
     const tasks = result.current.state.tasks;
     expect(ordersOf(tasks, "todo")).toEqual([0, 1, 2, 3]);
@@ -142,10 +142,10 @@ describe("moveTask within a single column produces a dense 0..n-1 sequence", () 
     expect(byId(ids[2]).order).toBe(3);
   });
 
-  it("moving the first task to the end renumbers everyone densely", () => {
+  it("moving the first task to the end renumbers everyone densely", async () => {
     const { state, ids } = seedProjectWithTasks(4, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
-    run(() => result.current.moveTask(ids[0], "todo", 3));
+    await run(() => result.current.moveTask(ids[0], "todo", 3));
 
     const tasks = result.current.state.tasks;
     expect(ordersOf(tasks, "todo")).toEqual([0, 1, 2, 3]);
@@ -156,15 +156,15 @@ describe("moveTask within a single column produces a dense 0..n-1 sequence", () 
     expect(byId(ids[0]).order).toBe(3);
   });
 
-  it("moveTask clamps an out-of-range destination index to the column bounds", () => {
+  it("moveTask clamps an out-of-range destination index to the column bounds", async () => {
     const { state, ids } = seedProjectWithTasks(3, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
-    run(() => result.current.moveTask(ids[0], "todo", 999));
+    await run(() => result.current.moveTask(ids[0], "todo", 999));
     const tasks = result.current.state.tasks;
     expect(ordersOf(tasks, "todo")).toEqual([0, 1, 2]);
     expect(tasks.find((t) => t.id === ids[0])!.order).toBe(2); // clamped to the end
 
-    run(() => result.current.moveTask(ids[0], "todo", -5));
+    await run(() => result.current.moveTask(ids[0], "todo", -5));
     const tasks2 = result.current.state.tasks;
     expect(ordersOf(tasks2, "todo")).toEqual([0, 1, 2]);
     expect(tasks2.find((t) => t.id === ids[0])!.order).toBe(0); // clamped to the front
@@ -172,10 +172,10 @@ describe("moveTask within a single column produces a dense 0..n-1 sequence", () 
 });
 
 describe("moveTask across columns opens a dense slot in the destination", () => {
-  it("the destination column is a dense 0..n-1 sequence after the move", () => {
+  it("the destination column is a dense 0..n-1 sequence after the move", async () => {
     const { state, ids } = seedProjectWithTasks(3, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
-    run(() => result.current.moveTask(ids[1], "in-progress", 0));
+    await run(() => result.current.moveTask(ids[1], "in-progress", 0));
 
     const tasks = result.current.state.tasks;
     expect(ordersOf(tasks, "in-progress")).toEqual([0]);
@@ -193,10 +193,10 @@ describe("moveTask across columns opens a dense slot in the destination", () => 
   // for a 3-task column after removing the middle task).
   it(
     "L1-007: moving a task out of a column should close the gap left behind, but does not",
-    () => {
+    async () => {
       const { state, ids } = seedProjectWithTasks(3, "todo"); // orders 0, 1, 2
       const { result } = mount(asUser(state, "u_vlad"));
-      run(() => result.current.moveTask(ids[1], "in-progress", 0)); // remove the middle task
+      await run(() => result.current.moveTask(ids[1], "in-progress", 0)); // remove the middle task
 
       const tasks = result.current.state.tasks;
       expect(ordersOf(tasks, "todo")).toEqual([0, 1]); // dense — but actually [0, 2]
@@ -205,28 +205,28 @@ describe("moveTask across columns opens a dense slot in the destination", () => 
 });
 
 describe("ordering is stable under repeated moves", () => {
-  it("a sequence of moves never produces duplicate or out-of-range orders in the destination column", () => {
+  it("a sequence of moves never produces duplicate or out-of-range orders in the destination column", async () => {
     const { state, ids } = seedProjectWithTasks(5, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
 
-    run(() => result.current.moveTask(ids[2], "todo", 0));
-    run(() => result.current.moveTask(ids[4], "todo", 2));
-    run(() => result.current.moveTask(ids[0], "todo", 4));
+    await run(() => result.current.moveTask(ids[2], "todo", 0));
+    await run(() => result.current.moveTask(ids[4], "todo", 2));
+    await run(() => result.current.moveTask(ids[0], "todo", 4));
 
     const orders = ordersOf(result.current.state.tasks, "todo");
     expect(orders).toEqual([0, 1, 2, 3, 4]); // dense, no duplicates
   });
 
-  it("moving a task back to the same index twice is idempotent", () => {
+  it("moving a task back to the same index twice is idempotent", async () => {
     const { state, ids } = seedProjectWithTasks(4, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
-    run(() => result.current.moveTask(ids[1], "todo", 2));
+    await run(() => result.current.moveTask(ids[1], "todo", 2));
     const after1 = [...result.current.state.tasks]
       .filter((t) => t.projectId === PROJECT_ID && t.status === "todo")
       .sort((a, b) => a.order - b.order)
       .map((t) => t.id);
 
-    run(() => result.current.moveTask(ids[1], "todo", 2));
+    await run(() => result.current.moveTask(ids[1], "todo", 2));
     const after2 = [...result.current.state.tasks]
       .filter((t) => t.projectId === PROJECT_ID && t.status === "todo")
       .sort((a, b) => a.order - b.order)
@@ -235,11 +235,11 @@ describe("ordering is stable under repeated moves", () => {
     expect(after2).toEqual(after1);
   });
 
-  it("moving a nonexistent task id is a silent no-op that leaves every column untouched", () => {
+  it("moving a nonexistent task id is a silent no-op that leaves every column untouched", async () => {
     const { state } = seedProjectWithTasks(3, "todo");
     const { result } = mount(asUser(state, "u_vlad"));
     const before = [...result.current.state.tasks];
-    run(() => result.current.moveTask("t_does_not_exist", "in-progress", 0));
+    await run(() => result.current.moveTask("t_does_not_exist", "in-progress", 0));
     expect(result.current.state.tasks).toEqual(before);
   });
 });

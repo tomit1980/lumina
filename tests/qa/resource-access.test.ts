@@ -52,15 +52,15 @@ describe("private channels", () => {
     expect(result.current.canSeeChannel(channel)).toBe(false);
   });
 
-  it("a non-member cannot post to the channel", () => {
+  it("a non-member cannot post to the channel", async () => {
     const { result } = mount(asUser(baseState(), "u_maya"));
     const before = result.current.state.messages.length;
-    const ok = run(() => result.current.sendMessage("c_leadership", "sneaking in"));
+    const ok = await run(() => result.current.sendMessage("c_leadership", "sneaking in"));
     expect(ok).toBe(false);
     expect(result.current.state.messages.length).toBe(before);
   });
 
-  it("an invited viewer can see the channel but not post", () => {
+  it("an invited viewer can see the channel but not post", async () => {
     const state = baseState();
     state.channels = state.channels.map((c) =>
       c.id === "c_leadership"
@@ -73,12 +73,12 @@ describe("private channels", () => {
     expect(result.current.channelAccessLevel(channel)).toBe("viewer");
 
     const before = result.current.state.messages.length;
-    const ok = run(() => result.current.sendMessage("c_leadership", "can I post?"));
+    const ok = await run(() => result.current.sendMessage("c_leadership", "can I post?"));
     expect(ok).toBe(false);
     expect(result.current.state.messages.length).toBe(before);
   });
 
-  it("an invited editor can post", () => {
+  it("an invited editor can post", async () => {
     const state = baseState();
     state.channels = state.channels.map((c) =>
       c.id === "c_leadership"
@@ -90,12 +90,12 @@ describe("private channels", () => {
     expect(result.current.channelAccessLevel(channel)).toBe("editor");
 
     const before = result.current.state.messages.length;
-    const ok = run(() => result.current.sendMessage("c_leadership", "posting as editor"));
+    const ok = await run(() => result.current.sendMessage("c_leadership", "posting as editor"));
     expect(ok).toBe(true);
     expect(result.current.state.messages.length).toBe(before + 1);
   });
 
-  it("an admin with members.manage bypasses both the visibility and write gates despite not being a member", () => {
+  it("an admin with members.manage bypasses both the visibility and write gates despite not being a member", async () => {
     const state = addChannel(baseState(), {
       id: "c_secret",
       name: "secret",
@@ -108,17 +108,17 @@ describe("private channels", () => {
     expect(result.current.canSeeChannel(channel)).toBe(true);
     expect(result.current.channelAccessLevel(channel)).toBe("editor");
 
-    const ok = run(() => result.current.sendMessage("c_secret", "admin override"));
+    const ok = await run(() => result.current.sendMessage("c_secret", "admin override"));
     expect(ok).toBe(true);
   });
 
-  it("ensureEditor re-inserts the creator into setChannelAccess even when the submitted list omits them", () => {
+  it("ensureEditor re-inserts the creator into setChannelAccess even when the submitted list omits them", async () => {
     // u_sam (member role) is the creator of a fresh channel, which is enough
     // to manage its own access under channelIsManageable even without
     // channel.delete.
     const state = addChannel(baseState(), { id: "c_owned", name: "owned", createdBy: "u_sam" });
     const { result } = mount(asUser(state, "u_sam"));
-    const ok = run(() =>
+    const ok = await run(() =>
       result.current.setChannelAccess("c_owned", {
         isPrivate: true,
         members: [{ userId: "u_maya", level: "viewer" }], // creator omitted
@@ -158,7 +158,7 @@ describe("restricted projects", () => {
     expect(result.current.canSeeProject(project)).toBe(false);
   });
 
-  it("a non-member cannot create tasks in the project", () => {
+  it("a non-member cannot create tasks in the project", async () => {
     const state = addProject(baseState(), {
       id: "p_restricted",
       name: "Restricted Project",
@@ -168,7 +168,7 @@ describe("restricted projects", () => {
     });
     const { result } = mount(asUser(state, "u_jonas")); // member role, has task.create, not a project member
     const before = result.current.state.tasks.length;
-    const task = run(() =>
+    const task = await run(() =>
       result.current.createTask({
         projectId: "p_restricted",
         title: "Sneaky task",
@@ -188,7 +188,7 @@ describe("restricted projects", () => {
     expect(result.current.state.tasks.length).toBe(before);
   });
 
-  it("an invited viewer can see the project but createTask/updateTask/moveTask are denied", () => {
+  it("an invited viewer can see the project but createTask/updateTask/moveTask are denied", async () => {
     const state = addTask(
       restrictedProject("u_maya")(baseState()),
       { id: "t_r1", projectId: "p_restricted", title: "Existing", createdBy: "u_sam", status: "todo" }
@@ -199,7 +199,7 @@ describe("restricted projects", () => {
     expect(result.current.projectAccessLevel(project)).toBe("viewer");
 
     const beforeCount = result.current.state.tasks.length;
-    const created = run(() =>
+    const created = await run(() =>
       result.current.createTask({
         projectId: "p_restricted",
         title: "Viewer task",
@@ -218,14 +218,14 @@ describe("restricted projects", () => {
     expect(created).toBeNull();
     expect(result.current.state.tasks.length).toBe(beforeCount);
 
-    run(() => result.current.updateTask("t_r1", { title: "Edited by viewer" }));
+    await run(() => result.current.updateTask("t_r1", { title: "Edited by viewer" }));
     expect(result.current.state.tasks.find((t) => t.id === "t_r1")?.title).toBe("Existing");
 
-    run(() => result.current.moveTask("t_r1", "in-progress", 0));
+    await run(() => result.current.moveTask("t_r1", "in-progress", 0));
     expect(result.current.state.tasks.find((t) => t.id === "t_r1")?.status).toBe("todo");
   });
 
-  it("an invited editor can createTask/updateTask/moveTask", () => {
+  it("an invited editor can createTask/updateTask/moveTask", async () => {
     const editorProjectState = (() => {
       const s = restrictedProject("u_maya")(baseState());
       s.projects = s.projects.map((p) =>
@@ -246,7 +246,7 @@ describe("restricted projects", () => {
     const project = result.current.state.projects.find((p) => p.id === "p_restricted")!;
     expect(result.current.projectAccessLevel(project)).toBe("editor");
 
-    const created = run(() =>
+    const created = await run(() =>
       result.current.createTask({
         projectId: "p_restricted",
         title: "Editor task",
@@ -264,14 +264,14 @@ describe("restricted projects", () => {
     );
     expect(created).not.toBeNull();
 
-    run(() => result.current.updateTask("t_r2", { title: "Edited by editor" }));
+    await run(() => result.current.updateTask("t_r2", { title: "Edited by editor" }));
     expect(result.current.state.tasks.find((t) => t.id === "t_r2")?.title).toBe("Edited by editor");
 
-    run(() => result.current.moveTask("t_r2", "in-progress", 0));
+    await run(() => result.current.moveTask("t_r2", "in-progress", 0));
     expect(result.current.state.tasks.find((t) => t.id === "t_r2")?.status).toBe("in-progress");
   });
 
-  it("an admin with members.manage bypasses project-viewer restrictions despite not being a member", () => {
+  it("an admin with members.manage bypasses project-viewer restrictions despite not being a member", async () => {
     const state = addProject(baseState(), {
       id: "p_admin_bypass",
       name: "Not admin's project",
@@ -284,7 +284,7 @@ describe("restricted projects", () => {
     expect(result.current.canSeeProject(project)).toBe(true);
     expect(result.current.projectAccessLevel(project)).toBe("editor");
 
-    const task = run(() =>
+    const task = await run(() =>
       result.current.createTask({
         projectId: "p_admin_bypass",
         title: "Admin task",
@@ -303,14 +303,14 @@ describe("restricted projects", () => {
     expect(task).not.toBeNull();
   });
 
-  it("ensureEditor re-inserts the creator into setProjectAccess even when the submitted list omits them", () => {
+  it("ensureEditor re-inserts the creator into setProjectAccess even when the submitted list omits them", async () => {
     const state = addProject(baseState(), {
       id: "p_owned",
       name: "Owned Project",
       createdBy: "u_sam",
     });
     const { result } = mount(asUser(state, "u_vlad")); // needs project.create; only admin has it here
-    const ok = run(() =>
+    const ok = await run(() =>
       result.current.setProjectAccess("p_owned", {
         restricted: true,
         members: [{ userId: "u_maya", level: "viewer" }], // creator (u_sam) omitted
@@ -324,7 +324,7 @@ describe("restricted projects", () => {
     });
   });
 
-  it("deleteTask's project-viewer gate blocks a task.delete-only role that is merely a viewer, and admits it once promoted to editor", () => {
+  it("deleteTask's project-viewer gate blocks a task.delete-only role that is merely a viewer, and admits it once promoted to editor", async () => {
     // Isolate projectIsViewerOnly from the members.manage bypass: this role
     // has task.delete but NOT members.manage, so it's the pure viewer/editor
     // distinction being tested, not the admin bypass.
@@ -349,24 +349,24 @@ describe("restricted projects", () => {
     });
 
     const { result } = mount(asUser(state, "u_deleter"));
-    run(() => result.current.deleteTask("t_del_gate"));
+    await run(() => result.current.deleteTask("t_del_gate"));
     expect(result.current.state.tasks.some((t) => t.id === "t_del_gate")).toBe(true); // viewer: denied
 
     // Promote to editor (as the admin — u_deleter's own role lacks
     // project.create so it can't do this itself) and retry as u_deleter.
-    run(() => result.current.switchUser("u_vlad"));
-    run(() =>
+    await run(() => result.current.switchUser("u_vlad"));
+    await run(() =>
       result.current.setProjectAccess("p_del_gate", {
         restricted: true,
         members: [{ userId: "u_deleter", level: "editor" }],
       })
     );
-    run(() => result.current.switchUser("u_deleter"));
-    run(() => result.current.deleteTask("t_del_gate"));
+    await run(() => result.current.switchUser("u_deleter"));
+    await run(() => result.current.deleteTask("t_del_gate"));
     expect(result.current.state.tasks.some((t) => t.id === "t_del_gate")).toBe(false); // editor: allowed
   });
 
-  it("updateProject's project-viewer gate correctly blocks an attachments-only patch from a viewer", () => {
+  it("updateProject's project-viewer gate correctly blocks an attachments-only patch from a viewer", async () => {
     let state = addRole(baseState(), {
       id: "r_pm",
       name: "Project Manager (no members.manage)",
@@ -383,7 +383,7 @@ describe("restricted projects", () => {
     });
 
     const { result } = mount(asUser(state, "u_pm"));
-    run(() =>
+    await run(() =>
       result.current.updateProject("p_att_gate", {
         attachments: [attachment("att1", "spec.txt"), attachment("att2", "new-file.txt")],
       })
@@ -401,7 +401,7 @@ describe("restricted projects", () => {
   // unchanged, like the attachments case above. Actual: the rename succeeds.
   it(
     "L1-004: updateProject should deny a non-attachments patch from a project viewer, but does not",
-    () => {
+    async () => {
       let state = addRole(baseState(), {
         id: "r_pm2",
         name: "Project Manager (no members.manage)",
@@ -417,7 +417,7 @@ describe("restricted projects", () => {
       });
 
       const { result } = mount(asUser(state, "u_pm2"));
-      run(() => result.current.updateProject("p_name_gate", { name: "Renamed By Viewer" }));
+      await run(() => result.current.updateProject("p_name_gate", { name: "Renamed By Viewer" }));
       expect(result.current.state.projects.find((p) => p.id === "p_name_gate")?.name).toBe(
         "Original Name"
       );
@@ -432,7 +432,7 @@ describe("restricted projects", () => {
   // not an editor of this project). Actual: succeeds unconditionally.
   it(
     "L1-005: setProjectAccess should deny a caller with no relationship to the target project, but does not",
-    () => {
+    async () => {
       let state = addRole(baseState(), {
         id: "r_pm3",
         name: "Project Manager (no members.manage)",
@@ -448,7 +448,7 @@ describe("restricted projects", () => {
       });
 
       const { result } = mount(asUser(state, "u_pm3"));
-      const ok = run(() =>
+      const ok = await run(() =>
         result.current.setProjectAccess("p_unrelated", {
           restricted: true,
           members: [{ userId: "u_pm3", level: "editor" }], // self-promotion attempt
@@ -462,7 +462,7 @@ describe("restricted projects", () => {
 });
 
 describe("message-level guards — by design, but surprising (see findings doc)", () => {
-  it("editMessage checks authorship only, never message.send — a zero-permission author can still edit their own message", () => {
+  it("editMessage checks authorship only, never message.send — a zero-permission author can still edit their own message", async () => {
     let state = addRole(baseState(), { id: "r_none", name: "No Perms", permissions: [] });
     state = addUser(state, { id: "u_none", roleId: "r_none" });
     state.messages = [
@@ -480,29 +480,29 @@ describe("message-level guards — by design, but surprising (see findings doc)"
     const { result } = mount(asUser(state, "u_none"));
     expect(result.current.can("message.send")).toBe(false);
 
-    run(() => result.current.editMessage("m_by_none", "edited"));
+    await run(() => result.current.editMessage("m_by_none", "edited"));
     expect(result.current.state.messages.find((m) => m.id === "m_by_none")?.content).toBe("edited");
   });
 
-  it("toggleReaction is gated only by conversation visibility, not by any permission", () => {
+  it("toggleReaction is gated only by conversation visibility, not by any permission", async () => {
     let state = addRole(baseState(), { id: "r_none2", name: "No Perms 2", permissions: [] });
     state = addUser(state, { id: "u_none2", roleId: "r_none2" });
     const { result } = mount(asUser(state, "u_none2"));
     expect(result.current.can("message.send")).toBe(false);
 
     const target = result.current.state.messages.find((m) => m.channelId === "c_engineering")!;
-    run(() => result.current.toggleReaction(target.id, "👍"));
+    await run(() => result.current.toggleReaction(target.id, "👍"));
     const reacted = result.current.state.messages.find((m) => m.id === target.id)!;
     expect(reacted.reactions.find((r) => r.emoji === "👍")?.userIds).toContain("u_none2");
   });
 
-  it("sendMessage to a DM bypasses the message.send guard entirely", () => {
+  it("sendMessage to a DM bypasses the message.send guard entirely", async () => {
     let state = addRole(baseState(), { id: "r_none3", name: "No Perms 3", permissions: [] });
     state = addUser(state, { id: "u_none3", roleId: "r_none3" });
     const { result } = mount(asUser(state, "u_none3"));
     expect(result.current.can("message.send")).toBe(false);
 
-    const dm = run(() => result.current.sendToUser("u_vlad", "hi from a zero-permission user"));
+    const dm = await run(() => result.current.sendToUser("u_vlad", "hi from a zero-permission user"));
     expect(dm).not.toBeNull();
     expect(
       result.current.state.messages.some((m) => m.content === "hi from a zero-permission user")
