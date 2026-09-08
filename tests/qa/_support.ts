@@ -221,6 +221,14 @@ export class FailingBackend extends LocalBackend {
     return this.run("createTask", task);
   }
 
+  override deleteChannel(): Promise<void> {
+    return this.run("deleteChannel", undefined);
+  }
+
+  override deleteProject(): Promise<void> {
+    return this.run("deleteProject", undefined);
+  }
+
   override updateTask(): Promise<void> {
     return this.run("updateTask", undefined);
   }
@@ -261,7 +269,9 @@ export type FailingOp =
   | "updateProject"
   | "createRole"
   | "setUserRole"
-  | "setRolePermission";
+  | "setRolePermission"
+  | "deleteChannel"
+  | "deleteProject";
 
 /** Runs a store action inside act() and returns whatever it returned, so
  *  `result.current` reflects the resulting state by the time this resolves.

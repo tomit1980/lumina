@@ -140,7 +140,7 @@ interface StoreValue {
     description: string;
     isPrivate: boolean;
   }) => Promise<Channel | null>;
-  deleteChannel: (channelId: string) => Promise<void>;
+  deleteChannel: (channelId: string) => Promise<boolean>;
   /** Sets privacy + the per-member access list in one go. The channel's
    *  creator is always kept as an editor so they can't lock themselves out. */
   setChannelAccess: (
@@ -161,7 +161,7 @@ interface StoreValue {
     priority: Priority;
   }) => Promise<Project | null>;
   updateProject: (projectId: string, patch: ProjectPatch) => Promise<boolean>;
-  deleteProject: (projectId: string) => Promise<void>;
+  deleteProject: (projectId: string) => Promise<boolean>;
   /** Sets restriction + the per-member access list in one go. The project's
    *  creator is always kept as an editor so they can't lock themselves out. */
   setProjectAccess: (
@@ -971,15 +971,15 @@ export function StoreProvider({
 
     const deleteChannel: StoreValue["deleteChannel"] = (channelId) => {
       const s = stateRef.current;
-      if (!s) return Promise.resolve();
+      if (!s) return Promise.resolve(false);
       const channel = s.channels.find((c) => c.id === channelId);
-      if (!channel) return Promise.resolve();
+      if (!channel) return Promise.resolve(false);
       if (channel.isTeam) {
         deny("The team channel can't be deleted.");
-        return Promise.resolve();
+        return Promise.resolve(false);
       }
       if (channel.createdBy !== s.currentUserId && !guard("channel.delete")) {
-        return Promise.resolve();
+        return Promise.resolve(false);
       }
       return commit(
         (st) => ({
@@ -989,7 +989,7 @@ export function StoreProvider({
           activities: activity(st, "channel", `deleted #${channel.name}`),
         }),
         () => backend.deleteChannel(channelId),
-        { ok: () => undefined, failed: undefined, describe: `delete #${channel.name}` }
+        { ok: () => true, failed: false, describe: `delete #${channel.name}` }
       );
     };
 
@@ -1102,10 +1102,10 @@ export function StoreProvider({
     };
 
     const deleteProject: StoreValue["deleteProject"] = (projectId) => {
-      if (!guard("project.delete")) return Promise.resolve();
+      if (!guard("project.delete")) return Promise.resolve(false);
       const s = stateRef.current;
       const project = s?.projects.find((p) => p.id === projectId);
-      if (!s || !project) return Promise.resolve();
+      if (!s || !project) return Promise.resolve(false);
       return commit(
         (st) => ({
           ...st,
@@ -1115,8 +1115,8 @@ export function StoreProvider({
         }),
         () => backend.deleteProject(projectId),
         {
-          ok: () => undefined,
-          failed: undefined,
+          ok: () => true,
+          failed: false,
           describe: `delete the ${project.name} project`,
         }
       );

@@ -332,3 +332,52 @@ describe("a rejection with a later write already landed re-hydrates instead of r
     ).toBe(false);
   });
 });
+
+
+// ---------------------------------------------------------------------
+// Deleting must not claim success for a write the backend refused.
+// Both deletes returned Promise<void>, so all three call sites toasted
+// "deleted" and two of them navigated away — a failed delete sent the user
+// to the home page having told them it worked. The actions now report, and
+// the callers honour it.
+// ---------------------------------------------------------------------
+describe("deleteChannel / deleteProject report a failed write", () => {
+  it("deleteChannel resolves false and restores the channel when the backend rejects", async () => {
+    const backend = new FailingBackend("deleteChannel");
+    const { result } = await mount(adminState(), backend);
+    const channel = result.current.state.channels.find((c) => !c.isTeam)!;
+    const before = result.current.state.channels.length;
+
+    const ok = await run(() => result.current.deleteChannel(channel.id));
+
+    expect(ok).toBe(false);
+    expect(result.current.state.channels).toHaveLength(before);
+    expect(result.current.state.channels.some((c) => c.id === channel.id)).toBe(true);
+    expect(lastErrorToast()?.[0]).toBe("Couldn't save");
+  });
+
+  it("deleteProject resolves false and restores the project when the backend rejects", async () => {
+    const backend = new FailingBackend("deleteProject");
+    const { result } = await mount(adminState(), backend);
+    const project = result.current.state.projects[0];
+    const before = result.current.state.projects.length;
+
+    const ok = await run(() => result.current.deleteProject(project.id));
+
+    expect(ok).toBe(false);
+    expect(result.current.state.projects).toHaveLength(before);
+    expect(result.current.state.projects.some((p) => p.id === project.id)).toBe(true);
+    expect(lastErrorToast()?.[0]).toBe("Couldn't save");
+  });
+
+  it("both resolve true on the happy path, so the caller may report success", async () => {
+    const { result } = await mount(adminState());
+    const channel = result.current.state.channels.find((c) => !c.isTeam)!;
+    const project = result.current.state.projects[0];
+
+    expect(await run(() => result.current.deleteChannel(channel.id))).toBe(true);
+    expect(await run(() => result.current.deleteProject(project.id))).toBe(true);
+    expect(result.current.state.channels.some((c) => c.id === channel.id)).toBe(false);
+    expect(result.current.state.projects.some((p) => p.id === project.id)).toBe(false);
+  });
+});

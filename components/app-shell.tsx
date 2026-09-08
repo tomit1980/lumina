@@ -272,19 +272,20 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     | null
   >(null);
 
-  const runDelete = () => {
+  const runDelete = async () => {
     if (!confirm) return;
     const viewingIt =
       confirm.kind === "channel"
         ? viewing("/chat", confirm.id)
         : viewing("/projects", confirm.id);
+    // Optimistic: the row disappears at once. But only claim it is gone —
+    // and only navigate away from it — once the write has actually landed;
+    // the store rolls the row back and explains if it was refused or failed.
     if (confirm.kind === "channel") {
-      // Optimistic: the row disappears at once and the store rolls it back
-      // (with a toast) if the write is refused or fails.
-      void deleteChannel(confirm.id);
+      if (!(await deleteChannel(confirm.id))) return;
       toast.success(`Channel #${confirm.name} deleted`);
     } else {
-      void deleteProject(confirm.id);
+      if (!(await deleteProject(confirm.id))) return;
       toast.success(`Project “${confirm.name}” deleted`);
     }
     if (viewingIt) router.push("/");

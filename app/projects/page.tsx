@@ -259,8 +259,8 @@ function ProjectPageInner() {
                   {can("project.delete") && (
                     <DropdownMenuItem
                       variant="destructive"
-                      onSelect={() => {
-                        void deleteProject(project.id);
+                      onSelect={async () => {
+                        if (!(await deleteProject(project.id))) return;
                         toast.success(`Project “${project.name}” deleted`);
                         router.push("/");
                       }}
