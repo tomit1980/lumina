@@ -249,14 +249,17 @@ export type Database = {
         Row: {
           created_at: string
           id: string
+          pair_key: string | null
         }
         Insert: {
           created_at?: string
           id: string
+          pair_key?: string | null
         }
         Update: {
           created_at?: string
           id?: string
+          pair_key?: string | null
         }
         Relationships: [
           {
@@ -357,6 +360,7 @@ export type Database = {
           email: string
           handle: string
           id: string
+          mfa_required: boolean
           name: string
           role_id: string
           title: string
@@ -367,6 +371,7 @@ export type Database = {
           email: string
           handle: string
           id: string
+          mfa_required?: boolean
           name: string
           role_id: string
           title?: string
@@ -377,6 +382,7 @@ export type Database = {
           email?: string
           handle?: string
           id?: string
+          mfa_required?: boolean
           name?: string
           role_id?: string
           title?: string
@@ -738,11 +744,14 @@ export type Database = {
       can_join_dm: { Args: { target_dm_id: string }; Returns: boolean }
       can_see_attachment: { Args: { att_id: string }; Returns: boolean }
       can_see_conversation: { Args: { conv_id: string }; Returns: boolean }
+      can_see_profile: { Args: { target_user_id: string }; Returns: boolean }
       can_see_project: { Args: { proj_id: string }; Returns: boolean }
       channel_is_manageable: {
         Args: { target_channel_id: string }
         Returns: boolean
       }
+      dm_pair_key: { Args: { a: string; b: string }; Returns: string }
+      find_or_create_dm: { Args: { other_user_id: string }; Returns: string }
       has_permission: { Args: { perm: string }; Returns: boolean }
       move_task: {
         Args: { p_index: number; p_status: string; p_task_id: string }
@@ -754,6 +763,10 @@ export type Database = {
         Returns: boolean
       }
       project_is_viewer_only: { Args: { proj_id: string }; Returns: boolean }
+      toggle_reaction: {
+        Args: { emoji: string; message_id: string }
+        Returns: Json
+      }
       user_can_see_project: {
         Args: { project_id: string; user_id: string }
         Returns: boolean
