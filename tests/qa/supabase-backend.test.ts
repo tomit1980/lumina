@@ -319,9 +319,22 @@ describe("hydrateWorkspace — failure", () => {
     await expect(hydrateWorkspace(asClient(fake))).rejects.toThrow(/PGRST205/);
   });
 
-  it("rejects when there is no signed-in user instead of hydrating an anonymous shell", async () => {
-    const fake = fakeClient({ userId: null });
-    await expect(hydrateWorkspace(asClient(fake))).rejects.toThrow(/no signed-in user/);
+  it("resolves an EMPTY shell when nobody is signed in, rather than rejecting", async () => {
+    // This test used to assert the opposite, on the reasoning that hydrating
+    // an "anonymous shell" would be a leak. The shell is genuinely empty — no
+    // channels, projects, messages or roles — so there was nothing to leak,
+    // and rejecting cost far more than it saved: StoreProvider renders its
+    // error screen *instead of* its children, so the login screen never
+    // mounted and a signed-out visitor could not sign in at all. Caught by
+    // the end-to-end pass; every unit and policy test passed while the app
+    // was unusable.
+    const state = await hydrateWorkspace(asClient(fakeClient({ userId: null })));
+    expect(state.currentUserId).toBe("");
+    expect(state.channels).toEqual([]);
+    expect(state.projects).toEqual([]);
+    expect(state.messages).toEqual([]);
+    expect(state.roles).toEqual([]);
+    expect(state.activities).toEqual([]);
   });
 
   it("resolves normally when nothing is wrong", async () => {

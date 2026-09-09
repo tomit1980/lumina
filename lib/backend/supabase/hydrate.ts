@@ -17,7 +17,9 @@
  * narrowing here is `activities`' `MAX_ACTIVITIES` cap, which is a display
  * budget the store already applies to its own feed, not an access rule.
  */
-import { toAppState, type HydrateRows } from "./mapping";
+import { toAppState, type HydrateRows,
+  signedOutState,
+} from "./mapping";
 import type { LuminaClient } from "./client";
 import type { AppState } from "../../types";
 
@@ -95,12 +97,17 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     client.from("read_state").select("*"),
   ]);
 
-  if (auth.error) {
-    throw new Error(`hydrate: no signed-in user: ${auth.error.message}`);
-  }
-  const currentUserId = auth.data.user?.id;
+  // Nobody signed in is a normal state, not a failure. Throwing here made
+  // `StoreProvider` render its "couldn't load your workspace" screen *instead
+  // of* its children, so the login screen never mounted and the one action
+  // that would fix the error was unreachable. A signed-out visitor gets the
+  // empty shell and `AuthGate` shows them the login screen; hydrate runs
+  // again for real once they are in. Found by the end-to-end pass — every
+  // unit and policy test passed, because this needs the real backend and a
+  // real browser at the same time.
+  const currentUserId = auth.error ? undefined : auth.data.user?.id;
   if (!currentUserId) {
-    throw new Error("hydrate: no signed-in user");
+    return signedOutState();
   }
 
   const rows: HydrateRows = {
