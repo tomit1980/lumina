@@ -219,8 +219,12 @@ store swap must carry it across:
 ### Phase 2 — the day-one requirements
 
 - **Realtime.** Subscribe to messages, reactions, tasks, projects, channels, and
-  activities; patch the cache on change. Unread badges (`getUnreadCount`,
-  `lib/store.tsx:236-253`) become correct across devices via `read_state`.
+  activities. Unread badges (`getUnreadCount`) become correct across devices via `read_state`.
+  **Superseded in part by `2026-09-09-lumina-realtime-design.md`:** "patch the cache on change"
+  is not available. The row-to-model functions build from lookups grouped once per load, so a
+  single change event cannot rebuild a task, project, message or direct message — each needs
+  one or two join tables its own row does not carry. A brand-new message is the one
+  self-contained case and applies directly; every other change triggers a coalesced reload.
 - **Presence.** Realtime Presence replaces `User.presence`, which is static seed data today
   (`lib/seed.ts:33,42,…`) rendering permanently-fake online dots.
 - **Storage.** Buckets for project, task, and message files. `Attachment.dataUrl` becomes
