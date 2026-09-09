@@ -178,6 +178,8 @@ try {
     id: DM_MSG, conversation_id: DM, author_id: ids.owner,
     content: `dm ${SECRET_MARK}`,
   }));
+  await waitFor("owner: dm message INSERT",
+    () => seenByOwner.some((p) => p.eventType === "INSERT" && p.new?.id === DM_MSG));
 
   must("restricted project", await svc.from("projects").insert({
     id: SECRET_PROJ, name: "Payroll", description: "", emoji: "🔒", color: "#000",
@@ -190,11 +192,16 @@ try {
     id: SECRET_TASK, project_id: SECRET_PROJ, title: `task ${SECRET_MARK}`,
     created_by: ids.owner,
   }));
+  await waitFor("owner: restricted task INSERT",
+    () => seenByOwner.some((p) => p.eventType === "INSERT" && p.new?.id === SECRET_TASK));
+
   // Scoped to the restricted project: activities_read filters on project_id.
   must("scoped activity", await svc.from("activities").insert({
     id: SECRET_ACT, actor_id: ids.owner, text: `activity ${SECRET_MARK}`,
     kind: "project", project_id: SECRET_PROJ,
   }));
+  await waitFor("owner: scoped activity INSERT",
+    () => seenByOwner.some((p) => p.eventType === "INSERT" && p.new?.id === SECRET_ACT));
 
   // read_state_own is the strictest policy in the schema: user_id = auth.uid().
   // Composite PK (user_id, conversation_id) and NO id column, so it is matched
@@ -302,6 +309,23 @@ try {
     seenByOwner.some((p) => p.eventType === "DELETE" && p.old?.id === PRIV_MSG),
     "entitled subscriber received it");
 
+  // CONTROLS THAT KEEP THE REMAINING THREE NEGATIVES BELOW NON-VACUOUS. Same
+  // reasoning as the two controls immediately above: without proof the owner
+  // (entitled to every secret fixture) actually received each of these, "the
+  // outsider received none of it" could equally mean "it was withheld" or
+  // "it was never produced" — and those are not the same finding.
+  check("control: the DM message was produced at all (owner saw it)",
+    seenByOwner.some((p) => p.eventType === "INSERT" && p.new?.id === DM_MSG),
+    "entitled subscriber received it");
+
+  check("control: the restricted task was produced at all (owner saw it)",
+    seenByOwner.some((p) => p.eventType === "INSERT" && p.new?.id === SECRET_TASK),
+    "entitled subscriber received it");
+
+  check("control: the scoped activity was produced at all (owner saw it)",
+    seenByOwner.some((p) => p.eventType === "INSERT" && p.new?.id === SECRET_ACT),
+    "entitled subscriber received it");
+
   // ---------------------------------------------------------------
   // NEGATIVES REQUIRED BY THE BRIEF.
   // ---------------------------------------------------------------
@@ -366,17 +390,29 @@ try {
   // WHAT THIS CHECK ASSERTS: not "there is no leak" (there is, durably, until
   // the platform changes) but that the leak stays BOUNDED to the primary key.
   // It reads every DELETE payload the outsider actually received for the
-  // private message and requires each one's `old` to contain the `id` field
-  // and NOTHING else. Widen the disclosure — e.g. a future platform version
-  // starts including other columns in a DELETE payload — and this goes RED.
-  // (The companion positive controls above — "outsider receives the open
-  // message DELETE" and "control for check 12: the private message DELETE
-  // was produced at all" — are what keep this pin from being vacuous: they
-  // prove DELETE events are actually being produced and delivered at all, so
-  // this check cannot "pass" merely because nothing arrived.)
+  // private message and requires AT LEAST ONE to have arrived, AND each
+  // one's `old` to contain the `id` field and NOTHING else. Widen the
+  // disclosure — e.g. a future platform version starts including other
+  // columns in a DELETE payload — and this goes RED.
+  //
+  // The `.length > 0 &&` guard is load-bearing, not decorative: `.every()`
+  // on an empty array returns `true`, so without it, a run in which the
+  // outsider's DELETE never arrived at all would report this pin as PASSING
+  // — the same vacuous-negative shape this file already fixed once for the
+  // UPDATE/DELETE ordering above. An empty `outsiderPrivDeletes` is NOT a
+  // stronger, better-secured outcome to shrug past: it means DELETE events
+  // stopped being published to this socket, which is itself a reportable
+  // change to the very disclosure this check exists to keep bounded — so it
+  // FAILS the check, loudly, rather than passing by default. (The companion
+  // positive controls above — "outsider receives the open message DELETE"
+  // and "control for the ACCEPTED LIMITATION pin: the private message
+  // DELETE was produced at all" — independently confirm DELETE events are
+  // being produced and delivered at all, so when this check goes red for an
+  // empty array, that red is diagnosable as "stopped arriving at the
+  // outsider specifically," not "the whole delivery path is broken.")
   const outsiderPrivDeletes = seenByOutsider.filter(
     (p) => p.eventType === "DELETE" && p.old?.id === PRIV_MSG);
-  const boundedToPrimaryKey = outsiderPrivDeletes.every((p) => {
+  const boundedToPrimaryKey = outsiderPrivDeletes.length > 0 && outsiderPrivDeletes.every((p) => {
     const keys = Object.keys(p.old ?? {});
     return keys.length === 1 && keys[0] === "id";
   });
@@ -384,7 +420,7 @@ try {
     boundedToPrimaryKey,
     outsiderPrivDeletes.length
       ? `old=${JSON.stringify(outsiderPrivDeletes.map((p) => p.old))}`
-      : "no such DELETE arrived this run (see the positive controls above for production/delivery proof)");
+      : "*** NO DELETE ARRIVED AT THE OUTSIDER — deletes stopped being published; this is NOT a pass ***");
 
   check("outsider receives NO channels row for the private channel",
     !seenByOutsider.some((p) => p.table === "channels" && (p.new?.id === PRIV || p.old?.id === PRIV)),
