@@ -71,6 +71,28 @@ export interface ProjectAccessPatch {
  */
 export type AttachmentOwner = "project" | "task" | "message";
 
+/**
+ * A change the server pushed.
+ *
+ * `message-insert` is the one event applied directly — a brand-new message has
+ * no reactions or attachments yet, so its row is self-contained, and it is the
+ * case where latency is felt. Everything else is `stale`: the row-to-model
+ * functions build from lookups grouped per load, so a lone row cannot rebuild
+ * a task, project or DM (see the spec's "Why not per-row patching").
+ *
+ * A UNION, and deliberately an open-ended one: later tasks add
+ * `{ kind: "presence"; onlineUserIds: string[] }` and
+ * `{ kind: "connection"; online: boolean }`. The apply core switches on `kind`
+ * with a `default` that ignores what it does not know, so a variant added here
+ * cannot crash a store that has not learned about it yet.
+ */
+export type RealtimeEvent =
+  | { kind: "message-insert"; message: Message }
+  | { kind: "stale" };
+
+/** Teardown for `Backend.subscribe`. */
+export type Unsubscribe = () => void;
+
 export interface Backend {
   /** The whole visible workspace for the current user. */
   hydrate(): Promise<AppState>;
@@ -104,6 +126,16 @@ export interface Backend {
   /** Drops everything this backend holds and resolves with the state to
    *  adopt in its place (a fresh seed locally; a signed-out shell later). */
   reset(): Promise<AppState>;
+  /**
+   * Live changes from the server. Returns a teardown. `LocalBackend` returns
+   * an inert one: the demo has no server to hear from.
+   *
+   * The callback is the store's second writer, so what it is handed matters as
+   * much as when. See `RealtimeEvent` below, and the apply core in
+   * lib/store.tsx for the three rules that keep a pushed change from
+   * interleaving destructively with an optimistic one.
+   */
+  subscribe(onEvent: (event: RealtimeEvent) => void): Unsubscribe;
   /**
    * Called after every state change. `LocalBackend` snapshots the whole
    * `AppState` to localStorage — that snapshot *is* its write path, which is

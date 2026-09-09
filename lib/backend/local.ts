@@ -30,7 +30,12 @@ import type {
   Task,
   User,
 } from "../types";
-import type { AttachmentOwner, Backend } from "./types";
+import type {
+  AttachmentOwner,
+  Backend,
+  RealtimeEvent,
+  Unsubscribe,
+} from "./types";
 
 export const STORAGE_KEY = "lumina:v1";
 
@@ -197,6 +202,19 @@ export class LocalBackend implements Backend {
       window.localStorage.removeItem(STORAGE_KEY);
     } catch {}
     return Promise.resolve(createSeed());
+  }
+
+  /**
+   * The demo workspace is the only writer of itself. Nothing to hear, so the
+   * listener is never called and the teardown has nothing to tear down.
+   *
+   * The parameter is declared even though it is ignored: subclasses override
+   * this to become real emitters (`EventBackend` in tests/qa/_support.ts, and
+   * `FailingBackend` through it), and a base signature taking no argument
+   * would make every one of those overrides a type error.
+   */
+  subscribe(_onEvent: (event: RealtimeEvent) => void): Unsubscribe {
+    return () => {};
   }
 
   persist(state: AppState): void {

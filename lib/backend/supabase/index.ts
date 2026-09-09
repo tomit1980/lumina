@@ -34,8 +34,10 @@ import type {
   ChannelAccessPatch,
   ProjectAccessPatch,
   ProjectPatch,
+  RealtimeEvent,
   RolePatch,
   TaskPatch,
+  Unsubscribe,
 } from "../types";
 import type {
   Activity,
@@ -70,6 +72,22 @@ export class SupabaseBackend implements Backend {
    *  holding, which is the whole point on a shared machine. */
   reset(): Promise<AppState> {
     return Promise.resolve(signedOutState());
+  }
+
+  /**
+   * Live changes. Inert until Task 3, which builds `./realtime.ts` and makes
+   * this a one-line delegation to `subscribeToWorkspace(client, onEvent)`.
+   *
+   * Inert rather than absent, and inert rather than half-built: `Backend` now
+   * declares `subscribe`, so this class must answer it or nothing compiles —
+   * and an unsubscribed teardown that does nothing is honest about there being
+   * no channel yet, where a channel opened here without the payload→model
+   * mapping and the tests Task 3 specifies would be a socket nobody had
+   * proved anything about. The store's apply core (lib/store.tsx) is complete
+   * either way; what is missing is only the thing that feeds it.
+   */
+  subscribe(_onEvent: (event: RealtimeEvent) => void): Unsubscribe {
+    return () => {};
   }
 
   /** Deliberately nothing. Each write persists its own rows; there is no

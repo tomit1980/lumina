@@ -9,6 +9,7 @@ import type {
   ChannelAccessPatch,
   ProjectAccessPatch,
   ProjectPatch,
+  RealtimeEvent,
   RolePatch,
   TaskPatch,
 } from "./backend/types";
@@ -34,6 +35,12 @@ import type {
 } from "./types";
 
 const MAX_ACTIVITIES = 60;
+
+/** How long a `stale` event waits for company before it costs a reload. One
+ *  upstream change often produces several published rows (a task and its
+ *  collaborators, a DM and its two members), and one reload answers all of
+ *  them. Short enough that a live change still feels immediate. */
+const STALE_RELOAD_MS = 250;
 
 export function uid(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -481,10 +488,126 @@ export function StoreProvider({
     [adopt]
   );
 
-  /** Monotonic count of optimistic patches applied. A failing write compares
-   *  the value it took against this to find out whether anything landed on
-   *  top of it — see `commit` below. */
+  /** Monotonic count of state changes applied on top of a snapshot. A failing
+   *  write compares the value it took against this to find out whether
+   *  anything landed while it was in flight — see `commit` below.
+   *
+   *  "Optimistic patches" until Task 2; now ALSO every live update the apply
+   *  core lands, because from here on this client is not the only writer of
+   *  `AppState`. A pushed change that did not bump this would be invisible to
+   *  the rollback rule, which would then restore a snapshot taken before it
+   *  and erase it with no error and no toast. */
   const writeSeq = React.useRef(0);
+
+  /** Pending coalesced reload for `stale` events: a burst costs one reload,
+   *  not one each. Holds the timer id, or null when nothing is armed. */
+  const staleTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** How many writes are in flight. A reload while one is running would drop
+   *  its optimistic patch and then race its own rollback, so `stale` waits
+   *  instead of interleaving. */
+  const writeInFlight = React.useRef(0);
+
+  /**
+   * The apply core: everything the server pushes enters `AppState` here, and
+   * nowhere else.
+   *
+   * Three rules, and each exists because the store now has a second writer:
+   *
+   * 1. **Dedup by id.** Message ids are generated client-side, so the echo of
+   *    a message this browser sent arrives carrying an id it already holds.
+   *    Appending it would double every message the user sends. Ids the SERVER
+   *    chooses are already adopted explicitly elsewhere (a DM's id in
+   *    `adoptDmId`, a task's position in `createTask`); a live update must not
+   *    re-fight either, which is one more reason `message-insert` is the only
+   *    event applied directly.
+   * 2. **Bump `writeSeq`.** See the ref's comment above: this is what makes a
+   *    pushed change visible to a failing write's rollback.
+   * 3. **Coalesce `stale`, and never reload over a write in flight.** One
+   *    change upstream can produce several rows (a task plus its
+   *    collaborators, a DM plus its members); one reload answers all of them.
+   *
+   * `default:` rather than an exhaustive switch on purpose — later tasks add
+   * `presence` and `connection` variants, and a store that has not learned
+   * about a variant yet should ignore it, not throw.
+   */
+  const applyEvent = React.useCallback(
+    (event: RealtimeEvent) => {
+      switch (event.kind) {
+        case "message-insert": {
+          const current = stateRef.current;
+          if (!current) return;
+          const { message } = event;
+          // Rule 1. Also covers a duplicate delivery of the same event.
+          if (current.messages.some((m) => m.id === message.id)) return;
+          // Only `messages` is touched, so the activity feed's 60-entry cap
+          // (MAX_ACTIVITIES) cannot be breached from here; the `stale` path
+          // below re-reads a capped feed from the backend.
+          update((s) => ({ ...s, messages: [...s.messages, message] }));
+          // Rule 2, and the whole reason this counter is not named
+          // `optimisticSeq`. A write already in flight took its number before
+          // this landed; bumping here is what tells its rollback that the
+          // state it snapshotted is no longer the state on screen, so it
+          // re-hydrates instead of rewinding this message away.
+          writeSeq.current += 1;
+          return;
+        }
+        case "stale": {
+          // Rule 3. `arm` and `reload` are declarations, not consts, so
+          // `reload` can re-arm the timer without either of them having to
+          // reach outside this callback for the other.
+          function arm() {
+            if (staleTimer.current !== null) clearTimeout(staleTimer.current);
+            staleTimer.current = setTimeout(reload, STALE_RELOAD_MS);
+          }
+          function reload() {
+            staleTimer.current = null;
+            // Waiting rather than reloading is not merely a delay: a reload
+            // mid-write would replace the optimistic patch with a server state
+            // that does not have it yet, and that write's own rollback would
+            // then be reasoning about a state it never patched.
+            if (writeInFlight.current > 0) {
+              arm();
+              return;
+            }
+            void backend.hydrate().then(
+              (fresh) => {
+                adopt(fresh);
+                writeSeq.current += 1; // Rule 2, for a whole-state landing.
+              },
+              (error: unknown) => {
+                // Nothing is undone and nothing is claimed: the screen keeps
+                // showing what it had, which is what it would show if there
+                // were no live updates at all. The next event tries again.
+                console.error("Lumina: could not refresh the workspace", error);
+              }
+            );
+          }
+          arm();
+          return;
+        }
+        default:
+          return;
+      }
+    },
+    [backend, adopt, update]
+  );
+
+  React.useEffect(() => {
+    const unsubscribe = backend.subscribe((event) => {
+      // Deferred: the Supabase client holds an internal lock across this
+      // callback, and calling back into it from inside can deadlock — which
+      // `backend.hydrate()` on the `stale` path would do. lib/auth.tsx defers
+      // `onAuthStateChange` for exactly this reason, and records it there.
+      setTimeout(() => applyEvent(event), 0);
+    });
+    return () => {
+      unsubscribe();
+      if (staleTimer.current !== null) {
+        clearTimeout(staleTimer.current);
+        staleTimer.current = null;
+      }
+    };
+  }, [backend, applyEvent]);
 
   const actions = React.useMemo(() => {
     /** Action-layer enforcement: every mutation is denied — with feedback —
@@ -604,13 +727,21 @@ export function StoreProvider({
       update(patch);
       const logged = appendedActivityIds(snapshot, stateRef.current);
       const seq = (writeSeq.current += 1);
+      // Held from here until the write settles, so the apply core's `stale`
+      // reload waits rather than pulling the server's state in on top of a
+      // patch that is still unconfirmed. Decremented in BOTH branches, and
+      // before either does any work — a reload that ran while the rollback
+      // below was mid-flight would be reading a state about to be replaced.
+      writeInFlight.current += 1;
       return op().then(
         (result) => {
+          writeInFlight.current -= 1;
           const value = outcome.ok(result);
           if (logged.length === 0) return value;
           return logActivities(logged).then(() => value);
         },
         () => {
+          writeInFlight.current -= 1;
           toast.error("Couldn't save", {
             description: `We couldn't ${outcome.describe}. Your change has been undone.`,
           });

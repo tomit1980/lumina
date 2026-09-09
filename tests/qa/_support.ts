@@ -4,7 +4,12 @@ import * as React from "react";
 import { act, render, renderHook } from "@testing-library/react";
 
 import { LocalBackend } from "@/lib/backend/local";
-import type { AttachmentOwner, Backend } from "@/lib/backend/types";
+import type {
+  AttachmentOwner,
+  Backend,
+  RealtimeEvent,
+  Unsubscribe,
+} from "@/lib/backend/types";
 import { StoreProvider, useStore } from "@/lib/store";
 import { createSeed } from "@/lib/seed";
 import type {
@@ -40,6 +45,12 @@ export function baseState(): AppState {
 
 export function asUser(state: AppState, userId: string): AppState {
   return { ...state, currentUserId: userId };
+}
+
+/** The seeded workspace as u_vlad, the admin — enough permission to reach any
+ *  action, so a refusal in a test can only have come from the backend. */
+export function adminState(): AppState {
+  return asUser(baseState(), "u_vlad");
 }
 
 export function addUser(
@@ -205,18 +216,64 @@ export function mountFromExistingStorage() {
   return mountWith();
 }
 
+/**
+ * A `LocalBackend` that can also push events — the store's *second writer*.
+ *
+ * `LocalBackend.subscribe` is inert by design (the demo has no server), so a
+ * test that wants to drive the apply core in lib/store.tsx needs a double that
+ * can actually emit. This is it.
+ */
+export class EventBackend extends LocalBackend {
+  private listener: ((event: RealtimeEvent) => void) | null = null;
+
+  /** How many events this double has pushed.
+   *
+   *  NOT a barrier. This is incremented synchronously by `emit()`, before the
+   *  store has looked at the event — the apply core defers every event by a
+   *  macrotask — so `waitFor(() => backend.emitted === n)` resolves on the
+   *  first tick and proves nothing about the apply path. A test that needs to
+   *  give the apply path its chance to be wrong should emit a second, distinct
+   *  event and wait for THAT to land; the deferrals run in order, so the
+   *  earlier event has necessarily had its turn. See the echo test in
+   *  tests/qa/realtime-apply.test.ts, which was vacuous until it did. */
+  emitted = 0;
+
+  /** Every hydrate() this backend has answered, for assertions about whether
+   *  a rollback re-hydrated or restored a snapshot, and about how many
+   *  reloads a burst of `stale` events cost. */
+  hydrateCalls = 0;
+
+  override subscribe(onEvent: (event: RealtimeEvent) => void): Unsubscribe {
+    this.listener = onEvent;
+    return () => {
+      this.listener = null;
+    };
+  }
+
+  override hydrate(): Promise<AppState> {
+    this.hydrateCalls += 1;
+    return super.hydrate();
+  }
+
+  emit(event: RealtimeEvent): void {
+    this.emitted += 1;
+    this.listener?.(event);
+  }
+}
+
 /** A `Backend` that behaves exactly like `LocalBackend` except for the one
  *  operation named in `failing`, which rejects. Used to drive the store's
  *  rollback rule (lib/store.tsx `commit`) from the tests.
  *
  *  `hydrate()` is the *re-hydrate* path's answer as well as the initial one,
  *  so `hydrateWith` lets a test hand back a state distinguishable from any
- *  snapshot — that is how "re-hydrated" is told apart from "restored". */
-export class FailingBackend extends LocalBackend {
-  /** Every hydrate() this backend has answered, for assertions about
-   *  whether the rollback re-hydrated or restored a snapshot. */
-  hydrateCalls = 0;
-
+ *  snapshot — that is how "re-hydrated" is told apart from "restored".
+ *
+ *  Extends `EventBackend`, not `LocalBackend`, so a test can hold a write in
+ *  flight AND push a live update through the same double — which is what the
+ *  second-writer case (tests/qa/realtime-apply.test.ts) needs. `hydrateCalls`
+ *  and the counting `hydrate()` now live on the base class. */
+export class FailingBackend extends EventBackend {
   constructor(
     private readonly failing: FailingOp,
     /** Returned by `hydrate()` from the second call onward. Omit to keep
@@ -233,11 +290,12 @@ export class FailingBackend extends LocalBackend {
   }
 
   override hydrate(): Promise<AppState> {
-    this.hydrateCalls += 1;
+    // `super.hydrate()` is what counts the call, so it runs either way.
+    const stored = super.hydrate();
     if (this.hydrateWith && this.hydrateCalls > 1) {
       return Promise.resolve(this.hydrateWith());
     }
-    return super.hydrate();
+    return stored;
   }
 
   override sendMessage(message: Message): Promise<Message> {
