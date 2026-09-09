@@ -42,6 +42,44 @@ const MAX_ACTIVITIES = 60;
  *  them. Short enough that a live change still feels immediate. */
 const STALE_RELOAD_MS = 250;
 
+/**
+ * Applies the live presence set to a whole state the backend just handed back.
+ *
+ * Presence is CHANNEL state, not row state. Nothing in Postgres knows who has
+ * a tab open, so `hydrate()` cannot answer it — the Supabase mapping marks
+ * every profile `"offline"` for exactly that reason (see `toUser` in
+ * lib/backend/supabase/mapping.ts), and the only thing that ever says
+ * otherwise is a `presence` event off the channel.
+ *
+ * So a reload that adopted a hydrate's answer verbatim would BLANK every dot
+ * — on every coalesced `stale` reload, which is most workspace changes — and
+ * leave them blank until somebody happened to join or leave, which may be
+ * minutes. That is the stale-dot failure the brief calls worse than no dot at
+ * all, arriving from the direction nobody was watching. Rows come from
+ * `fresh`; presence comes from what the channel last said.
+ *
+ * `online` is the SET the channel reported, not the previous state's users,
+ * and that distinction is load-bearing: at sign-in the presence event arrives
+ * while the store still holds the signed-out shell, whose user list does not
+ * contain the person signing in. Carrying presence forward user-by-user would
+ * have nothing to carry, and the dot would stay dark until the next join or
+ * leave — which is exactly what a browser showed. The set survives the gap;
+ * the reload that introduces the user then lights them.
+ *
+ * `null` means the channel has never said anything (a `LocalBackend` session
+ * never will), and then `fresh` is taken exactly as given.
+ */
+function withLivePresence(fresh: AppState, online: ReadonlySet<string> | null): AppState {
+  if (!online) return fresh;
+  return {
+    ...fresh,
+    users: fresh.users.map((u) => ({
+      ...u,
+      presence: online.has(u.id) ? "online" : "offline",
+    })),
+  };
+}
+
 export function uid(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}_${crypto.randomUUID()}`;
@@ -474,26 +512,11 @@ export function StoreProvider({
    *  what a real session looks like: the channel is freshly opened by the
    *  time this state exists, well before it could have failed. */
   const [connected, setConnected] = React.useState(true);
-
-  // Hydration: the loading screen below shows until this resolves.
-  React.useEffect(() => {
-    let cancelled = false;
-    void backend.hydrate().then(
-      (next) => {
-        if (cancelled) return;
-        setHydrateFailed(false);
-        adopt(next);
-      },
-      (error: unknown) => {
-        if (cancelled) return;
-        console.error("Lumina: could not load the workspace", error);
-        setHydrateFailed(true);
-      }
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [backend, adopt, hydrateAttempt]);
+  /** The same value the apply core can read SYNCHRONOUSLY, so a `connection`
+   *  event can tell a transition from a repeat. Starts `true` for the reason
+   *  above: nothing has dropped yet, so the first `online: true` is a
+   *  confirmation and not a recovery. */
+  const onlineRef = React.useRef(true);
 
   React.useEffect(() => {
     if (!state) return;
@@ -527,6 +550,71 @@ export function StoreProvider({
    *  its optimistic patch and then race its own rollback, so `stale` waits
    *  instead of interleaving. */
   const writeInFlight = React.useRef(0);
+
+  /** The whole online set the channel last reported, or `null` while it has
+   *  never reported one. A ref, not state: every reload path below reads it at
+   *  the moment a hydrate resolves, which is not a render. See
+   *  `withLivePresence` for why the SET is kept rather than the presence
+   *  already written onto `state.users`. */
+  const livePresence = React.useRef<ReadonlySet<string> | null>(null);
+
+  /**
+   * Hydration: the loading screen below shows until the FIRST of these
+   * resolves. Re-runs whenever `hydrateAttempt` moves — the retry button, a
+   * sign-in, and a reconnect all recover by bumping it.
+   *
+   * Declared HERE, below `writeSeq` and `writeInFlight`, because past the
+   * first run this is a reload landing a whole fresh `AppState` on a store
+   * that has a SECOND WRITER — so it owes the same two rules the `stale`
+   * reload in the apply core below obeys, and for the same reasons:
+   *
+   * - **Never land over a write in flight.** A reload mid-write replaces the
+   *   optimistic patch with a server state that does not have it yet, and
+   *   that write's own rollback then reasons about a state it never patched.
+   *   Wait instead, exactly as `stale` does.
+   * - **Bump `writeSeq` on adopt.** This is the one that was missing, and it
+   *   is the worst place to miss it: a write can still begin AFTER the
+   *   hydrate is issued and be in flight when it lands. Without the bump,
+   *   that write failing would find `writeSeq` unchanged, restore its
+   *   pre-reload snapshot, and silently erase everything the reconnect just
+   *   recovered — on the one path whose whole purpose is recovering data,
+   *   and at precisely the moment (a network blip) when a write failing and
+   *   a socket reconnecting are most likely to coincide.
+   */
+  React.useEffect(() => {
+    let cancelled = false;
+    let waiting: ReturnType<typeof setTimeout> | null = null;
+
+    function load() {
+      waiting = null;
+      if (cancelled) return;
+      // Rule 3, as the `stale` path states it. Inert on the first run: no
+      // action can have been dispatched before the store has any state.
+      if (writeInFlight.current > 0) {
+        waiting = setTimeout(load, STALE_RELOAD_MS);
+        return;
+      }
+      void backend.hydrate().then(
+        (next) => {
+          if (cancelled) return;
+          setHydrateFailed(false);
+          adopt(withLivePresence(next, livePresence.current));
+          writeSeq.current += 1; // Rule 2 — see the block comment above.
+        },
+        (error: unknown) => {
+          if (cancelled) return;
+          console.error("Lumina: could not load the workspace", error);
+          setHydrateFailed(true);
+        }
+      );
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+      if (waiting !== null) clearTimeout(waiting);
+    };
+  }, [backend, adopt, hydrateAttempt]);
 
   /**
    * The apply core: everything the server pushes enters `AppState` here, and
@@ -592,7 +680,10 @@ export function StoreProvider({
             }
             void backend.hydrate().then(
               (fresh) => {
-                adopt(fresh);
+                // Rows from the server, presence from the channel — see
+                // `withLivePresence`. Without it this reload, which most
+                // workspace changes end in, blanks every dot.
+                adopt(withLivePresence(fresh, livePresence.current));
                 writeSeq.current += 1; // Rule 2, for a whole-state landing.
               },
               (error: unknown) => {
@@ -616,6 +707,11 @@ export function StoreProvider({
           // tab: the failure mode the brief calls out as worse than no dot at
           // all, because people act on it.
           const online = new Set(event.onlineUserIds);
+          // Kept for the reload paths, which run when this state is long
+          // gone. It is also the ONLY record of a set that arrived before the
+          // workspace did — at sign-in this event lands on the signed-out
+          // shell, whose user list contains nobody it names.
+          livePresence.current = online;
           update((s) => ({
             ...s,
             users: s.users.map((u) => ({
@@ -645,7 +741,21 @@ export function StoreProvider({
           // comment) rather than adding a third way to refetch; NOT gated
           // by `refetchesOnSignIn`, because a real reconnect happens on
           // every backend, injected test doubles included.
-          if (event.online) setHydrateAttempt((n) => n + 1);
+          //
+          // On the TRANSITION, not on the state. `online: true` is emitted
+          // every time the channel reports itself healthy — the first
+          // `SUBSCRIBED` of a page load included, and again after every
+          // re-join — so reloading whenever it is true costs a redundant
+          // whole-workspace fetch each time (the review logged
+          // `true,false,true,false,true,false,true` across one
+          // sign-out/sign-in: four of them). There is only something to
+          // recover when the socket was DOWN and has come back; a repeat of
+          // "still up" has missed nothing. A ref and not `connected`,
+          // because this callback needs the previous value synchronously
+          // and a state variable read here is the one captured at render.
+          const wasOnline = onlineRef.current;
+          onlineRef.current = event.online;
+          if (event.online && !wasOnline) setHydrateAttempt((n) => n + 1);
           return;
         }
         default:
@@ -814,7 +924,11 @@ export function StoreProvider({
           }
           return backend.hydrate().then(
             (fresh) => {
-              adopt(fresh);
+              // Rows from the server, presence from the channel — the same
+              // reason as the reload paths: a hydrate cannot know who has a
+              // tab open, so adopting its answer verbatim would blank every
+              // dot as a side effect of one write being refused.
+              adopt(withLivePresence(fresh, livePresence.current));
               return outcome.failed;
             },
             () => {

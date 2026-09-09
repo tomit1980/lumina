@@ -203,11 +203,14 @@ function groupBy<T, K extends string>(rows: T[], key: (row: T) => K): Map<K, T[]
 // Models
 // ---------------------------------------------------------------------------
 
-/** Mismatch 10 and 12. `currentUserId` is unused for presence now — see
- *  mismatch 10 — but stays a parameter because `toRole`-style call sites
- *  elsewhere may still want it and dropping it would be churn with no
- *  payoff. */
-export function toUser(row: ProfileRow, _currentUserId: string): User {
+/** Mismatch 10 and 12. Presence is deliberately NOT derived from the row: a
+ *  profile row cannot know who has a tab open, so everyone maps to `"offline"`
+ *  and the realtime channel's `presence` events are the only thing that ever
+ *  says otherwise (lib/store.tsx keeps the live set across a reload — see
+ *  `withLivePresence` there, which is what stops a reload blanking every dot).
+ *  That is also why this no longer takes a `currentUserId`: it was read for
+ *  presence, nothing else reads it, and there is exactly one caller. */
+export function toUser(row: ProfileRow): User {
   return {
     id: row.id,
     name: row.name,
@@ -372,7 +375,7 @@ export function toAppState(rows: HydrateRows): AppState {
   return {
     version: SEED_VERSION,
     currentUserId: rows.currentUserId,
-    users: rows.profiles.map((p) => toUser(p, rows.currentUserId)),
+    users: rows.profiles.map(toUser),
     roles: rows.roles.map(toRole),
     channels: rows.channels.map((c) =>
       toChannel(c, members(channelMembersByChannel.get(c.id)))

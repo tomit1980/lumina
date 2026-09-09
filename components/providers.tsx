@@ -71,8 +71,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <TooltipProvider delayDuration={200}>
             <UIProvider>
               <SessionBridge />
-              <ConnectionStatus />
               <AuthGate>
+                {/* Inside the gate, not above it. The socket is re-joined on
+                    every sign-in — as the new identity, which is the whole
+                    point — and that re-join is honestly reported as a brief
+                    disconnection. Mounted outside, the amber strip flashed
+                    across the sign-in screen every time somebody signed in,
+                    which is both alarming and meaningless: there is no
+                    workspace on screen to be stale. It matters only where a
+                    workspace is being shown. */}
+                <ConnectionStatus />
                 {children}
                 <CommandPalette />
                 <TaskDialog />

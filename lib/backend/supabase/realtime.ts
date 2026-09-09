@@ -46,10 +46,13 @@
  * 2. **Make the blindness detectable.** A blind socket's own status is
  *    `SUBSCRIBED`, so status alone cannot be trusted to mean "connected".
  *    This file therefore reports `{ kind: "connection", online: true }` only
- *    while the channel is subscribed AND the identity it joined with is still
- *    the signed-in identity (`joinedAs`, re-verified against the session on
- *    every `SUBSCRIBED` and on every auth change). A mismatch is exactly the
- *    lie this task exists to kill, so it is reported as `online: false` — the
+ *    once the channel is subscribed AND the identity it joined with has been
+ *    re-verified against the session (`joinedAs`, re-read on every
+ *    `SUBSCRIBED` and on every auth change) AND that identity is somebody —
+ *    a channel carrying only the publishable key satisfies no policy here, so
+ *    it receives nothing by construction and says so. Nothing is claimed
+ *    before that check answers, rather than claimed and retracted. A mismatch
+ *    is exactly the lie this task exists to kill, so it is `online: false` — the
  *    "Reconnecting…" strip is honest about a socket that is delivering
  *    nothing — and repaired by re-joining. `connected: true` now means the
  *    socket is receiving what this user may see, not merely that a websocket
@@ -294,14 +297,20 @@ export function subscribeToWorkspace(
       // back up is reloading, and there is nothing a finer-grained reason
       // would let it do differently.
       const up = status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED;
-      emit({ kind: "connection", online: up });
-      if (!up) return;
+      if (!up) {
+        emit({ kind: "connection", online: false });
+        return;
+      }
 
-      // The blindness check. `SUBSCRIBED` is precisely the status a channel
-      // that joined as nobody reports, so it is not on its own evidence that
-      // anything will arrive. Re-reading the session here catches a sign-in
-      // that landed while this join was in flight — the exact race that made
-      // the app blind — and turns it into a re-join instead of a silent lie.
+      // The blindness check, and NOTHING is claimed until it answers.
+      // `SUBSCRIBED` is precisely the status a channel that joined as nobody
+      // reports, so it is not on its own evidence that anything will arrive.
+      // Re-reading the session here catches a sign-in that landed while this
+      // join was in flight — the exact race that made the app blind — and
+      // turns it into a re-join instead of a silent lie. Announcing
+      // `online: true` up front and correcting it a moment later would be a
+      // smaller version of the same lie: a channel about to be torn down and
+      // re-joined would be reported healthy on the way past.
       void (async () => {
         const now = await sessionUserId(client);
         if (disposed || mine !== generation) return;
@@ -315,11 +324,23 @@ export function subscribeToWorkspace(
           schedule(join);
           return;
         }
-        // Not signed in: nothing of this client's own to announce. The
-        // `postgres_changes` half of this channel still works — RLS, not
-        // presence, is what gates row access — this only means nobody sees a
-        // dot for a client with no user to track.
-        if (!uid) return;
+        // Signed out, and the session agrees — so this is not a race, it is
+        // simply nobody. The channel is nonetheless receiving nothing and
+        // will keep receiving nothing for as long as it exists: every policy
+        // in this schema is `to authenticated`, and the socket is carrying
+        // the publishable key, which satisfies none of them. `connected` on
+        // this branch means "receiving what this user may see", so the
+        // honest answer is `false` — an anon channel reporting itself
+        // healthy is the same class of claim this file exists to delete.
+        // Nothing is announced for presence either: there is no user to
+        // track. (`ConnectionStatus` lives inside the auth gate, so a
+        // signed-out browser is looking at the sign-in screen and sees no
+        // strip; this only stops the store from believing a lie.)
+        if (!uid) {
+          emit({ kind: "connection", online: false });
+          return;
+        }
+        emit({ kind: "connection", online: true });
         void opened.track({ user_id: uid } satisfies PresencePayload);
       })();
     });

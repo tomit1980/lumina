@@ -7,12 +7,21 @@
 // and `@/lib/backend/supabase` and still run *is* the assertion that the real
 // client stayed out of the static graph. The first describe block makes that
 // implicit guarantee explicit.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The on-demand client loader, stubbed to FAIL — which is what a
+// misconfigured deployment really does, since `lib/supabase.ts` throws at
+// import time when its environment variables are missing. Nothing else in
+// this file goes near it: every other test injects a client, so
+// `browserClient` is never called by them. See the last describe block.
+vi.mock("@/lib/backend/supabase/client", () => ({
+  browserClient: () => Promise.reject(new Error("NEXT_PUBLIC_SUPABASE_URL is missing")),
+}));
 
 import { createBackend } from "@/lib/backend";
 import { LocalBackend } from "@/lib/backend/local";
 import { SupabaseBackend } from "@/lib/backend/supabase";
-import type { Backend } from "@/lib/backend/types";
+import type { Backend, RealtimeEvent } from "@/lib/backend/types";
 import { hydrateWorkspace } from "@/lib/backend/supabase/hydrate";
 import type { LuminaClient } from "@/lib/backend/supabase/client";
 
@@ -1145,5 +1154,53 @@ describe("SupabaseBackend — sign-out", () => {
   it("has nothing to do in persist() — each write owns its own rows", () => {
     const backend = new SupabaseBackend(asClient(fakeClient()));
     expect(() => backend.persist()).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// final-review.md finding 6 — a client that never loads must be reported as a
+// disconnection, not swallowed.
+// ---------------------------------------------------------------------------
+describe("SupabaseBackend — subscribe when the client cannot be loaded", () => {
+  it("reports the failure as a disconnection instead of leaving `connected` stuck true", async () => {
+    // `void this.client().then(ok)` with no rejection handler is the shape
+    // this pins against: the store would never receive a `connection` event
+    // at all, its optimistic `connected: true` default would stand forever,
+    // and the app would render a live-looking workspace over a socket that
+    // was never opened — while the rejection escaped unhandled.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const events: RealtimeEvent[] = [];
+      // No injected client, so `browserClient()` — mocked at the top of this
+      // file to reject — is the path taken.
+      const unsubscribe = new SupabaseBackend().subscribe((e) => events.push(e));
+
+      await vi.waitFor(() => expect(events).toContainEqual({
+        kind: "connection",
+        online: false,
+      }));
+      expect(errors).toHaveBeenCalled();
+      // And tearing down a subscription that never opened is still safe.
+      expect(() => unsubscribe()).not.toThrow();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("stays silent if it was torn down before the load failed", async () => {
+    // The control for the assertion above: the same failing load, and no
+    // event — because nothing is listening any more. Without this, "emits a
+    // disconnection" could be a backend that emits one unconditionally.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const events: RealtimeEvent[] = [];
+      const unsubscribe = new SupabaseBackend().subscribe((e) => events.push(e));
+      unsubscribe();
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
   });
 });

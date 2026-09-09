@@ -27,16 +27,26 @@
 //      even after signing in. If this ever fails, the platform has changed
 //      and the re-join in lib/backend/supabase/realtime.ts may be able to go;
 //      read the note here before deleting anything.
-//   2. THE REGRESSION — the same socket, repaired the way the app now repairs
-//      it (`realtime.setAuth(token)` then a real re-join of the topic), DOES
-//      receive an event written after sign-in. This is the assertion that
-//      would have caught the bug.
+//   2. THE REGRESSION — `subscribeToWorkspace` ITSELF, the real module from
+//      lib/backend/supabase/realtime.ts, imported and run here against the
+//      real server in the app's own order (subscribe first, sign in after).
+//      It must deliver a message written after sign-in. Until the final
+//      review this check re-implemented the repair by hand instead, so
+//      nothing committed bound the module to the server: the module was
+//      pinned only against a fake client that models the hazard, and the
+//      server was pinned only against an imitation of the module. Either one
+//      could drift from the other with every test still green.
 //   3. Control — a socket that signed in BEFORE subscribing receives the same
 //      event. Without it, a failure of 1 or 2 could not be told apart from
 //      "the write never produced an event at all".
 //   4. Signing out re-joins as nobody, and the socket then receives nothing —
 //      while the control, still signed in, receives the same write. A
 //      session change must not leave the previous person's rows arriving.
+//   5. HONESTY — what the module says about itself, against the real server:
+//      it must not report `connection online: true` while it is joined as
+//      nobody (every policy here is `to authenticated`, so such a channel
+//      receives nothing by construction), and it must report `false` again
+//      after a sign-out.
 //
 // NO SLEEPS. `subscribe()` races a rejection deadline; delivery is awaited by
 // polling a predicate to a wall-clock deadline and returning the instant it
@@ -45,6 +55,11 @@
 // arriving somewhere it was entitled to.
 import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+
+// The module under test, imported for real — Node strips the types. This is
+// the whole point of check 2: what runs below is the code the browser runs,
+// not a description of it.
+import { subscribeToWorkspace } from "../../lib/backend/supabase/realtime.ts";
 
 config({ path: ".env.test.local", quiet: true });
 const URL = process.env.SUPABASE_URL;
@@ -71,6 +86,9 @@ const TOPIC = `probe-workspace-${stamp}`;
 const OPEN = `c_rtauth_open_${stamp}`;
 const ids = {};
 const clients = [];
+/** Teardown for the real module's own subscription — it owns a channel and an
+ *  auth listener, and both must go even if a check below throws. */
+let moduleUnsubscribe = null;
 let failures = 0;
 let checks = 0;
 const check = (label, pass, detail = "") => {
@@ -135,22 +153,6 @@ const openChannel = async (label, client, sink) => {
   return ch;
 };
 
-/**
- * The repair, exactly as `subscribeToWorkspace` performs it: hand the socket
- * the session's token, then LEAVE and RE-JOIN the topic.
- *
- * `removeChannel`, not `unsubscribe`, and that is load-bearing:
- * `client.channel(topic)` returns the EXISTING channel for a topic still
- * registered on the client, so an unsubscribe alone would hand the dead one
- * straight back and nothing would ever re-join.
- */
-const rejoin = async (label, client, oldChannel, sink) => {
-  const { data } = await client.auth.getSession();
-  await client.realtime.setAuth(data.session?.access_token ?? null);
-  await client.removeChannel(oldChannel);
-  return openChannel(label, client, sink);
-};
-
 const mkClient = () => {
   const c = createClient(URL, anonKey, { auth: { persistSession: false } });
   clients.push(c);
@@ -202,9 +204,7 @@ try {
   // -----------------------------------------------------------------
   const appClient = mkClient();
   const seenByApp = [];
-  let appChannel = await openChannel(
-    "app (subscribed, then signed in)", appClient, seenByApp
-  );
+  await openChannel("app (subscribed, then signed in)", appClient, seenByApp);
   await signIn(appClient, appEmail);
 
   // supabase-js's own `_handleTokenChanged` has already pushed the new token
@@ -234,35 +234,92 @@ try {
   );
 
   // -----------------------------------------------------------------
-  // THE REGRESSION. The repair the app now performs, and the assertion
-  // that fails if it is ever removed or broken.
+  // THE REGRESSION, driven through the REAL MODULE.
+  //
+  // A fresh client, signed out, handed straight to `subscribeToWorkspace` —
+  // the app's own order and the app's own code, against the real server. No
+  // step of the repair is performed here: if the module stops attaching the
+  // session, stops re-joining on sign-in, or re-joins the wrong way, this
+  // goes red. It is deliberately NOT told the topic, the token, or when to
+  // re-join; it is only asked what it delivered.
   // -----------------------------------------------------------------
-  appChannel = await rejoin("app (re-joined carrying the session)", appClient, appChannel, seenByApp);
+  const moduleClient = mkClient();
+  /** Every `RealtimeEvent` the module emitted, and the connection half of
+   *  them separately — what it CLAIMS about its own health, which is the
+   *  other thing this branch exists to keep honest. */
+  const fromModule = [];
+  const health = [];
+  /** Set the instant this probe hands the client a session, so any
+   *  `online: true` recorded while it is false was said about a channel
+   *  joined as nobody. A flag rather than a snapshot taken after the fact:
+   *  a claim that arrives a moment late is the same claim. */
+  let signedIn = false;
+  let claimedHealthyAsNobody = false;
+  moduleUnsubscribe = subscribeToWorkspace(moduleClient, (event) => {
+    fromModule.push(event);
+    if (event.kind !== "connection") return;
+    health.push(event.online);
+    if (event.online && !signedIn) claimedHealthyAsNobody = true;
+  });
+  const gotMessage = (id) =>
+    fromModule.some((e) => e.kind === "message-insert" && e.message.id === id);
+
+  // Let the anon join settle, so what the module says about itself while
+  // joined as nobody is on the record before anyone signs in.
+  await waitFor("the module reports on its first join", () => health.length > 0, 15_000);
+
+  signedIn = true;
+  await signIn(moduleClient, appEmail);
+  // The module observes the session change itself (`onAuthStateChange`) and
+  // re-joins. Waiting for it to SAY it is healthy, rather than sleeping.
+  const moduleReportedUp = await waitFor(
+    "the module reports online after sign-in",
+    () => health[health.length - 1] === true
+  );
 
   const afterRejoin = await post("after_rejoin");
-  const appSaw = await waitFor(
-    "app socket receives the write after the re-join",
-    () => got(seenByApp, afterRejoin)
+  const moduleSaw = await waitFor(
+    "the module delivers the write made after sign-in",
+    () => gotMessage(afterRejoin)
   );
   check(
-    "THE REGRESSION: a socket subscribed BEFORE sign-in receives events afterwards, once it carries the session and re-joins",
-    appSaw,
-    appSaw ? "received" : `*** nothing arrived; ${seenByApp.length} event(s) seen in total ***`
+    "THE REGRESSION: subscribeToWorkspace itself, subscribed BEFORE sign-in, delivers a write made after it",
+    moduleSaw,
+    moduleSaw
+      ? `received; the module emitted ${fromModule.length} event(s)`
+      : `*** nothing arrived; ${fromModule.length} event(s) emitted in total ***`
   );
   check(
     "positive control: the same write reached the control socket too",
     await waitFor("control receives the second write", () => got(seenByControl, afterRejoin)),
     `${seenByControl.length} event(s) seen`
   );
+  check(
+    "the module reported itself online once it really was receiving",
+    moduleReportedUp,
+    `connection events: ${health.join(",") || "none"}`
+  );
+  // HONESTY (finding 8). Bounded by the check above: the module demonstrably
+  // does say `true` when it is entitled to, so a `false` while joined as
+  // nobody is a judgement and not a socket that never worked.
+  check(
+    "the module did NOT claim to be online while joined as nobody — no policy here grants the anon key anything",
+    !claimedHealthyAsNobody,
+    claimedHealthyAsNobody
+      ? "*** reported online: true for a channel that receives nothing by construction ***"
+      : "reported offline until it carried a session"
+  );
 
   // -----------------------------------------------------------------
   // The other half of a session change: signing out must not leave the
-  // previous person's rows arriving.
+  // previous person's rows arriving — and the module must say so.
   // -----------------------------------------------------------------
-  await appClient.auth.signOut();
-  // Not re-captured: nothing re-joins after this, and the `finally` block
-  // tears every channel down through `removeAllChannels()`.
-  await rejoin("app (re-joined as nobody)", appClient, appChannel, seenByApp);
+  health.length = 0;
+  await moduleClient.auth.signOut();
+  await waitFor(
+    "the module reports the socket down after sign-out",
+    () => health.includes(false)
+  );
 
   const afterSignOut = await post("after_signout");
   const controlSawThird = await waitFor(
@@ -275,16 +332,33 @@ try {
     `${seenByControl.length} event(s) seen`
   );
   check(
-    "after sign-out the re-joined socket receives nothing — the token went with the session",
-    !got(seenByApp, afterSignOut),
-    got(seenByApp, afterSignOut)
+    "after sign-out the module's re-joined socket receives nothing — the token went with the session",
+    !gotMessage(afterSignOut),
+    gotMessage(afterSignOut)
       ? "*** a signed-out socket received a message row ***"
       : "silent, as an unauthenticated socket must be"
   );
+  check(
+    "and it says so: no online: true survives the sign-out",
+    !health.includes(true),
+    `connection events since sign-out: ${health.join(",") || "none"}`
+  );
 
-  console.log("\napp socket payload summary:");
+  console.log("\nhand-rolled app socket payload summary:");
   for (const p of seenByApp) {
     console.log(`  ${p.eventType.padEnd(6)} ${p.table.padEnd(16)} ${p.new?.id ?? p.old?.id ?? ""}`);
+  }
+  console.log("module event summary:");
+  for (const e of fromModule) {
+    console.log(
+      `  ${e.kind.padEnd(15)} ${
+        e.kind === "message-insert"
+          ? e.message.id
+          : e.kind === "connection"
+            ? `online=${e.online}`
+            : ""
+      }`
+    );
   }
 } catch (err) {
   // A throw here means the checks below it never ran. Without this, `failures`
@@ -293,6 +367,7 @@ try {
   failures++;
   console.log(`*** SETUP/RUN ERROR *** ${err && err.message ? err.message : err}`);
 } finally {
+  try { moduleUnsubscribe?.(); } catch { /* teardown */ }
   for (const c of clients) {
     try { await c.removeAllChannels(); } catch { /* teardown */ }
   }

@@ -520,6 +520,80 @@ describe("subscribeToWorkspace — connection", () => {
 
     expect(events).toEqual([{ kind: "connection", online: false }]);
   });
+
+  // final-review.md finding 7. `connected` means "receiving what this user may
+  // see" on this branch, and until the blindness check answers, nothing here
+  // knows whether that is so. Announcing `true` first and correcting it a
+  // moment later is a smaller version of the same lie the whole file exists to
+  // delete: a channel about to be torn down and re-joined gets reported
+  // healthy on the way past — and, before finding 3 was fixed, cost the store
+  // a whole redundant workspace reload for the privilege.
+  it("claims nothing about health until the blindness check has answered", async () => {
+    const fake = createFakeClient("u_maya");
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+    await flush();
+
+    // The session read is held open — this is precisely the window in which
+    // the old code announced `online: true` about a channel it had not
+    // checked.
+    let answer!: (value: unknown) => void;
+    fake.client.auth.getSession = (() =>
+      new Promise((resolve) => {
+        answer = resolve;
+      })) as unknown as SupabaseClient<Database>["auth"]["getSession"];
+
+    events.length = 0;
+    fake.fireSubscribed();
+    await flush();
+
+    expect(events).toEqual([]);
+
+    answer({
+      data: { session: { user: { id: "u_maya" }, access_token: "token-u_maya" } },
+      error: null,
+    });
+    await flush();
+
+    // And it does get there — so "said nothing" above is a deferral, not a
+    // channel that never reports at all.
+    expect(events).toContainEqual({ kind: "connection", online: true });
+  });
+
+  // final-review.md finding 8. Every policy in this schema is `to
+  // authenticated`, and the socket for a signed-out client carries the
+  // publishable key — which satisfies none of them. Such a channel is
+  // SUBSCRIBED, healthy-looking, and receives nothing for as long as it
+  // exists. That is the exact shape of the bug this branch was opened for,
+  // and it must not be reported as health.
+  it("reports offline while joined as nobody — an anon channel receives nothing by construction", async () => {
+    const fake = createFakeClient(null);
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+    await flush();
+
+    events.length = 0;
+    fake.fireSubscribed();
+    await flush();
+
+    expect(events).toContainEqual({ kind: "connection", online: false });
+    expect(events).not.toContainEqual({ kind: "connection", online: true });
+  });
+
+  it("but does report online for a signed-in channel — the control", async () => {
+    // Without this, "never says true" up there could just as well describe an
+    // implementation that never says true at all.
+    const fake = createFakeClient("u_maya");
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+    await flush();
+
+    events.length = 0;
+    fake.fireSubscribed();
+    await flush();
+
+    expect(events).toContainEqual({ kind: "connection", online: true });
+  });
 });
 
 // ---------------------------------------------------------------------------

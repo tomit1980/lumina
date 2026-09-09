@@ -71,6 +71,45 @@ describe("connection events", () => {
 
     expect(backend.hydrateCalls).toBe(before);
   });
+
+  // final-review.md finding 3. The channel reports `online: true` every time
+  // it is healthy — on the first `SUBSCRIBED` of a page load, and again after
+  // every re-join — so a store that reloads whenever it is true costs a
+  // redundant whole-workspace fetch each time. The review logged
+  // `true,false,true,false,true,false,true` across one sign-out/sign-in:
+  // four of them. There is only something to recover when the socket was
+  // DOWN and has come back.
+  it("does not reload for a repeated online: true — only for the transition back up", async () => {
+    const backend = new EventBackend();
+    const { result } = await mount(adminState(), backend);
+    const before = backend.hydrateCalls;
+
+    backend.emit({ kind: "connection", online: true });
+    backend.emit({ kind: "connection", online: true });
+    // A barrier, not a sleep, and not `waitFor(() => connected === true)` —
+    // which is already true and would resolve before the apply core had
+    // looked at either event. The apply core defers every event by a
+    // macrotask, in FIFO order, so once THIS one is on screen both of those
+    // have had their turn to be wrong. (`_support.ts` records the same trap
+    // for `backend.emitted`.)
+    backend.emit({ kind: "presence", onlineUserIds: ["u_maya"] });
+    await waitFor(() =>
+      expect(result.current.state.users.find((u) => u.id === "u_maya")!.presence)
+        .toBe("online"));
+
+    // The reload is issued from an EFFECT, so the render the events caused
+    // has to be followed by its effects before "no reload" means anything.
+    await act(async () => {});
+    expect(backend.hydrateCalls).toBe(before);
+
+    // The control: a real drop and recovery still costs exactly one reload,
+    // so the assertion above is about redundancy and not about a store that
+    // has stopped reloading altogether.
+    backend.emit({ kind: "connection", online: false });
+    await waitFor(() => expect(result.current.connected).toBe(false));
+    backend.emit({ kind: "connection", online: true });
+    await waitFor(() => expect(backend.hydrateCalls).toBe(before + 1));
+  });
 });
 
 // `ConnectionStatus` itself — the visible half. Rendered for real (not just

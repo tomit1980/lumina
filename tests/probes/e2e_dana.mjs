@@ -46,7 +46,16 @@ if (action === "post") {
   console.log(`posted ${id}: ${arg ?? "from Dana"}`);
 } else if (action === "presence") {
   const seconds = Number(arg ?? 30);
-  const channel = c.channel("lumina-presence", {
+  // The app's topic, and it has to be exactly this. Presence is scoped to a
+  // topic: a helper tracking on any other name is invisible to the app, so a
+  // manual presence check with it can neither light a dot nor prove one is
+  // missing. It said "lumina-presence" until the final review caught it —
+  // keep this in step with `TOPIC` in lib/backend/supabase/realtime.ts.
+  const TOPIC = "workspace-changes";
+  // The socket carries a token of its own, set separately from the REST one;
+  // sign-in pushes it, but say so explicitly rather than relying on the order.
+  await c.realtime.setAuth(session.session.access_token);
+  const channel = c.channel(TOPIC, {
     config: { presence: { key: me } },
   });
   await new Promise((resolve, reject) => {
@@ -57,7 +66,7 @@ if (action === "post") {
     setTimeout(() => reject(new Error("never subscribed")), 10_000);
   });
   await channel.track({ user_id: me });
-  console.log(`Dana present for ${seconds}s (user ${me})`);
+  console.log(`Dana present for ${seconds}s on "${TOPIC}" (user ${me})`);
   await new Promise((r) => setTimeout(r, seconds * 1000));
   await channel.untrack();
   await c.removeChannel(channel);

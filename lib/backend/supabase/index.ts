@@ -86,14 +86,30 @@ export class SupabaseBackend implements Backend {
    * resolves and hands back a teardown that works either way: torn down
    * before the client resolved, the `cancelled` flag stops the channel from
    * ever being opened; torn down after, it calls the real unsubscribe.
+   *
+   * The rejection half is not boilerplate. `this.client()` loads
+   * `lib/supabase.ts` on demand, and that module THROWS at import time when
+   * its environment variables are missing — so a misconfigured deployment
+   * fails exactly here. Without a handler the store would never receive a
+   * `connection` event at all, `connected` would sit at its optimistic `true`
+   * default forever, and the app would show a live-looking workspace over a
+   * socket that was never opened — the same lie this file's realtime work
+   * exists to remove. It is reported as what it is: a disconnection.
    */
   subscribe(onEvent: (event: RealtimeEvent) => void): Unsubscribe {
     let cancelled = false;
     let unsubscribe: Unsubscribe | null = null;
-    void this.client().then((client) => {
-      if (cancelled) return;
-      unsubscribe = subscribeToWorkspace(client, onEvent);
-    });
+    void this.client().then(
+      (client) => {
+        if (cancelled) return;
+        unsubscribe = subscribeToWorkspace(client, onEvent);
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        console.error("Lumina: could not open the realtime connection", error);
+        onEvent({ kind: "connection", online: false });
+      }
+    );
     return () => {
       cancelled = true;
       unsubscribe?.();
