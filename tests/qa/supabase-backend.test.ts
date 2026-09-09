@@ -44,6 +44,7 @@ function fakeClient(opts: {
       order: () => self,
       limit: () => self,
       eq: () => self,
+      in: () => self,
       // Task 5's writes. Each still settles through `settle()`, so a table
       // named in `errors` fails and every other one comes back empty — which
       // is exactly the "RLS filtered it away" shape the update and delete
@@ -244,15 +245,15 @@ describe("hydrateWorkspace — failure", () => {
   });
 });
 
-describe("SupabaseBackend — the operations Tasks 6-8 still owe", () => {
+describe("SupabaseBackend — the operations Tasks 7-8 still owe", () => {
   // Typed as `Backend`, not as the class: lib/backend/types.ts is where the
   // contract's parameters are named, and the implementations deliberately
   // declare none (same style as LocalBackend).
   const backend: Backend = new SupabaseBackend(asClient(fakeClient()));
 
-  /** Task 5's seven moved out of this list when they were implemented. They
-   *  keep the second property below — never a synchronous throw — because
-   *  `commit()` calls `op()` outside a try/catch either way. */
+  /** Tasks 5 and 6 moved their own out of this list when they were
+   *  implemented. They keep the second property below — never a synchronous
+   *  throw — because `commit()` calls `op()` outside a try/catch either way. */
   const implemented: Array<[string, () => Promise<unknown>]> = [
     ["sendMessage", () => backend.sendMessage({ attachments: [] } as never)],
     ["sendToUser", () => backend.sendToUser({ memberIds: ["a", "b"] } as never, true, { attachments: [] } as never)],
@@ -261,6 +262,13 @@ describe("SupabaseBackend — the operations Tasks 6-8 still owe", () => {
     ["toggleReaction", () => backend.toggleReaction("m", "👍")],
     ["markChannelRead", () => backend.markChannelRead("c", 0)],
     ["openDm", () => backend.openDm({ memberIds: ["a", "b"] } as never)],
+    ["createChannel", () => backend.createChannel({ members: [], createdAt: 0 } as never)],
+    ["deleteChannel", () => backend.deleteChannel("c")],
+    ["setChannelAccess", () => backend.setChannelAccess("c", { isPrivate: false, members: [] })],
+    ["createProject", () => backend.createProject({ attachments: [], members: [], createdAt: 0 } as never)],
+    ["updateProject", () => backend.updateProject("p", { name: "n" })],
+    ["deleteProject", () => backend.deleteProject("p")],
+    ["setProjectAccess", () => backend.setProjectAccess("p", { restricted: false, members: [] })],
   ];
 
   const writes: Array<[string, () => Promise<unknown>]> = [
@@ -269,13 +277,6 @@ describe("SupabaseBackend — the operations Tasks 6-8 still owe", () => {
     ["updateRole", () => backend.updateRole("r", {})],
     ["setRolePermission", () => backend.setRolePermission("r", "task.edit", true)],
     ["deleteRole", () => backend.deleteRole("r")],
-    ["createChannel", () => backend.createChannel({} as never)],
-    ["deleteChannel", () => backend.deleteChannel("c")],
-    ["setChannelAccess", () => backend.setChannelAccess("c", {} as never)],
-    ["createProject", () => backend.createProject({} as never)],
-    ["updateProject", () => backend.updateProject("p", {})],
-    ["deleteProject", () => backend.deleteProject("p")],
-    ["setProjectAccess", () => backend.setProjectAccess("p", {} as never)],
     ["createTask", () => backend.createTask({} as never)],
     ["updateTask", () => backend.updateTask("t", {})],
     ["moveTask", () => backend.moveTask("t", "todo", 0)],
@@ -339,6 +340,92 @@ describe("SupabaseBackend — a write RLS filtered away is not a success", () =>
     // conversation, and every message posted into it would be orphaned.
     const dm = { id: "d_optimistic", memberIds: [ME, "u_other"], createdAt: 0 };
     await expect(backend.openDm(dm as never)).rejects.toThrow(/no thread was returned/);
+  });
+
+  // Task 6's four filtered-away shapes. Each of these is an UPDATE or DELETE
+  // whose USING clause can filter the row away — "you don't manage this
+  // project", "that isn't your channel to delete" — and PostgREST reports every
+  // one of them as `error: null` with an empty body.
+  it("deleteChannel rejects when no row came back", async () => {
+    await expect(backend.deleteChannel("c_someone_elses")).rejects.toThrow(/not yours/i);
+  });
+
+  it("deleteProject rejects when no row came back", async () => {
+    await expect(backend.deleteProject("p_locked")).rejects.toThrow(/permission/i);
+  });
+
+  it("updateProject rejects when no row came back", async () => {
+    await expect(backend.updateProject("p_locked", { name: "Seized" })).rejects.toThrow(
+      /permission/i
+    );
+  });
+
+  it("setChannelAccess rejects when no row came back", async () => {
+    await expect(
+      backend.setChannelAccess("c_locked", { isPrivate: true, members: [] })
+    ).rejects.toThrow(/permission/i);
+  });
+
+  it("setProjectAccess rejects when no row came back — before touching membership", async () => {
+    // The order matters: if the projects UPDATE is filtered away the caller
+    // does not manage this project, and the member writes that follow must
+    // never be attempted. `project_members` is absent from `issued` precisely
+    // because the rejection came first.
+    const client = fakeClient();
+    const denied = new SupabaseBackend(asClient(client));
+    await expect(
+      denied.setProjectAccess("p_locked", { restricted: true, members: [] })
+    ).rejects.toThrow(/permission/i);
+    expect(client.issued).not.toContain("project_members");
+  });
+
+  it("updateProject refuses a patch carrying files rather than saving everything else", async () => {
+    // Same rule as sendMessage above: Storage is Task 10, so a project whose
+    // attachments changed cannot be persisted, and saving the name while
+    // dropping the file would look like it worked.
+    await expect(
+      backend.updateProject("p1", { name: "Renamed", attachments: [{ id: "a1" } as never] })
+    ).rejects.toThrow(/task 10|storage/i);
+  });
+
+  it("updateProject writes nothing at all for a patch with no persistable field", async () => {
+    // An empty UPDATE is rejected by PostgREST outright, so "no fields" has to
+    // be a no-op rather than a statement — and it must not report a failure
+    // either, since nothing was asked for.
+    const client = fakeClient();
+    const quiet = new SupabaseBackend(asClient(client));
+    await expect(quiet.updateProject("p1", {})).resolves.toBeUndefined();
+    expect(client.issued).not.toContain("projects");
+  });
+
+  it("createChannel inserts the conversation before the channel", async () => {
+    // Positive control for the five rejections above, and an ordering
+    // assertion: `channels.id` references `conversations(id)`, so the reverse
+    // order is a foreign-key violation every time.
+    const client = fakeClient();
+    const ok = new SupabaseBackend(asClient(client));
+    const channel = {
+      id: "c_new", name: "design", description: "", isPrivate: true, isTeam: false,
+      members: [{ userId: ME, level: "editor" }], createdBy: ME, createdAt: 0,
+    };
+
+    await expect(ok.createChannel(channel as never)).resolves.toMatchObject({ id: "c_new" });
+    expect(client.issued.filter((t) => t !== "auth.getSession")).toEqual([
+      "conversations", "channels", "channel_members",
+    ]);
+  });
+
+  it("createChannel sweeps its conversation row when the channel insert fails", async () => {
+    // Otherwise a failed create leaves an unreferenced parent behind: invisible
+    // (nothing reads `conversations` on its own) but real, and never cleaned up.
+    const client = fakeClient({ errors: { channels: { message: "denied", code: "42501" } } });
+    const failing = new SupabaseBackend(asClient(client));
+
+    await expect(
+      failing.createChannel({ id: "c_bad", members: [], createdAt: 0 } as never)
+    ).rejects.toThrow(/42501/);
+    // conversations twice: the insert, then the sweep.
+    expect(client.issued.filter((t) => t === "conversations")).toHaveLength(2);
   });
 
   it("openDm adopts the id the RPC chose", async () => {

@@ -2,8 +2,9 @@
  * `SupabaseBackend` — the real backend.
  *
  * Task 4 implemented the read path; Task 5 the chat writes (delegated to
- * ./chat). The remaining writes still reject with a named "not implemented"
- * error, which Tasks 6–8 replace one group at a time.
+ * ./chat); Task 6 channels, projects and access (delegated to ./workspace).
+ * The remaining writes still reject with a named "not implemented" error,
+ * which Tasks 7–8 replace one group at a time.
  *
  * Why *reject* rather than no-op: the store has already applied the optimistic
  * patch by the time it calls one of these (see `commit` in lib/store.tsx), so
@@ -20,8 +21,14 @@ import * as chat from "./chat";
 import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
+import * as workspace from "./workspace";
 import type { AppState } from "../../types";
-import type { Backend } from "../types";
+import type {
+  Backend,
+  ChannelAccessPatch,
+  ProjectAccessPatch,
+  ProjectPatch,
+} from "../types";
 import type { Channel, DM, Message, Project, RoleDef, Task } from "../../types";
 
 /** `owner` names who fills this in, so a failure in the intervening weeks
@@ -134,28 +141,51 @@ export class SupabaseBackend implements Backend {
   }
 
   // -------------------------------------------------------------------------
-  // Task 6 — channels, projects, access.
+  // Task 6 — channels, projects, access. Implemented in ./workspace; these are
+  // the seam, so each one is a single delegation.
+  //
+  // ON DELETE-ACTIVITIES — the decision the ledger asks each of Tasks 5-8 to
+  // make explicitly. `deleteChannel` and `deleteProject` write NO activity row,
+  // and none of the five surviving actions writes one either.
+  //
+  // For the deletes this is forced, and correctly so. `activities.project_id` /
+  // `.conversation_id` cascade (20260909000900_activity_scope.sql): sequenced
+  // before the delete, a `deleted the X project` row is removed by the same
+  // cascade a moment later; sequenced after, it fails the foreign key outright.
+  // The tempting "fix" — switching the scope FK to set null — is the one the
+  // migration forbids by name: it would promote the row to workspace-wide and
+  // republish the very project and channel names 66cddf1 hid. A durable record
+  // of who deleted what belongs in a server-side audit log with its own access
+  // rules, not in a feed every user reads.
+  //
+  // For the other five it is a scope decision, not a schema one: `Backend`
+  // (lib/backend/types.ts) carries no activity parameter on any method, so the
+  // row the store composed is not available here, and inventing a second copy
+  // of each activity's text in this file is exactly the drift the plan keeps
+  // closing. Task 5 wrote no activity rows for the same reason. The store's
+  // optimistic line therefore lives for the session and is gone after a reload
+  // — which for a delete is not a bug to fix but the cascade rule working.
   // -------------------------------------------------------------------------
-  createChannel(): Promise<Channel> {
-    return pending("createChannel", "store-swap task 6");
+  async createChannel(channel: Channel): Promise<Channel> {
+    return workspace.createChannel(await this.client(), channel);
   }
-  deleteChannel(): Promise<void> {
-    return pending("deleteChannel", "store-swap task 6");
+  async deleteChannel(channelId: string): Promise<void> {
+    return workspace.deleteChannel(await this.client(), channelId);
   }
-  setChannelAccess(): Promise<void> {
-    return pending("setChannelAccess", "store-swap task 6");
+  async setChannelAccess(channelId: string, patch: ChannelAccessPatch): Promise<void> {
+    return workspace.setChannelAccess(await this.client(), channelId, patch);
   }
-  createProject(): Promise<Project> {
-    return pending("createProject", "store-swap task 6");
+  async createProject(project: Project): Promise<Project> {
+    return workspace.createProject(await this.client(), project);
   }
-  updateProject(): Promise<void> {
-    return pending("updateProject", "store-swap task 6");
+  async updateProject(projectId: string, patch: ProjectPatch): Promise<void> {
+    return workspace.updateProject(await this.client(), projectId, patch);
   }
-  deleteProject(): Promise<void> {
-    return pending("deleteProject", "store-swap task 6");
+  async deleteProject(projectId: string): Promise<void> {
+    return workspace.deleteProject(await this.client(), projectId);
   }
-  setProjectAccess(): Promise<void> {
-    return pending("setProjectAccess", "store-swap task 6");
+  async setProjectAccess(projectId: string, patch: ProjectAccessPatch): Promise<void> {
+    return workspace.setProjectAccess(await this.client(), projectId, patch);
   }
 
   // -------------------------------------------------------------------------
