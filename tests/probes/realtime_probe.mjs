@@ -30,6 +30,14 @@
 // visible marker, every phase-A event has already been through the filter and
 // has either arrived or been dropped. The owner socket independently confirms
 // those phase-A events were produced at all.
+//
+// A THIRD SUBSCRIBER, `member`, was added for Task 6 (phase C, below): a
+// different question from phases A/B, which never grant `outsider` access at
+// all. `member` genuinely holds a restricted project, is seen receiving its
+// events, has that access revoked mid-run, and is then checked for both
+// halves of "a live feed must not preserve stale access" — no further event
+// arrives on the still-open socket, and a fresh read from that same
+// anon-key client no longer sees the project or its tasks.
 import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
@@ -54,6 +62,16 @@ const OPEN_MSG = `m_rt_open_${stamp}`;
 const SECRET_PROJ = `p_rt_secret_${stamp}`;
 const SECRET_TASK = `t_rt_secret_${stamp}`;
 const SECRET_ACT = `a_rt_secret_${stamp}`;
+
+// Task 6 — revocation while connected. A different question from everything
+// above: not "can an outsider ever see this", but "does an ALREADY-ENTITLED,
+// ALREADY-SUBSCRIBED socket keep seeing it after that entitlement ends". A
+// live feed that keeps delivering events for a project someone was just
+// removed from is a leak this file's phase A/B checks cannot catch, because
+// those never grant access in the first place.
+const REVOKE_PROJ = `p_rt_revoke_${stamp}`;
+const REVOKE_TASK_BEFORE = `t_rt_revoke_before_${stamp}`;
+const REVOKE_TASK_AFTER = `t_rt_revoke_after_${stamp}`;
 
 const ids = {};
 const clients = {};
@@ -141,14 +159,16 @@ try {
   await mkUser("owner", "admin"); // members.manage -> entitled to everything
   await mkUser("outsider", "member"); // the attacker: no members.manage
   await mkUser("third", "member"); // the owner's DM partner
+  await mkUser("member", "member"); // Task 6: entitled today, revoked mid-run
 
   // ---------------------------------------------------------------
-  // Both sockets go up BEFORE any fixture write, so every write below
+  // All sockets go up BEFORE any fixture write, so every write below
   // is an observable event rather than pre-existing state.
   // ---------------------------------------------------------------
   const seenByOutsider = await subscribe("outsider");
   const seenByOwner = await subscribe("owner");
-  console.log("both sockets SUBSCRIBED\n");
+  const seenByMember = await subscribe("member");
+  console.log("all sockets SUBSCRIBED\n");
 
   // ---------------------------------------------------------------
   // PHASE A — the secrets. All commit before any visible write.
@@ -264,8 +284,84 @@ try {
   await waitFor("outsider: open message DELETE (last marker)",
     () => seenByOutsider.some((p) => p.eventType === "DELETE" && p.old?.id === OPEN_MSG));
 
+  // ---------------------------------------------------------------
+  // PHASE C — Task 6: revocation while connected, attacked from an
+  // ordinary anon-key client exactly like `member` above (signed in with
+  // the anon key, not the service key — the same "ordinary anonymous
+  // client" this whole file attacks from, per tests/probes/README.md).
+  //
+  // The claim: an already-subscribed socket that WAS entitled to a
+  // restricted project stops receiving its events, and stops being able to
+  // re-read it, the moment membership ends — a live feed must not preserve
+  // stale access. Commits strictly after phase B, so member's own control
+  // event below is unambiguous.
+  // ---------------------------------------------------------------
+  must("revocation project", await svc.from("projects").insert({
+    id: REVOKE_PROJ, name: "Revoke Me", description: "", emoji: "🔒", color: "#000",
+    priority: "high", restricted: true, created_by: ids.owner,
+  }));
+  must("member joins revocation project", await svc.from("project_members").insert({
+    project_id: REVOKE_PROJ, user_id: ids.member, level: "editor",
+  }));
+  must("task before revocation", await svc.from("tasks").insert({
+    id: REVOKE_TASK_BEFORE, project_id: REVOKE_PROJ, title: "before revocation",
+    created_by: ids.owner,
+  }));
+  // Positive control (production + delivery): member is a real member right
+  // now, so their own socket receiving this INSERT proves both that the
+  // event was produced AND that member's subscription actually works —
+  // without this, "member received nothing after revocation" below could
+  // just as well mean member's socket was never functional at all.
+  await waitFor("member: task-before-revocation INSERT (while still a member)",
+    () => seenByMember.some((p) => p.eventType === "INSERT" && p.new?.id === REVOKE_TASK_BEFORE));
+
+  // Positive control (the "reload" half, an ordinary REST read from member's
+  // own anon-key client): while still a member, they can read the project.
+  const memberClient = await as("member");
+  const seenBefore = await memberClient.from("projects").select("id").eq("id", REVOKE_PROJ);
+  check("Task 6 positive control: member CAN see the restricted project before revocation",
+    (seenBefore.data ?? []).some((p) => p.id === REVOKE_PROJ),
+    `${(seenBefore.data ?? []).length} row(s)`);
+
+  // --- REVOCATION: the owner removes member's membership row. ---
+  must("revoke member's membership", await svc.from("project_members")
+    .delete().eq("project_id", REVOKE_PROJ).eq("user_id", ids.member));
+
+  must("task after revocation", await svc.from("tasks").insert({
+    id: REVOKE_TASK_AFTER, project_id: REVOKE_PROJ, title: "after revocation",
+    created_by: ids.owner,
+  }));
+  // Control for the live-negative below: the owner (still entitled) DOES
+  // receive this INSERT, proving the event was produced at all — so
+  // member's absence of it, checked next, means "withheld", not "never
+  // sent".
+  await waitFor("owner: task-after-revocation INSERT (control: event was produced)",
+    () => seenByOwner.some((p) => p.eventType === "INSERT" && p.new?.id === REVOKE_TASK_AFTER));
+
+  check("Task 6: the ALREADY-CONNECTED, PREVIOUSLY-ENTITLED member socket receives NO event for a task created after their access was revoked",
+    !anyRef(seenByMember, REVOKE_TASK_AFTER),
+    `${seenByMember.length} total event(s) on member's socket`);
+
+  // --- NEGATIVE (the "reload" half): member's own anon-key client re-reads
+  // and the project, and BOTH its tasks, are gone. This is the exact
+  // scenario the brief describes — "the member reloads: the project is
+  // gone, and so are its tasks" — proven here from an anonymous client
+  // rather than tests/rls/realtime.test.ts's authenticated-helper client. ---
+  const seenAfter = await memberClient.from("projects").select("id").eq("id", REVOKE_PROJ);
+  check("Task 6: member can NO LONGER see the restricted project after revocation",
+    (seenAfter.data ?? []).length === 0,
+    `${(seenAfter.data ?? []).length} row(s) still visible`);
+
+  const tasksAfter = await memberClient.from("tasks").select("id").eq("project_id", REVOKE_PROJ);
+  check("Task 6: member can NO LONGER see either of the project's tasks after revocation",
+    (tasksAfter.data ?? []).length === 0,
+    (tasksAfter.data ?? []).length
+      ? `STILL VISIBLE: ${tasksAfter.data.map((t) => t.id).join(",")}`
+      : "hidden");
+
   console.log(`\noutsider socket received ${seenByOutsider.length} event(s)`);
-  console.log(`owner    socket received ${seenByOwner.length} event(s)\n`);
+  console.log(`owner    socket received ${seenByOwner.length} event(s)`);
+  console.log(`member   socket received ${seenByMember.length} event(s)\n`);
 
   // ---------------------------------------------------------------
   // POSITIVE CONTROLS. Without these, a socket that silently failed to
@@ -452,6 +548,10 @@ try {
   for (const p of seenByOwner) {
     console.log(`  ${p.eventType.padEnd(6)} ${p.table.padEnd(16)} ${JSON.stringify(p.new?.id ?? p.old?.id ?? p.new ?? p.old).slice(0, 60)}`);
   }
+  console.log("member payload summary (Task 6):");
+  for (const p of seenByMember) {
+    console.log(`  ${p.eventType.padEnd(6)} ${p.table.padEnd(16)} ${JSON.stringify(p.new?.id ?? p.old?.id ?? p.new ?? p.old).slice(0, 60)}`);
+  }
 } catch (err) {
   // A throw here means the checks below it never ran. Without this, `failures`
   // stays 0 and the epilogue cheerfully reports success for a probe that
@@ -466,7 +566,7 @@ try {
   // conversation-scoped activities all cascade from them. Projects cascade
   // tasks, project_members and project-scoped activities.
   await svc.from("conversations").delete().in("id", [PRIV, OPEN, DM]);
-  await svc.from("projects").delete().in("id", [SECRET_PROJ]);
+  await svc.from("projects").delete().in("id", [SECRET_PROJ, REVOKE_PROJ]);
   await svc.from("activities").delete().in("id", [SECRET_ACT]);
   for (const id of Object.values(ids)) await svc.auth.admin.deleteUser(id);
   const { data } = await svc.auth.admin.listUsers({ perPage: 100 });
