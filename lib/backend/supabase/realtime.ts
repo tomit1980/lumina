@@ -152,6 +152,19 @@ export function subscribeToWorkspace(
   });
 
   channel.subscribe((status) => {
+    // `SUBSCRIBED` is the only status this socket is actually up; the other
+    // three Realtime can hand back here — `CHANNEL_ERROR`, `TIMED_OUT`,
+    // `CLOSED` — all mean it is not, whatever their differences otherwise.
+    // Collapsing them to one boolean is deliberate: the store's own comment
+    // (lib/store.tsx) explains why the ONLY thing that matters on the way
+    // back up is reloading, and there is nothing a finer-grained reason
+    // would let it do differently. Deferred for the same deadlock reason as
+    // the other two `on()` handlers above — `onEvent` can call back into
+    // this client.
+    setTimeout(
+      () => onEvent({ kind: "connection", online: status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED }),
+      0
+    );
     if (status !== REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) return;
     void client.auth.getUser().then(({ data, error }) => {
       // Not signed in, or the channel outlived the session: nothing of this

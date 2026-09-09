@@ -83,15 +83,20 @@ export type AttachmentOwner = "project" | "task" | "message";
  * A UNION, and deliberately an open-ended one: Task 4 added
  * `{ kind: "presence"; onlineUserIds: string[] }` — the WHOLE current online
  * set, not a delta, so the apply core can mark everyone else offline in the
- * same pass — and a later task may still add `{ kind: "connection"; online:
- * boolean }`. The apply core switches on `kind` with a `default` that ignores
- * what it does not know, so a variant added here cannot crash a store that
- * has not learned about it yet.
+ * same pass — and Task 5 added `{ kind: "connection"; online: boolean }`,
+ * the channel's own subscribe status (SUBSCRIBED / CHANNEL_ERROR /
+ * TIMED_OUT / CLOSED), so the store can say when it has stopped receiving
+ * anything at all and reload once it starts again — a reconnect is the only
+ * way to recover changes that happened while the socket was down, since the
+ * server does not replay them. The apply core switches on `kind` with a
+ * `default` that ignores what it does not know, so a variant added here
+ * cannot crash a store that has not learned about it yet.
  */
 export type RealtimeEvent =
   | { kind: "message-insert"; message: Message }
   | { kind: "stale" }
-  | { kind: "presence"; onlineUserIds: string[] };
+  | { kind: "presence"; onlineUserIds: string[] }
+  | { kind: "connection"; online: boolean };
 
 /** Teardown for `Backend.subscribe`. */
 export type Unsubscribe = () => void;

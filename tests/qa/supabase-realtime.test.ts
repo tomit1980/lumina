@@ -94,6 +94,13 @@ function createFakeClient(userId: string | null = "u_test") {
     fireSubscribed() {
       statusCallback?.(REALTIME_SUBSCRIBE_STATES.SUBSCRIBED);
     },
+    /** Fires `subscribe()`'s own status callback with any status — the
+     *  Task 5 addition. Used for the other three the real client can hand
+     *  back (`CHANNEL_ERROR`, `TIMED_OUT`, `CLOSED`), which `fireSubscribed`
+     *  above cannot reach. */
+    fireStatus(status: REALTIME_SUBSCRIBE_STATES) {
+      statusCallback?.(status);
+    },
     setPresenceState(state: PresenceState) {
       presenceState = state;
     },
@@ -322,5 +329,37 @@ describe("subscribeToWorkspace — presence", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(events).toEqual([{ kind: "presence", onlineUserIds: [] }]);
+  });
+});
+
+describe("subscribeToWorkspace — connection", () => {
+  it("maps SUBSCRIBED to a connection event with online: true", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeClient();
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+
+    fake.fireSubscribed();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual(
+      expect.arrayContaining([{ kind: "connection", online: true }])
+    );
+  });
+
+  it.each([
+    REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR,
+    REALTIME_SUBSCRIBE_STATES.TIMED_OUT,
+    REALTIME_SUBSCRIBE_STATES.CLOSED,
+  ])("maps %s to a connection event with online: false", async (status) => {
+    vi.useFakeTimers();
+    const fake = createFakeClient();
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+
+    fake.fireStatus(status);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual([{ kind: "connection", online: false }]);
   });
 });

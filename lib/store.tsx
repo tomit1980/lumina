@@ -84,6 +84,13 @@ export interface RoleInput {
 interface StoreValue {
   state: AppState;
   currentUser: User;
+  /** Whether the last `connection` event this store heard said the socket
+   *  was up. Defaults to `true` — see the state declaration below for why —
+   *  so this is meaningful only once a real backend's channel has actually
+   *  reported a drop; `LocalBackend`'s inert `subscribe()` never emits one,
+   *  so it never leaves `true`. `ConnectionStatus` renders off this and
+   *  nothing else. */
+  connected: boolean;
 
   /** Resolve a role id to its definition (never undefined). */
   getRole: (roleId: string) => RoleDef;
@@ -451,8 +458,22 @@ export function StoreProvider({
    *  that would put fictional colleagues, messages and tasks in front of a
    *  real user and let them type into a workspace that does not exist. */
   const [hydrateFailed, setHydrateFailed] = React.useState(false);
-  /** Bumped by the retry button; re-runs the effect below. */
+  /** Bumped by the retry button, and by the apply core below on a
+   *  reconnect; re-runs the effect below. */
   const [hydrateAttempt, setHydrateAttempt] = React.useState(0);
+
+  /** Whether the last `connection` event said the socket is up. Starts
+   *  `true`, deliberately not `false`: `LocalBackend`'s `subscribe()` is
+   *  inert and never emits one at all, and every other backend double in
+   *  the 34 suites that mount `StoreProvider` only emits what a test tells
+   *  it to. A `false` default would make every one of those suites render
+   *  a "disconnected" workspace that never actually lost a socket — the
+   *  exact false alarm the brief says a quiet indicator must not raise —
+   *  and would do it silently, since nothing in most of those suites reads
+   *  `connected` to notice. `true` is also the only default consistent with
+   *  what a real session looks like: the channel is freshly opened by the
+   *  time this state exists, well before it could have failed. */
+  const [connected, setConnected] = React.useState(true);
 
   // Hydration: the loading screen below shows until this resolves.
   React.useEffect(() => {
@@ -606,6 +627,25 @@ export function StoreProvider({
           // this lands must re-hydrate on failure rather than have its
           // rollback silently restore a snapshot with stale presence in it.
           writeSeq.current += 1;
+          return;
+        }
+        case "connection": {
+          // Say so either way — this is the whole reason the flag exists,
+          // and it has to move in BOTH directions: stuck `false` after a
+          // real reconnect would leave `ConnectionStatus` lying that the
+          // workspace is still stale, and stuck `true` after a drop is the
+          // silent-staleness failure this task exists to prevent.
+          setConnected(event.online);
+          // Only the transition BACK UP costs a reload. Going offline has
+          // nothing yet to recover — there is no fresher state to fetch
+          // while the socket is down, and hydrating now would just fail —
+          // but coming back online is the only chance to recover whatever
+          // happened while it was down, because the server does not replay
+          // missed changes. Re-uses the retry/sign-in counter (see its
+          // comment) rather than adding a third way to refetch; NOT gated
+          // by `refetchesOnSignIn`, because a real reconnect happens on
+          // every backend, injected test doubles included.
+          if (event.online) setHydrateAttempt((n) => n + 1);
           return;
         }
         default:
@@ -1875,6 +1915,7 @@ export function StoreProvider({
       value={{
         state,
         currentUser,
+        connected,
         getRole,
         userRole,
         can,

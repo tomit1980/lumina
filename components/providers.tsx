@@ -12,6 +12,7 @@ import {
 } from "@/components/auth/two-factor-dialogs";
 import { AccessDialog } from "@/components/access-dialog";
 import { ChannelDialog } from "@/components/channel-dialog";
+import { ConnectionStatus } from "@/components/connection-status";
 import { CommandPalette } from "@/components/command-palette";
 import { DmDialog } from "@/components/dm-dialog";
 import { ProjectDialog } from "@/components/project-dialog";
@@ -70,6 +71,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <TooltipProvider delayDuration={200}>
             <UIProvider>
               <SessionBridge />
+              <ConnectionStatus />
               <AuthGate>
                 {children}
                 <CommandPalette />
