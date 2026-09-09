@@ -1,6 +1,6 @@
 # ✨ Lumina
 
-**Live demo:** https://tomit1980.github.io/lumina/ — sign in as `vlad` / `lumina24`. Everything is stored in your browser (localStorage), so the demo is per-browser, not shared.
+**Live demo:** https://tomit1980.github.io/lumina/ — sign in as `moshe` / `lumina24`. Everything is stored in your browser (localStorage), so the demo is per-browser, not shared.
 
 **Where work flows.** A beautiful internal collaboration platform that blends Slack-style real-time chat with modern project management — wrapped in enterprise-grade role-based permissions.
 

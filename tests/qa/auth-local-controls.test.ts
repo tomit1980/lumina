@@ -62,7 +62,7 @@ describe("CONTROL — the demo affordances the supabase flag hides are present h
     await waitFor(() => expect(screen.getByText("Welcome to Lumina")).toBeInTheDocument());
 
     expect(screen.getByText(new RegExp(DEMO_PASSWORD))).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /vlad/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /moshe/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /elena/i })).toBeInTheDocument();
   });
 

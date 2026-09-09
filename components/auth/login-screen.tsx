@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 type Step = "credentials" | "totp" | "enroll";
 
 const DEMO_ACCOUNTS = [
-  { handle: "vlad", role: "Admin" },
+  { handle: "moshe", role: "Admin" },
   { handle: "maya", role: "Member" },
   { handle: "elena", role: "Guest" },
 ];
@@ -136,7 +136,7 @@ export function LoginScreen() {
                   id="login-id"
                   autoFocus
                   autoComplete={isDemo ? "username" : "email"}
-                  placeholder={isDemo ? "vlad" : "you@company.com"}
+                  placeholder={isDemo ? "moshe" : "you@company.com"}
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                 />

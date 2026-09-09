@@ -330,7 +330,7 @@ describe("lumina:auth desync — a valid lumina:v1 alongside a corrupt lumina:au
 
     let outcome: Awaited<ReturnType<typeof result.current.login>> | undefined;
     await act(async () => {
-      outcome = await result.current.login("vlad", DEMO_PASSWORD);
+      outcome = await result.current.login("moshe", DEMO_PASSWORD);
     });
     expect(outcome?.step).toBe("success");
     unmount();

@@ -25,8 +25,8 @@ export function createSeed(): AppState {
   const users = [
     {
       id: "u_vlad",
-      name: "Vlad Plaskov",
-      handle: "vlad",
+      name: "Moshe Cohen",
+      handle: "moshe",
       title: "Engineering Lead",
       roleId: "admin",
       color: "#6366f1",
@@ -212,14 +212,14 @@ export function createSeed(): AppState {
       { emoji: "👍", userIds: ["u_sam"] },
     ]),
 
-    // DM: Vlad ↔ Maya
+    // DM: Moshe ↔ Maya
     msg("d_vlad_maya", "u_maya", "Hey! Got 10 minutes today to look at the hero explorations? I want your eye on direction B before I share it wider.", 7),
     msg("d_vlad_maya", "u_vlad", "Sure — right after lunch? Direction B was my favorite from the thumbnails.", 6.8, [
       { emoji: "👍", userIds: ["u_maya"] },
     ]),
     msg("d_vlad_maya", "u_maya", "It works! I'll grab a room. Also sneaking in a *tiny* radius bump to the cards, don't tell Jonas 😄", 0.5),
 
-    // DM: Vlad ↔ Priya
+    // DM: Moshe ↔ Priya
     msg("d_vlad_priya", "u_priya", "Migration runbook is ready for review whenever you have a sec. I'd like a second pair of eyes on the rollback steps.", 26),
     msg("d_vlad_priya", "u_vlad", "On it this afternoon. Nice work getting it done before the freeze 🚀", 25.5, [
       { emoji: "❤️", userIds: ["u_priya"] },
@@ -432,7 +432,7 @@ export function createSeed(): AppState {
       lastRead[`${u.id}:${conv.id}`] = u.id === "u_vlad" ? now - 4 * HOUR : now;
     }
   }
-  // Vlad has caught up on general but not the others — and Maya's latest DM is new.
+  // Moshe has caught up on general but not the others — and Maya's latest DM is new.
   lastRead["u_vlad:c_general"] = now;
   lastRead["u_vlad:d_vlad_maya"] = now - 1 * HOUR;
   lastRead["u_vlad:d_vlad_priya"] = now;

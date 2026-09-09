@@ -343,7 +343,7 @@ describe("demo affordances are absent under the supabase flag", () => {
     await renderGate(fakeFor());
 
     expect(screen.queryByText(new RegExp(DEMO_PASSWORD))).toBeNull();
-    expect(screen.queryByRole("button", { name: /vlad/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /moshe/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /elena/i })).toBeNull();
     expect(screen.queryByText(/Demo accounts/i)).toBeNull();
     // CONTROL: the form itself is rendered, so the queries above were looking

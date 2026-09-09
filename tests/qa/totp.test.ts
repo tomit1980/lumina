@@ -57,13 +57,13 @@ describe("totpAuthUri", () => {
   it("builds an otpauth URI carrying the secret, issuer and account", () => {
     const uri = totpAuthUri({
       secret: SECRET,
-      account: "vlad@northlight.studio",
+      account: "moshe@northlight.studio",
       issuer: "Lumina",
     });
     expect(uri.startsWith("otpauth://totp/")).toBe(true);
     expect(uri).toContain(`secret=${SECRET}`);
     expect(uri).toContain("issuer=Lumina");
-    expect(decodeURIComponent(uri)).toContain("vlad@northlight.studio");
+    expect(decodeURIComponent(uri)).toContain("moshe@northlight.studio");
   });
 });
 

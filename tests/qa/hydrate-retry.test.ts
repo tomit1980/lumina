@@ -77,8 +77,8 @@ describe("StoreProvider — a failed hydrate", () => {
     await screen.findByRole("alert");
 
     // `super.hydrate()` would have produced the demo seed, whose admin is
-    // Vlad Plaskov. If the provider ever "recovers" by seeding, this fails.
-    expect(screen.queryByText(/vlad plaskov/i)).not.toBeInTheDocument();
+    // Moshe Cohen. If the provider ever "recovers" by seeding, this fails.
+    expect(screen.queryByText(/moshe cohen/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/signed in as/i)).not.toBeInTheDocument();
     expect(backend.calls).toBe(1);
   });
@@ -94,7 +94,7 @@ describe("StoreProvider — a failed hydrate", () => {
 
     // Positive control for the two negatives above: the same provider, the
     // same children, now actually on screen.
-    expect(await screen.findByText(/signed in as vlad plaskov/i)).toBeInTheDocument();
+    expect(await screen.findByText(/signed in as moshe cohen/i)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(backend.calls).toBe(2);
   });
@@ -117,7 +117,7 @@ describe("StoreProvider — a failed hydrate", () => {
     const backend = new FlakyHydrateBackend(0);
     mountProvider(backend);
 
-    expect(await screen.findByText(/signed in as vlad plaskov/i)).toBeInTheDocument();
+    expect(await screen.findByText(/signed in as moshe cohen/i)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
   });

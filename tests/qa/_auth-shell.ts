@@ -43,7 +43,7 @@ export async function renderShell(client?: SupabaseClient<Database>) {
     )
   );
   // StoreProvider renders a loading screen until `backend.hydrate()` resolves.
-  await waitFor(() => expect(screen.getByText("Vlad Plaskov")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Moshe Cohen")).toBeTruthy());
   return out;
 }
 
@@ -61,7 +61,7 @@ export function openAccountMenu(): { items: string[]; text: string } {
   // accessible names across the whole shell blocks the worker's event loop for
   // seconds, long enough for vitest's reporter RPC to time out and fail the
   // run with an unhandled error while every assertion passes.
-  const trigger = screen.getByText("Vlad Plaskov").closest("button");
+  const trigger = screen.getByText("Moshe Cohen").closest("button");
   if (!trigger) throw new Error("account menu trigger not found");
 
   fireEvent.keyDown(trigger, { key: "Enter" });
