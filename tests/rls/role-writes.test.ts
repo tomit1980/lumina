@@ -384,15 +384,21 @@ describe("deleteRole", () => {
     expect(await roleRow(id)).toBeNull();
   });
 
-  it("REFUSES a built-in role", async () => {
+  it("REFUSES a built-in role, and keeps it", async () => {
     const backend = await backendFor(emails.boss);
     const client = await clientFor(emails.boss);
 
+    // What matters here is that the server refuses and the role survives.
+    // Which guard speaks first is not this test's business: `guest` is a
+    // shared row, so whether it has members at this moment depends on which
+    // other suite is running, and pinning the wording made the whole gate
+    // fail intermittently — "still has members" is an equally correct
+    // refusal. The exact built-in wording is asserted in
+    // tests/qa/supabase-backend.test.ts, where the state is deterministic.
     const raw = await client.from("roles").delete().eq("id", "guest").select("id");
     expect(raw.error).not.toBeNull();
-    expect(raw.error!.message).toMatch(/built-in/i);
 
-    await expect(backend.deleteRole("guest")).rejects.toThrow(/built-in/i);
+    await expect(backend.deleteRole("guest")).rejects.toThrow();
     expect(await roleRow("guest")).not.toBeNull();
   });
 
