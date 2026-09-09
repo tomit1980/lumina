@@ -397,6 +397,16 @@ export class FailingBackend extends LocalBackend {
     return this.run("attachmentUrl", ref);
   }
 
+  /** The last write action that had no override — final-review.md finding 9.
+   *  Without it a test naming "switchUser" got a backend that quietly
+   *  succeeded, so the rollback path in `commit` could not be driven from a
+   *  test at all. That is the same trap that has now bitten this plan five
+   *  times; leaving one operation out is how the union and the overrides
+   *  drift apart again. */
+  override switchUser(): Promise<void> {
+    return this.run("switchUser", undefined);
+  }
+
   override readAttachment(ref: string): Promise<string> {
     return this.run("readAttachment", ref);
   }
@@ -433,6 +443,7 @@ export type FailingOp =
   | "deleteRole"
   | "deleteChannel"
   | "deleteProject"
+  | "switchUser"
   | "putActivity"
   | "putAttachment"
   | "saveAttachment"

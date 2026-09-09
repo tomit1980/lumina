@@ -30,6 +30,17 @@ const OPEN_FILE = `att_stg_open_${stamp}`;
 const BUCKETS = ["project-files", "task-files", "message-files"];
 const SECRET_BYTES = `payroll-${stamp}`;
 
+// Fixtures for the LINK LAUNDERING half (final-review.md findings 1 and 2):
+// four destinations the outsider is genuinely allowed to write to, so that
+// every refusal below is the *attachment* side of the policy talking rather
+// than the destination side.
+const OWNED = `p_stg_owned_${stamp}`; // a project the outsider CREATED (project_is_manageable)
+const CH = `c_stg_ch_${stamp}`; // a public channel — message.send is all a Guest holds
+const TASK = `t_stg_task_${stamp}`; // a task on the OPEN project (task.edit, visible, not viewer-only)
+const MSG = `m_stg_msg_${stamp}`;
+const DM_MSG = `m_stg_dm_${stamp}`;
+let dmId = null;
+
 const ids = {};
 const clients = {};
 let failures = 0;
@@ -79,6 +90,22 @@ try {
       priority: "high", restricted: true, created_by: ids.owner },
   ]);
   await svc.from("project_members").insert({ project_id: SECRET, user_id: ids.owner, level: "editor" });
+
+  // The four destinations for the laundering attack. Seeded with the service
+  // key on purpose: what is under test is whether the outsider may LINK a file
+  // into these, not whether they may create them.
+  await svc.from("projects").insert({
+    id: OWNED, name: "Outsider's own", description: "", emoji: "📂", color: "#000",
+    priority: "low", restricted: false, created_by: ids.outsider,
+  });
+  await svc.from("conversations").insert({ id: CH, kind: "channel" });
+  await svc.from("channels").insert({
+    id: CH, name: `stg-general-${stamp}`, description: "",
+    is_private: false, is_team: false, created_by: ids.owner,
+  });
+  await svc.from("tasks").insert({
+    id: TASK, project_id: OPEN, title: "Open task", created_by: ids.owner,
+  });
 
   // Seeded through the OWNER's own client, not the service key: the upload
   // path is part of what is being probed, and a service-key upload would
@@ -211,6 +238,109 @@ try {
   check("outsider: cannot link an existing file into a project they cannot see",
     outLink.error !== null, outLink.error?.code ?? "*** LINK ACCEPTED ***");
 
+  // -------------------------------------------------------------------
+  // LINK LAUNDERING — final-review.md findings 1 and 2.
+  //
+  // Every check above asks "given these links, who can read?". This asks the
+  // question nobody had asked: **who can create a link?** The three
+  // `*_attachments_insert` policies used to gate only on the DESTINATION (do
+  // you own this message / can you manage this project / may you edit this
+  // task) and said nothing about the attachment being linked — so anyone
+  // holding `message.send`, which is the ONLY permission a Guest holds, could
+  // name a known attachment id, link it to a message of their own, and have
+  // `can_see_attachment` answer "yes, it is on a message you can see". That
+  // laundered visibility reaches `attachment_objects_read`, and therefore the
+  // bytes in a private bucket. Demonstrated live on 2026-09-09; 7 of these
+  // checks failed and the secret bytes were served.
+  //
+  // The attacker here is deliberately allowed to write to all four
+  // destinations, so a refusal can only be the attachment half of the policy.
+  // Each negative is paired with the SAME insert for a file the outsider CAN
+  // see: a policy that had simply started refusing every link would fail those
+  // instead of passing these.
+  // -------------------------------------------------------------------
+  const post = await out.from("messages")
+    .insert({ id: MSG, conversation_id: CH, author_id: ids.outsider, content: "hi" })
+    .select("id");
+  check("attack step 1: the outsider CAN post in a channel they can see",
+    post.error === null && (post.data ?? []).length === 1, post.error?.message ?? "OK");
+
+  const launder = await out.from("message_attachments")
+    .insert({ message_id: MSG, attachment_id: SECRET_FILE });
+  check("ATTACK BLOCKED: cannot link a file they cannot see to their own message",
+    launder.error !== null, launder.error?.code ?? "*** LINK ACCEPTED ***");
+
+  const launderOk = await out.from("message_attachments")
+    .insert({ message_id: MSG, attachment_id: OPEN_FILE });
+  check("positive control: the SAME insert succeeds for a file they can see",
+    launderOk.error === null, launderOk.error?.message ?? "OK");
+
+  // The DM variant is the worst case: a thread nobody else ever reads, so the
+  // laundering link is invisible to every administrator as well.
+  const dm = await out.rpc("find_or_create_dm", { other_user_id: ids.owner });
+  dmId = dm.data ?? null;
+  check("attack step 2: the outsider CAN open a DM of their own",
+    dm.error === null && typeof dmId === "string", dm.error?.message ?? dmId);
+
+  const dmPost = dmId
+    ? await out.from("messages")
+        .insert({ id: DM_MSG, conversation_id: dmId, author_id: ids.outsider, content: "x" })
+        .select("id")
+    : { error: new Error("no dm"), data: [] };
+  check("attack step 3: and post in it",
+    dmPost.error === null && (dmPost.data ?? []).length === 1, dmPost.error?.message ?? "OK");
+
+  const dmLaunder = await out.from("message_attachments")
+    .insert({ message_id: DM_MSG, attachment_id: SECRET_FILE });
+  check("ATTACK BLOCKED (DM): cannot link the file to a message only they can see",
+    dmLaunder.error !== null, dmLaunder.error?.code ?? "*** LINK ACCEPTED ***");
+
+  const dmOk = await out.from("message_attachments")
+    .insert({ message_id: DM_MSG, attachment_id: OPEN_FILE });
+  check("positive control (DM): the same insert succeeds for a visible file",
+    dmOk.error === null, dmOk.error?.message ?? "OK");
+
+  const projLaunder = await out.from("project_attachments")
+    .insert({ project_id: OWNED, attachment_id: SECRET_FILE });
+  check("ATTACK BLOCKED (project): cannot link the file into a project they CREATED",
+    projLaunder.error !== null, projLaunder.error?.code ?? "*** LINK ACCEPTED ***");
+
+  const projOk = await out.from("project_attachments")
+    .insert({ project_id: OWNED, attachment_id: OPEN_FILE });
+  check("positive control (project): the same insert succeeds for a visible file",
+    projOk.error === null, projOk.error?.message ?? "OK");
+
+  const taskLaunder = await out.from("task_attachments")
+    .insert({ task_id: TASK, attachment_id: SECRET_FILE });
+  check("ATTACK BLOCKED (task): cannot link the file onto a task they may edit",
+    taskLaunder.error !== null, taskLaunder.error?.code ?? "*** LINK ACCEPTED ***");
+
+  const taskOk = await out.from("task_attachments")
+    .insert({ task_id: TASK, attachment_id: OPEN_FILE });
+  check("positive control (task): the same insert succeeds for a visible file",
+    taskOk.error === null, taskOk.error?.message ?? "OK");
+
+  // The payoff. These are the four checks that actually failed on 2026-09-09.
+  const laundered = await out.from("attachments").select("id,name").eq("id", SECRET_FILE);
+  check("after every attempt: the outsider still cannot read the attachments row",
+    (laundered.data ?? []).length === 0,
+    (laundered.data ?? []).length ? `*** ROW LEAKED: ${laundered.data[0].name} ***` : "0 rows");
+
+  const afterSign = await out.storage.from("project-files").createSignedUrl(SECRET_FILE, 60);
+  check("after every attempt: still cannot mint a signed URL",
+    afterSign.data === null, afterSign.error?.message ?? "*** URL ISSUED ***");
+
+  const servedBody = afterSign.data
+    ? await (await fetch(afterSign.data.signedUrl)).text()
+    : "";
+  check("after every attempt: the secret bytes were NOT served",
+    servedBody !== SECRET_BYTES,
+    servedBody ? `*** BYTES: ${servedBody.slice(0, 24)} ***` : "nothing served");
+
+  const afterGet = await out.storage.from("project-files").download(SECRET_FILE);
+  check("after every attempt: cannot download the object directly",
+    afterGet.data === null, afterGet.error?.message ?? "*** BYTES RETURNED ***");
+
   // DELETE. storage-api reports a filtered-away delete as `error: null` and
   // an EMPTY array, so the assertion is about the array AND the survival of
   // the bytes, never about the error alone.
@@ -248,7 +378,10 @@ try {
       SECRET_FILE, OPEN_FILE, `att_stg_anon_${stamp}`, `att_stg_new_${stamp}`,
     ]);
   }
-  await svc.from("projects").delete().in("id", [OPEN, SECRET]);
+  // Conversations first: messages, dm_members and every message_attachments
+  // link the laundering section created cascade from them.
+  await svc.from("conversations").delete().in("id", dmId ? [CH, dmId] : [CH]);
+  await svc.from("projects").delete().in("id", [OPEN, SECRET, OWNED]);
   await svc.from("attachments").delete().in("id", [
     SECRET_FILE, OPEN_FILE, `att_stg_anon_${stamp}`, `att_stg_new_${stamp}`,
   ]);

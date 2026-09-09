@@ -780,6 +780,15 @@ export type Database = {
         Returns: undefined
       }
       my_role_id: { Args: never; Returns: string }
+      orphaned_attachments: {
+        Args: { older_than?: string }
+        Returns: {
+          id: string
+          name: string
+          storage_path: string
+          uploaded_at: string
+        }[]
+      }
       project_is_manageable: {
         Args: { target_project_id: string }
         Returns: boolean

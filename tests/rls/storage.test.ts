@@ -154,10 +154,17 @@ describe("a file is reachable exactly when its project is", () => {
     expect((listed.data ?? []).map((o) => o.name)).toContain(id);
   });
 
-  it("access lost is bytes lost: a signed URL cannot be minted once membership is revoked", async () => {
+  it("access lost is bytes lost (DIRECT path): a signed URL cannot be minted once membership is revoked", async () => {
     // The row-level equivalent of this is tests/rls/attachments.test.ts's
     // revocation case; the file's BYTES have to follow the same rule or the
     // link a former member already holds outlives their access.
+    //
+    // SCOPED IN ITS NAME on purpose (final-review.md finding 3). This tests
+    // the DIRECT path only, and until 20260909001000_attachment_link_visibility
+    // landed it overstated what it proved: the revoked member here never tries
+    // to re-link the file, and re-linking was exactly how they could have
+    // regained the bytes. That attack is now covered, with its own positive
+    // controls, in tests/rls/attachment-linking.test.ts.
     const id = `att_st_secret_${stamp}`;
     const mate = await clientFor(emails.mate);
     const before = await mate.storage.from("project-files").createSignedUrl(id, 60);

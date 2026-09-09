@@ -370,6 +370,35 @@ describe("deleteChannel / deleteProject report a failed write", () => {
     expect(lastErrorToast()?.[0]).toBe("Couldn't save");
   });
 
+  // final-review.md finding 9: `switchUser` was the one write action with no
+  // `FailingOp` entry and no override, so its rollback path could not be
+  // driven from a test at all — a "failing" backend quietly succeeded. This
+  // test exists to keep the union and the overrides in step; it fails
+  // (currentUserId stays switched, no toast) the moment the override is
+  // removed again.
+  it("switchUser restores the previous user and toasts when the backend rejects", async () => {
+    const backend = new FailingBackend("switchUser");
+    const { result } = await mount(adminState(), backend);
+    const before = result.current.state.currentUserId;
+    const other = result.current.state.users.find((u) => u.id !== before)!;
+
+    await run(() => result.current.switchUser(other.id));
+
+    expect(result.current.state.currentUserId).toBe(before);
+    expect(lastErrorToast()?.[0]).toBe("Couldn't save");
+  });
+
+  it("POSITIVE CONTROL: switchUser sticks when the backend accepts it", async () => {
+    const { result } = await mount(adminState());
+    const before = result.current.state.currentUserId;
+    const other = result.current.state.users.find((u) => u.id !== before)!;
+
+    await run(() => result.current.switchUser(other.id));
+
+    expect(result.current.state.currentUserId).toBe(other.id);
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
   it("both resolve true on the happy path, so the caller may report success", async () => {
     const { result } = await mount(adminState());
     const channel = result.current.state.channels.find((c) => !c.isTeam)!;
