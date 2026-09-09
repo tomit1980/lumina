@@ -118,16 +118,73 @@ would otherwise pass. **If events leak, stop and report. Nothing is built on a b
 
 ## Testing
 
-- **Unit:** a fake event source. An event applies; an echo of your own message does not duplicate;
-  a burst coalesces into one reload; a live apply during a failing write causes a reload rather
-  than a stale rewind.
-- **Access layer:** the outsider probe above, plus revocation — a person removed from a restricted
-  project must **lose it from an open browser**, not keep showing something the server would refuse.
-- **Two browsers, two real accounts:** post and watch it arrive; react; move a task; revoke a
-  project; close a tab and watch the dot clear; drop the connection and confirm recovery.
-- Adding a subscription to the backend interface touches **every implementation**, including the
-  local one and the failing double used by 29 suites. They need an inert subscription or nothing
-  compiles.
+Live updates are timing-dependent, arrive from outside any user action, and fail silently when
+they fail. That combination defeats the ordinary reflexes, so this section is specific about what
+each layer can and cannot prove.
+
+### Rules that apply to every layer
+
+- **Every negative assertion needs a positive control.** "The outsider received no event" passes
+  just as happily when the subscription is broken and nobody receives anything. Each negative is
+  paired with the same subscriber receiving something they are entitled to. This project has
+  produced vacuous tests three times; twice they were caught only by mutating the source.
+- **Verify each new test fails without the change**, and say so in the task report. For live
+  updates the cheap mutation is to drop the event on the floor: every test that claims to prove an
+  event arrived must go red.
+- **Run both gates.** `npm test` does not typecheck, and a suite has passed here while types were
+  broken.
+- **No `setTimeout` sleeps to "wait for the event".** Wait on the assertion — Testing Library's
+  `waitFor`, or the probe's own polling with a deadline. A sleep tuned to a fast machine becomes a
+  flake on a slow one, and this project has already had to de-flake two suites.
+
+### Unit, with a fake event source
+
+The subscription seam takes a `Backend`, and the tests inject a double that emits events on
+command. No network, no timing races.
+
+- A message event appends the message.
+- **An echo of your own message does not duplicate it** — the id is client-generated, so the store
+  already holds it.
+- A burst of unrelated events results in **exactly one** reload, not one per event.
+- **A live apply during an in-flight write that then fails causes a reload, not a rewind.** This is
+  the second-writer hazard; it is the single most important unit test in the plan. Assert the live
+  data survives the failed write.
+- A live apply is deferred while a write is in flight, not interleaved with it.
+- The activity feed stays capped at 60 after a live append.
+- `LocalBackend` and the failing double expose an inert subscription — **29 suites mount
+  `StoreProvider` and will not compile without one.**
+
+### Access layer, against lumina-dev
+
+- The outsider probe described above, as `tests/probes/realtime_probe.mjs`: subscribed as a real
+  outsider, receives no event for a message in a private channel, another pair's direct message, a
+  task in a restricted project, or an activity scoped to a project they cannot see — each with its
+  positive control. It counts its checks and **fails if zero ran**, per `tests/probes/README.md`.
+- **Revocation while connected.** Someone removed from a restricted project must lose it from an
+  already-open browser, not keep showing something the server would now refuse. This is the case
+  where a live feed could actively *preserve* stale access, so it is proven, not assumed.
+- Presence carries no row data, but assert what a subscriber can see: presence of people they share
+  no channel with should not become an inventory of the whole workspace.
+
+### Two browsers, two real accounts
+
+The layer that catches what the others structurally cannot — the end-to-end pass on Plan 2 found
+two bugs while 592 unit and 221 access tests were green.
+
+- Post in a channel; it arrives in the other browser without a reload, and the sender sees it once.
+- React; the count updates both sides.
+- Move a task on one board; the other follows, and the column ordering is not left with gaps.
+- Revoke a project; it disappears from the other screen.
+- Close a tab; the dot clears for the other viewer within seconds.
+- **Drop the connection** (offline, then online): the app says it is disconnected, then recovers
+  and shows what it missed. Recovery-after-disconnect is the claim most likely to be wrong and the
+  least likely to be covered anywhere else.
+
+### What is deliberately not tested
+
+Exact delivery latency, and behaviour under many concurrent users — neither is meaningful against
+one small team on a free tier, and a test asserting a timing figure would measure the network
+rather than the code.
 
 ## Out of scope
 
