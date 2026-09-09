@@ -4,6 +4,65 @@
  * `RealtimeEvent`s the store's apply core understands (see the union and its
  * rationale in `../types.ts`).
  *
+ * ---------------------------------------------------------------------------
+ * THE SOCKET CARRIES THE SESSION, OR IT RECEIVES NOTHING AND SAYS IT IS FINE
+ * ---------------------------------------------------------------------------
+ *
+ * A realtime channel is authorized ONCE, at join time, with whatever token
+ * the socket was holding at that instant. Every `postgres_changes` payload it
+ * will ever be handed is filtered by row-level security against THAT token.
+ * The publishable ("anon") key is a token too — one that satisfies no policy
+ * in this schema, because every policy is `to authenticated`. So a channel
+ * that joins before the session is attached is not merely unauthorized: it is
+ * live, healthy, `SUBSCRIBED`, and permanently blind. It receives nothing,
+ * for as long as it exists, and reports itself connected the whole time.
+ *
+ * That was the real bug behind "live updates do not work", and it was
+ * invisible to 629 unit tests, 234 access tests and 11 probes — because they
+ * all subscribe AFTER signing in, which is the order that works. The app's
+ * order is the other one: `StoreProvider` subscribes on mount and the session
+ * attaches separately, so the channel joined as nobody. Proven with three
+ * sockets against the dev database (tests/probes/realtime_auth_probe.mjs):
+ * never-signed-in receives nothing, signed-in-then-subscribed receives,
+ * subscribed-then-signed-in receives nothing — all three `SUBSCRIBED`.
+ *
+ * Two things follow, and this file does both:
+ *
+ * 1. **Attach the token before joining, and re-join when the identity
+ *    changes.** `client.realtime.setAuth()` is the explicit way supabase-js
+ *    hands the realtime socket a token — it is a separate token from the REST
+ *    one, which is why a working `hydrate()` proves nothing about the socket.
+ *    `join()` below awaits it before opening the channel. supabase-js also
+ *    calls `setAuth` itself on `SIGNED_IN` (`_handleTokenChanged`), but that
+ *    only pushes a new token to an ALREADY-JOINED channel, and the probe
+ *    shows the server does not re-authorize an existing `postgres_changes`
+ *    subscription when it arrives — the channel stays blind. Repairing it
+ *    takes a real re-join: leave the channel, then join again with the new
+ *    token. So the fix is NOT "delay the first subscribe until auth is
+ *    ready"; that would fix first load and leave the identical hole open on
+ *    every later sign-in, sign-out and account switch, where it would be
+ *    invisible all over again.
+ *
+ * 2. **Make the blindness detectable.** A blind socket's own status is
+ *    `SUBSCRIBED`, so status alone cannot be trusted to mean "connected".
+ *    This file therefore reports `{ kind: "connection", online: true }` only
+ *    while the channel is subscribed AND the identity it joined with is still
+ *    the signed-in identity (`joinedAs`, re-verified against the session on
+ *    every `SUBSCRIBED` and on every auth change). A mismatch is exactly the
+ *    lie this task exists to kill, so it is reported as `online: false` — the
+ *    "Reconnecting…" strip is honest about a socket that is delivering
+ *    nothing — and repaired by re-joining. `connected: true` now means the
+ *    socket is receiving what this user may see, not merely that a websocket
+ *    is open.
+ *
+ * Session changes are observed through `client.auth.onAuthStateChange`, which
+ * is the mechanism lib/auth.tsx already uses (and the one supabase-js itself
+ * uses internally); nothing new is invented here and no second listener is
+ * threaded down from React. The backend owns its socket, so the socket's
+ * repair belongs next to it.
+ *
+ * ---------------------------------------------------------------------------
+ *
  * Only one `postgres_changes` case is built directly: a `messages` INSERT. A
  * brand-new message has no reactions and no attachments — nothing else could
  * reference an id the client had not produced yet — so its row is
@@ -56,6 +115,15 @@ import type { RealtimeEvent, Unsubscribe } from "../types";
 type MessageRow = Database["public"]["Tables"]["messages"]["Row"];
 
 /**
+ * The channel topic. One constant, shared by every client, on purpose:
+ * presence is scoped to a topic, so a per-tab or per-join unique name would
+ * hide everyone from everyone. That it is shared is also why re-joining goes
+ * through `client.removeChannel()` rather than `channel.unsubscribe()` — see
+ * `join()`.
+ */
+const TOPIC = "workspace-changes";
+
+/**
  * Builds a `Message` from one freshly-inserted row alone. Mirrors two of the
  * mismatches `./mapping.ts` documents for the grouped path, because they are
  * still true of a single row: mismatch 5 (`conversation_id` -> `channelId`)
@@ -88,7 +156,7 @@ function toRealtimeEvent(
   return { kind: "stale" };
 }
 
-/** The shape this file tracks with — see `subscribeToWorkspace`'s `track()` call. */
+/** The shape this file tracks with — see `openChannel`'s `track()` call. */
 type PresencePayload = { user_id: string };
 
 /**
@@ -108,6 +176,40 @@ function onlineUserIds(channel: RealtimeChannel): string[] {
   return [...ids];
 }
 
+/** Whose session this client currently holds, or null when signed out. */
+async function sessionUserId(client: LuminaClient): Promise<string | null> {
+  try {
+    const { data, error } = await client.auth.getSession();
+    if (error) return null;
+    return data.session?.user.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hands the realtime socket the session's access token and reports whose it
+ * is. This is the whole fix in one call: the realtime client keeps a token of
+ * its own, separate from the one REST requests carry, and a channel joined
+ * before it is set is authorized as the anon key — which no policy in this
+ * schema grants anything to.
+ *
+ * `setAuth(null)` is deliberate for the signed-out case rather than skipping
+ * the call: it makes the socket drop the previous user's token instead of
+ * keeping it, which is the difference between "signed out" and "still
+ * receiving the last person's rows".
+ */
+async function attachSession(client: LuminaClient): Promise<string | null> {
+  const { data } = await client.auth.getSession().catch(() => ({ data: { session: null } }));
+  const session = data?.session ?? null;
+  try {
+    await client.realtime.setAuth(session?.access_token ?? null);
+  } catch (error) {
+    console.error("Lumina: could not hand the realtime socket its token", error);
+  }
+  return session?.user.id ?? null;
+}
+
 /**
  * One channel, every `postgres_changes` row in `public`, plus this client's
  * own presence on it. `SupabaseBackend.subscribe` delegates to this directly.
@@ -116,67 +218,206 @@ export function subscribeToWorkspace(
   client: LuminaClient,
   onEvent: (event: RealtimeEvent) => void
 ): Unsubscribe {
-  const channel = client.channel("workspace-changes");
+  let disposed = false;
+  /** The live channel, or null between joins. */
+  let channel: RealtimeChannel | null = null;
+  /** The identity the LIVE channel joined with — what RLS is filtering its
+   *  payloads by. `undefined` until the first join. Compared against the
+   *  session to detect a blind socket. */
+  let joinedAs: string | null | undefined;
+  /** Bumped on every re-join so a superseded channel's late status callbacks
+   *  and handlers are ignored rather than reported as the current socket's. */
+  let generation = 0;
+  /** Joins are serialized: a sign-out immediately followed by a sign-in must
+   *  not have two `join()`s interleaving their leave/join on one topic. */
+  let queue: Promise<void> = Promise.resolve();
 
-  // NOT chained onto `.channel(...)`: `.on()`'s return value is not used, so
-  // a fake test double that gets its own chaining wrong (returning something
-  // other than the channel) still works — only the `channel` binding itself
-  // is relied on, for `.on()` (both registrations below) and `.subscribe()`.
-  channel.on<Record<string, unknown>>(
-    REALTIME_LISTEN_TYPES.POSTGRES_CHANGES,
-    { event: "*", schema: "public" },
-    (payload) => {
-      // Deferred, exactly as lib/auth.tsx defers `onAuthStateChange`, and for
-      // the same recorded reason: the client holds an internal lock across
-      // this callback, and `onEvent` can end up calling back into THIS SAME
-      // client from inside it — a `stale` event reaches the store's apply
-      // core, which calls `backend.hydrate()`, which issues fresh queries on
-      // this client — so running that synchronously from here can deadlock.
-      // lib/store.tsx's own subscribe wiring defers too, but that guards only
-      // its own call site; this function has to be safe for any caller.
-      setTimeout(() => onEvent(toRealtimeEvent(payload)), 0);
-    }
-  );
+  // Deferred, exactly as lib/auth.tsx defers `onAuthStateChange`, and for the
+  // same recorded reason: the client holds an internal lock across these
+  // callbacks, and `onEvent` can end up calling back into THIS SAME client
+  // from inside one — a `stale` event reaches the store's apply core, which
+  // calls `backend.hydrate()`, which issues fresh queries on this client — so
+  // running that synchronously can deadlock. lib/store.tsx's own subscribe
+  // wiring defers too, but that guards only its own call site; this function
+  // has to be safe for any caller.
+  const emit = (event: RealtimeEvent) => {
+    setTimeout(() => {
+      if (!disposed) onEvent(event);
+    }, 0);
+  };
 
-  // `sync` fires once this client joins (after its own `track()` below
-  // resolves) and again on every subsequent join/leave anywhere on the
-  // channel — Realtime fires it for a closed tab exactly like an explicit
-  // `untrack()`, which is what makes a dot clear within seconds of someone
-  // leaving rather than only when they say goodbye. Deferred for the same
-  // deadlock reason as the `postgres_changes` handler above.
-  channel.on(REALTIME_LISTEN_TYPES.PRESENCE, { event: REALTIME_PRESENCE_LISTEN_EVENTS.SYNC }, () => {
-    setTimeout(
-      () => onEvent({ kind: "presence", onlineUserIds: onlineUserIds(channel) }),
-      0
-    );
-  });
-
-  channel.subscribe((status) => {
-    // `SUBSCRIBED` is the only status this socket is actually up; the other
-    // three Realtime can hand back here — `CHANNEL_ERROR`, `TIMED_OUT`,
-    // `CLOSED` — all mean it is not, whatever their differences otherwise.
-    // Collapsing them to one boolean is deliberate: the store's own comment
-    // (lib/store.tsx) explains why the ONLY thing that matters on the way
-    // back up is reloading, and there is nothing a finer-grained reason
-    // would let it do differently. Deferred for the same deadlock reason as
-    // the other two `on()` handlers above — `onEvent` can call back into
-    // this client.
-    setTimeout(
-      () => onEvent({ kind: "connection", online: status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED }),
-      0
-    );
-    if (status !== REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) return;
-    void client.auth.getUser().then(({ data, error }) => {
-      // Not signed in, or the channel outlived the session: nothing of this
-      // client's own to announce. The `postgres_changes` half of this
-      // channel still works — RLS, not presence, is what gates row access —
-      // this only means nobody sees a dot for a client with no user to track.
-      if (error || !data.user) return;
-      void channel.track({ user_id: data.user.id } satisfies PresencePayload);
+  const schedule = (work: () => Promise<void>) => {
+    queue = queue.then(work).catch((error: unknown) => {
+      console.error("Lumina: realtime channel could not be (re)joined", error);
     });
+  };
+
+  /**
+   * Opens the channel for `uid`, the identity `attachSession` just put on the
+   * socket. `mine` is the generation this channel belongs to: every callback
+   * checks it, so a channel being replaced can neither report a status for
+   * the socket that replaced it nor land an event filtered by a stale token.
+   */
+  const openChannel = (uid: string | null, mine: number): RealtimeChannel => {
+    const opened = client.channel(TOPIC);
+
+    // NOT chained onto `.channel(...)`: `.on()`'s return value is not used, so
+    // a fake test double that gets its own chaining wrong (returning something
+    // other than the channel) still works — only the `opened` binding itself
+    // is relied on, for `.on()` (both registrations below) and `.subscribe()`.
+    opened.on<Record<string, unknown>>(
+      REALTIME_LISTEN_TYPES.POSTGRES_CHANGES,
+      { event: "*", schema: "public" },
+      (payload) => {
+        if (mine !== generation) return;
+        emit(toRealtimeEvent(payload));
+      }
+    );
+
+    // `sync` fires once this client joins (after its own `track()` below
+    // resolves) and again on every subsequent join/leave anywhere on the
+    // channel — Realtime fires it for a closed tab exactly like an explicit
+    // `untrack()`, which is what makes a dot clear within seconds of someone
+    // leaving rather than only when they say goodbye.
+    opened.on(REALTIME_LISTEN_TYPES.PRESENCE, { event: REALTIME_PRESENCE_LISTEN_EVENTS.SYNC }, () => {
+      if (mine !== generation) return;
+      emit({ kind: "presence", onlineUserIds: onlineUserIds(opened) });
+    });
+
+    opened.subscribe((status) => {
+      if (mine !== generation) return;
+      // `SUBSCRIBED` is the only status this socket is actually up; the other
+      // three Realtime can hand back here — `CHANNEL_ERROR`, `TIMED_OUT`,
+      // `CLOSED` — all mean it is not, whatever their differences otherwise.
+      // Collapsing them to one boolean is deliberate: the store's own comment
+      // (lib/store.tsx) explains why the ONLY thing that matters on the way
+      // back up is reloading, and there is nothing a finer-grained reason
+      // would let it do differently.
+      const up = status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED;
+      emit({ kind: "connection", online: up });
+      if (!up) return;
+
+      // The blindness check. `SUBSCRIBED` is precisely the status a channel
+      // that joined as nobody reports, so it is not on its own evidence that
+      // anything will arrive. Re-reading the session here catches a sign-in
+      // that landed while this join was in flight — the exact race that made
+      // the app blind — and turns it into a re-join instead of a silent lie.
+      void (async () => {
+        const now = await sessionUserId(client);
+        if (disposed || mine !== generation) return;
+        if (now !== uid) {
+          console.warn(
+            `Lumina: realtime socket joined as ${uid ?? "nobody"} but the session is ${
+              now ?? "nobody"
+            } — it would receive nothing. Re-joining.`
+          );
+          emit({ kind: "connection", online: false });
+          schedule(join);
+          return;
+        }
+        // Not signed in: nothing of this client's own to announce. The
+        // `postgres_changes` half of this channel still works — RLS, not
+        // presence, is what gates row access — this only means nobody sees a
+        // dot for a client with no user to track.
+        if (!uid) return;
+        void opened.track({ user_id: uid } satisfies PresencePayload);
+      })();
+    });
+
+    return opened;
+  };
+
+  /**
+   * Re-establishes the channel against the session the client holds NOW.
+   *
+   * Idempotent by identity: if a channel is already live and joined with the
+   * current session's user, this refreshes the socket's token and returns —
+   * a token refresh for the same person does not need (and must not cause) a
+   * re-join, since supabase-js pushes the new token to the joined channel
+   * itself and the subscription's authorization does not change.
+   */
+  async function join(): Promise<void> {
+    if (disposed) return;
+    const uid = await attachSession(client);
+    if (disposed) return;
+    if (channel && uid === joinedAs) return;
+
+    // Past this point the current channel is being replaced: bump the
+    // generation FIRST so its remaining callbacks (including the `CLOSED`
+    // that leaving produces) are ignored rather than reported as a drop of
+    // the socket that is about to take its place.
+    const mine = ++generation;
+    const previous = channel;
+    channel = null;
+    if (previous) {
+      // Say so. Between here and the new channel's `SUBSCRIBED` there is no
+      // socket carrying this session, and the whole point of this task is
+      // that a `connected: true` which is false in practice is a lie. Emitted
+      // ONLY when a channel is really being replaced, so this can never leave
+      // the indicator stuck: every `false` from here is answered by the new
+      // channel's own status.
+      emit({ kind: "connection", online: false });
+      // `removeChannel`, NOT `previous.unsubscribe()`. `client.channel(TOPIC)`
+      // hands back the EXISTING channel for a topic still registered on the
+      // client, so an unsubscribe alone would have the next line re-adopt the
+      // dead one and never actually re-join. `removeChannel` awaits the leave
+      // acknowledgement and tears the channel down, which is what frees the
+      // topic — and the topic is shared by every client, so it cannot simply
+      // be made unique per join (presence is scoped to it).
+      try {
+        await client.removeChannel(previous);
+      } catch (error) {
+        console.error("Lumina: could not leave the realtime channel", error);
+      }
+      if (disposed || mine !== generation) return;
+    }
+    joinedAs = uid;
+    channel = openChannel(uid, mine);
+  }
+
+  schedule(join);
+
+  /**
+   * The session changing is the other half of the fix. Signing in, signing
+   * out and signing in as someone else all land here, and all of them mean
+   * the live channel is now filtered by the wrong identity — receiving the
+   * previous user's rows, or (far more often) nothing at all. Each one is
+   * reported as a disconnection, because that is what it is, and repaired by
+   * a re-join.
+   *
+   * `client.auth.onAuthStateChange` is the same mechanism lib/auth.tsx
+   * observes sessions with; this listens to it directly rather than having
+   * React thread a session down into the backend, so the socket is repaired
+   * even in a build where no component ever renders.
+   */
+  const { data: sub } = client.auth.onAuthStateChange((_event, next) => {
+    // Deferred for the same lock/deadlock reason recorded on `emit` above:
+    // `join()` calls back into this client from inside this callback.
+    const uid = next?.user.id ?? null;
+    setTimeout(() => {
+      if (disposed) return;
+      // Same person (a token refresh): supabase-js has already pushed the new
+      // token to the joined channel and the subscription's authorization has
+      // not changed, so there is nothing to re-join. Anything else — and
+      // anything ambiguous, including an event arriving while the first join
+      // is still in flight — goes to `join()`, which is idempotent by
+      // identity and reports the disconnection itself if it really does
+      // replace the channel.
+      if (uid === joinedAs && channel) return;
+      schedule(join);
+    }, 0);
   });
 
   return () => {
-    channel.unsubscribe();
+    disposed = true;
+    generation++;
+    try {
+      sub.subscription.unsubscribe();
+    } catch {
+      // A test double may not register one; nothing to undo.
+    }
+    const live = channel;
+    channel = null;
+    if (live) void client.removeChannel(live);
   };
 }
