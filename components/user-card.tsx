@@ -9,22 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RoleBadge } from "@/components/role-badge";
 import { UserAvatar } from "@/components/user-avatar";
+import { PRESENCE_DOT, PRESENCE_LABEL } from "@/lib/presence";
 import { useStore } from "@/lib/store";
 import type { User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { dmHref } from "@/lib/routes";
-
-const PRESENCE_LABEL = {
-  online: "Online",
-  away: "Away",
-  offline: "Offline",
-} as const;
-
-const PRESENCE_DOT = {
-  online: "bg-emerald-500",
-  away: "bg-amber-400",
-  offline: "bg-zinc-300 dark:bg-zinc-600",
-} as const;
 
 /** Click-to-open profile card with a "Message" action.
  *  Wrap any avatar or name with it. */

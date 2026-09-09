@@ -243,7 +243,10 @@ describe("hydrate() as a member of nothing", () => {
     // The signed-in user resolves to a real profile — the Task 3 carry-over.
     const me = state.users.find((u) => u.id === state.currentUserId)!;
     expect(me.handle).toBe(`hyout${stamp}`);
-    expect(me.presence).toBe("online");
+    // Task 4: hydrate no longer guesses presence from the session — even the
+    // signed-in user starts `offline` until a `{ kind: "presence" }` event off
+    // the realtime channel says otherwise. See mapping.ts's `toUser`.
+    expect(me.presence).toBe("offline");
   });
 });
 

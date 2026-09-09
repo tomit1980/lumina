@@ -3,21 +3,10 @@
 import { RoleBadge } from "@/components/role-badge";
 import { UserAvatar } from "@/components/user-avatar";
 import { Composer, MessageList } from "@/components/chat/conversation";
+import { PRESENCE_DOT, PRESENCE_LABEL } from "@/lib/presence";
 import { useStore } from "@/lib/store";
 import type { DM, User } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const PRESENCE_LABEL = {
-  online: "Online",
-  away: "Away",
-  offline: "Offline",
-} as const;
-
-const PRESENCE_DOT = {
-  online: "bg-emerald-500",
-  away: "bg-amber-400",
-  offline: "bg-zinc-300 dark:bg-zinc-600",
-} as const;
 
 export function DmView({ dm, other }: { dm: DM; other: User }) {
   const { userRole } = useStore();

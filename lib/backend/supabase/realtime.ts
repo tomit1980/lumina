@@ -1,17 +1,19 @@
 /**
  * The Supabase channel: wires one `postgres_changes` subscription on
- * `schema: "public"` to the `RealtimeEvent`s the store's apply core
- * understands (see the union and its rationale in `../types.ts`).
+ * `schema: "public"`, plus that same channel's presence tracking, to the
+ * `RealtimeEvent`s the store's apply core understands (see the union and its
+ * rationale in `../types.ts`).
  *
- * Only one case is built directly: a `messages` INSERT. A brand-new message
- * has no reactions and no attachments — nothing else could reference an id
- * the client had not produced yet — so its row is self-contained, and it is
- * mapped inline HERE rather than through the grouped functions in
- * `./mapping.ts`. Those build a whole `AppState` from lookups assembled once
- * per `hydrate()` (message id -> its reactions, message id -> its attachment
- * links, ...); a lone row off a socket has none of that context, so calling
- * them would need a lookup rebuilt per event — defeating the reason they are
- * grouped — for a mapping this file can just write inline.
+ * Only one `postgres_changes` case is built directly: a `messages` INSERT. A
+ * brand-new message has no reactions and no attachments — nothing else could
+ * reference an id the client had not produced yet — so its row is
+ * self-contained, and it is mapped inline HERE rather than through the
+ * grouped functions in `./mapping.ts`. Those build a whole `AppState` from
+ * lookups assembled once per `hydrate()` (message id -> its reactions,
+ * message id -> its attachment links, ...); a lone row off a socket has none
+ * of that context, so calling them would need a lookup rebuilt per event —
+ * defeating the reason they are grouped — for a mapping this file can just
+ * write inline.
  *
  * Everything else — every other table, and every other event on `messages`
  * too (UPDATE, DELETE) — becomes `{ kind: "stale" }`. The store coalesces a
@@ -26,9 +28,25 @@
  * asks Postgres again, under RLS, for what this user may actually see,
  * instead of trusting anything a delete event says about a row it was never
  * allowed to hold.
+ *
+ * Presence — Task 4 — is not a table, so it is not a `postgres_changes` case
+ * at all. It is a feature of THIS SAME channel: once the channel is joined,
+ * this client `track()`s its own user id, and every `sync` (fired on join,
+ * and again whenever anyone else tracks or untracks — which Realtime also
+ * fires automatically the instant a socket disconnects, closed tab included)
+ * reads `presenceState()` back and emits `{ kind: "presence", onlineUserIds }`
+ * with the WHOLE current set. That "whole set, not a delta" shape is what
+ * lets the apply core (lib/store.tsx) mark everyone not named offline in the
+ * same pass — the store's own comment there says why that half matters: it
+ * is what clears a dot when someone's tab closes, rather than only ever
+ * lighting one up.
  */
-import { REALTIME_LISTEN_TYPES } from "@supabase/supabase-js";
-import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import {
+  REALTIME_LISTEN_TYPES,
+  REALTIME_PRESENCE_LISTEN_EVENTS,
+  REALTIME_SUBSCRIBE_STATES,
+} from "@supabase/supabase-js";
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
 import type { LuminaClient } from "./client";
 import type { Database } from "../../database.types";
@@ -70,9 +88,29 @@ function toRealtimeEvent(
   return { kind: "stale" };
 }
 
+/** The shape this file tracks with — see `subscribeToWorkspace`'s `track()` call. */
+type PresencePayload = { user_id: string };
+
 /**
- * One channel, every `postgres_changes` row in `public`.
- * `SupabaseBackend.subscribe` delegates to this directly.
+ * Everyone currently tracked on `channel`, deduplicated.
+ *
+ * `presenceState()` is keyed by Realtime's own per-connection presence ref,
+ * not by user — the same person open in two tabs tracks twice, under two
+ * different keys, both carrying that person's `user_id`. Collapsing to a
+ * `Set` is what keeps two tabs from reading as two different online people.
+ */
+function onlineUserIds(channel: RealtimeChannel): string[] {
+  const state = channel.presenceState<PresencePayload>();
+  const ids = new Set<string>();
+  for (const presences of Object.values(state)) {
+    for (const p of presences) ids.add(p.user_id);
+  }
+  return [...ids];
+}
+
+/**
+ * One channel, every `postgres_changes` row in `public`, plus this client's
+ * own presence on it. `SupabaseBackend.subscribe` delegates to this directly.
  */
 export function subscribeToWorkspace(
   client: LuminaClient,
@@ -83,7 +121,7 @@ export function subscribeToWorkspace(
   // NOT chained onto `.channel(...)`: `.on()`'s return value is not used, so
   // a fake test double that gets its own chaining wrong (returning something
   // other than the channel) still works — only the `channel` binding itself
-  // is relied on, for both `.on()` and `.subscribe()` below.
+  // is relied on, for `.on()` (both registrations below) and `.subscribe()`.
   channel.on<Record<string, unknown>>(
     REALTIME_LISTEN_TYPES.POSTGRES_CHANGES,
     { event: "*", schema: "public" },
@@ -100,7 +138,30 @@ export function subscribeToWorkspace(
     }
   );
 
-  channel.subscribe();
+  // `sync` fires once this client joins (after its own `track()` below
+  // resolves) and again on every subsequent join/leave anywhere on the
+  // channel — Realtime fires it for a closed tab exactly like an explicit
+  // `untrack()`, which is what makes a dot clear within seconds of someone
+  // leaving rather than only when they say goodbye. Deferred for the same
+  // deadlock reason as the `postgres_changes` handler above.
+  channel.on(REALTIME_LISTEN_TYPES.PRESENCE, { event: REALTIME_PRESENCE_LISTEN_EVENTS.SYNC }, () => {
+    setTimeout(
+      () => onEvent({ kind: "presence", onlineUserIds: onlineUserIds(channel) }),
+      0
+    );
+  });
+
+  channel.subscribe((status) => {
+    if (status !== REALTIME_SUBSCRIBE_STATES.SUBSCRIBED) return;
+    void client.auth.getUser().then(({ data, error }) => {
+      // Not signed in, or the channel outlived the session: nothing of this
+      // client's own to announce. The `postgres_changes` half of this
+      // channel still works — RLS, not presence, is what gates row access —
+      // this only means nobody sees a dot for a client with no user to track.
+      if (error || !data.user) return;
+      void channel.track({ user_id: data.user.id } satisfies PresencePayload);
+    });
+  });
 
   return () => {
     channel.unsubscribe();

@@ -1,6 +1,8 @@
 // Task 3 — the Supabase channel: `subscribeToWorkspace` (lib/backend/supabase/realtime.ts),
 // which turns `postgres_changes` payloads into the `RealtimeEvent`s Task 2's
-// apply core (lib/store.tsx) already knows how to land.
+// apply core (lib/store.tsx) already knows how to land. Task 4 added this same
+// channel's presence half — `track()` on subscribe, `presenceState()` read
+// back on `sync` — covered in its own `describe` block below.
 //
 // Driven entirely by a fake client — no network, no credentials. That fake is
 // deliberately loose about what `.on()` returns (see `createFakeClient`
@@ -11,6 +13,7 @@
 // something convenient, is what proves the implementation calls `.on()` and
 // `.subscribe()` on the SAME retained channel reference rather than chaining.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { REALTIME_SUBSCRIBE_STATES } from "@supabase/supabase-js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { subscribeToWorkspace } from "@/lib/backend/supabase/realtime";
@@ -18,15 +21,26 @@ import type { Database } from "@/lib/database.types";
 import type { RealtimeEvent } from "@/lib/backend/types";
 
 type Handler = (payload: unknown) => void;
+type StatusCallback = (status: REALTIME_SUBSCRIBE_STATES, err?: Error) => void;
+type PresenceState = Record<string, Array<{ user_id: string }>>;
 
-/** A `postgres_changes` stand-in: records every `.on()` registration and
- *  every `.subscribe()` / `.unsubscribe()` call, and lets a test fire a
- *  payload straight at the handler `subscribeToWorkspace` registered. */
-function createFakeClient() {
+/** A `postgres_changes` + presence stand-in: records every `.on()`
+ *  registration, every `.subscribe()` / `.unsubscribe()` / `.track()` call,
+ *  and lets a test fire a payload straight at the handler
+ *  `subscribeToWorkspace` registered, or drive `subscribe()`'s own status
+ *  callback (`fireSubscribed()`), or set what `presenceState()` answers.
+ *
+ *  `userId` stands in for `client.auth.getUser()` — `null` (the default)
+ *  is "not signed in", matching what a real client answers once a session
+ *  has ended but the channel has not yet been torn down. */
+function createFakeClient(userId: string | null = "u_test") {
   const handlers: Handler[] = [];
   const onCalls: Array<{ type: string; filter: unknown }> = [];
+  const trackCalls: unknown[] = [];
   let subscribeCalls = 0;
   let unsubscribeCalls = 0;
+  let statusCallback: StatusCallback | undefined;
+  let presenceState: PresenceState = {};
   const channelNames: string[] = [];
 
   const channel = {
@@ -38,13 +52,19 @@ function createFakeClient() {
       // value breaks here.
       return undefined;
     },
-    subscribe: () => {
+    subscribe: (cb?: StatusCallback) => {
       subscribeCalls++;
+      statusCallback = cb;
       return {};
     },
     unsubscribe: () => {
       unsubscribeCalls++;
     },
+    track: (payload: unknown) => {
+      trackCalls.push(payload);
+      return Promise.resolve({ status: "ok" });
+    },
+    presenceState: () => presenceState,
   };
 
   const client = {
@@ -52,12 +72,31 @@ function createFakeClient() {
       channelNames.push(name);
       return channel;
     },
+    auth: {
+      getUser: () =>
+        Promise.resolve(
+          userId
+            ? { data: { user: { id: userId } }, error: null }
+            : { data: { user: null }, error: new Error("not signed in") }
+        ),
+    },
   } as unknown as SupabaseClient<Database>;
 
   return {
     client,
     handlers,
     onCalls,
+    trackCalls,
+    /** Fires `subscribe()`'s own status callback with `SUBSCRIBED`, as a real
+     *  client would once the channel join completes — this is what triggers
+     *  the `track()` call, so a test that wants to see `track()` fire has to
+     *  call this first. */
+    fireSubscribed() {
+      statusCallback?.(REALTIME_SUBSCRIBE_STATES.SUBSCRIBED);
+    },
+    setPresenceState(state: PresenceState) {
+      presenceState = state;
+    },
     get subscribeCalls() {
       return subscribeCalls;
     },
@@ -190,13 +229,16 @@ describe("subscribeToWorkspace", () => {
     expect(events).toEqual([{ kind: "stale" }]);
   });
 
-  it("opens exactly one postgres_changes channel scoped to schema public, with no table filter", () => {
+  it("opens exactly one channel: postgres_changes scoped to schema public, plus presence sync", () => {
     const fake = createFakeClient();
     subscribeToWorkspace(fake.client, () => {});
 
+    // One `client.channel(...)` call — postgres_changes and presence are two
+    // `.on()` registrations on that SAME channel, not two channels.
     expect(fake.channelNames).toHaveLength(1);
     expect(fake.onCalls).toEqual([
       { type: "postgres_changes", filter: { event: "*", schema: "public" } },
+      { type: "presence", filter: { event: "sync" } },
     ]);
     expect(fake.subscribeCalls).toBe(1);
   });
@@ -208,5 +250,77 @@ describe("subscribeToWorkspace", () => {
     expect(fake.unsubscribeCalls).toBe(0);
     unsubscribe();
     expect(fake.unsubscribeCalls).toBe(1);
+  });
+});
+
+describe("subscribeToWorkspace — presence", () => {
+  it("tracks this client's own user id once the channel is SUBSCRIBED", async () => {
+    const fake = createFakeClient("u_maya");
+    subscribeToWorkspace(fake.client, () => {});
+
+    expect(fake.trackCalls).toEqual([]);
+    fake.fireSubscribed();
+    // `track()` is called from inside a `.then()` on `client.auth.getUser()`
+    // — a real promise, not deferred by a timer — so a microtask flush is
+    // enough; no fake timers needed for this one.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fake.trackCalls).toEqual([{ user_id: "u_maya" }]);
+  });
+
+  it("does not track when nobody is signed in", async () => {
+    const fake = createFakeClient(null);
+    subscribeToWorkspace(fake.client, () => {});
+
+    fake.fireSubscribed();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fake.trackCalls).toEqual([]);
+  });
+
+  it("turns a presence sync into a presence event carrying the whole online set", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeClient();
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+
+    // Two presence keys (two distinct connections) both carrying the same
+    // user — the handler must deduplicate down to one id, not report someone
+    // with two tabs open as two different online people.
+    fake.setPresenceState({
+      key_a: [{ user_id: "u_maya" }],
+      key_b: [{ user_id: "u_sam" }, { user_id: "u_maya" }],
+    });
+    // handlers[1] is the presence `sync` registration — handlers[0] is
+    // postgres_changes, registered first (see the test above).
+    fake.handlers[1]({});
+
+    // Still empty synchronously — deferred exactly like the postgres_changes
+    // handler, and for the same deadlock reason (see realtime.ts).
+    expect(events).toEqual([]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual([
+      { kind: "presence", onlineUserIds: expect.arrayContaining(["u_maya", "u_sam"]) },
+    ]);
+    const [event] = events;
+    if (event.kind === "presence") {
+      expect(event.onlineUserIds).toHaveLength(2);
+    }
+  });
+
+  it("reports nobody online once presenceState is empty — the leave case", async () => {
+    vi.useFakeTimers();
+    const fake = createFakeClient();
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+
+    fake.setPresenceState({});
+    fake.handlers[1]({});
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(events).toEqual([{ kind: "presence", onlineUserIds: [] }]);
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { PRESENCE_DOT } from "@/lib/presence";
 import { cn } from "@/lib/utils";
 import type { User } from "@/lib/types";
 
@@ -9,12 +10,6 @@ const SIZES = {
   sm: "size-6 text-[10px]",
   md: "size-8 text-xs",
   lg: "size-10 text-sm",
-} as const;
-
-const PRESENCE = {
-  online: "bg-emerald-500",
-  away: "bg-amber-400",
-  offline: "bg-zinc-300 dark:bg-zinc-600",
 } as const;
 
 function initials(name: string): string {
@@ -51,7 +46,7 @@ export function UserAvatar({
         <span
           className={cn(
             "absolute -right-px -bottom-px size-2.5 rounded-full ring-2 ring-background",
-            PRESENCE[user.presence]
+            PRESENCE_DOT[user.presence]
           )}
         />
       )}

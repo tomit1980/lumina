@@ -453,12 +453,12 @@ describe("attachments", () => {
 });
 
 describe("profiles, roles, channels, projects, activities", () => {
-  it("marks only the signed-in user online — the schema carries no presence", () => {
+  it("marks everyone offline at hydrate — the schema carries no presence, and the truth is the realtime channel's, not this row's", () => {
     const state = toAppState({
       ...empty(),
       profiles: [profile({ id: ME }), profile({ id: THEM })],
     });
-    expect(state.users.find((u) => u.id === ME)!.presence).toBe("online");
+    expect(state.users.find((u) => u.id === ME)!.presence).toBe("offline");
     expect(state.users.find((u) => u.id === THEM)!.presence).toBe("offline");
   });
 

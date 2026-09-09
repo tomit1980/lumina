@@ -33,8 +33,14 @@
  *      non-nullable in the model. Null becomes `""`, which matches no user
  *      and renders as unknown, rather than being dropped.
  *  10. `profiles` has no presence column — the schema carries no presence at
- *      all. The signed-in user is `online`, everyone else `offline`. This is
- *      the honest answer to "we do not know", not a guess.
+ *      all. Every hydrate starts every user `offline`; the truth arrives
+ *      afterward as `{ kind: "presence" }` events off the realtime channel
+ *      (lib/backend/supabase/realtime.ts), which is the only thing actually
+ *      entitled to say who has a tab open right now. Marking the signed-in
+ *      user `online` here — what this used to do — would be a second,
+ *      contradicting source: this row's hydrate could race the channel's own
+ *      sync and the dot would flicker between two answers that both claim to
+ *      be current.
  *  11. Generated column types are widened to `string` where Postgres uses a
  *      CHECK constraint (`status`, `priority`, `kind`, `level`) or a text
  *      array (`roles.permissions`). Each is narrowed back to its union here.
@@ -197,8 +203,11 @@ function groupBy<T, K extends string>(rows: T[], key: (row: T) => K): Map<K, T[]
 // Models
 // ---------------------------------------------------------------------------
 
-/** Mismatch 10 and 12. */
-export function toUser(row: ProfileRow, currentUserId: string): User {
+/** Mismatch 10 and 12. `currentUserId` is unused for presence now — see
+ *  mismatch 10 — but stays a parameter because `toRole`-style call sites
+ *  elsewhere may still want it and dropping it would be churn with no
+ *  payoff. */
+export function toUser(row: ProfileRow, _currentUserId: string): User {
   return {
     id: row.id,
     name: row.name,
@@ -206,7 +215,7 @@ export function toUser(row: ProfileRow, currentUserId: string): User {
     title: row.title,
     roleId: row.role_id,
     color: row.color,
-    presence: row.id === currentUserId ? "online" : "offline",
+    presence: "offline",
   };
 }
 

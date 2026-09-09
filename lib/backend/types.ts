@@ -80,15 +80,18 @@ export type AttachmentOwner = "project" | "task" | "message";
  * functions build from lookups grouped per load, so a lone row cannot rebuild
  * a task, project or DM (see the spec's "Why not per-row patching").
  *
- * A UNION, and deliberately an open-ended one: later tasks add
- * `{ kind: "presence"; onlineUserIds: string[] }` and
- * `{ kind: "connection"; online: boolean }`. The apply core switches on `kind`
- * with a `default` that ignores what it does not know, so a variant added here
- * cannot crash a store that has not learned about it yet.
+ * A UNION, and deliberately an open-ended one: Task 4 added
+ * `{ kind: "presence"; onlineUserIds: string[] }` — the WHOLE current online
+ * set, not a delta, so the apply core can mark everyone else offline in the
+ * same pass — and a later task may still add `{ kind: "connection"; online:
+ * boolean }`. The apply core switches on `kind` with a `default` that ignores
+ * what it does not know, so a variant added here cannot crash a store that
+ * has not learned about it yet.
  */
 export type RealtimeEvent =
   | { kind: "message-insert"; message: Message }
-  | { kind: "stale" };
+  | { kind: "stale" }
+  | { kind: "presence"; onlineUserIds: string[] };
 
 /** Teardown for `Backend.subscribe`. */
 export type Unsubscribe = () => void;

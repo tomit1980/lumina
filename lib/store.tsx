@@ -526,9 +526,9 @@ export function StoreProvider({
    *    change upstream can produce several rows (a task plus its
    *    collaborators, a DM plus its members); one reload answers all of them.
    *
-   * `default:` rather than an exhaustive switch on purpose — later tasks add
-   * `presence` and `connection` variants, and a store that has not learned
-   * about a variant yet should ignore it, not throw.
+   * `default:` rather than an exhaustive switch on purpose — a later task may
+   * still add a `connection` variant, and a store that has not learned about
+   * a variant yet should ignore it, not throw.
    */
   const applyEvent = React.useCallback(
     (event: RealtimeEvent) => {
@@ -583,6 +583,29 @@ export function StoreProvider({
             );
           }
           arm();
+          return;
+        }
+        case "presence": {
+          // The decision this event encodes: online means a tab is open, full
+          // stop. `onlineUserIds` is the WHOLE current set — not a delta — so
+          // every user not named here is set `offline`, including one who was
+          // online a moment ago. That second half is the one a lazy apply
+          // would skip (mark the named users online, leave everyone else
+          // alone), which is exactly how a dot survives someone closing their
+          // tab: the failure mode the brief calls out as worse than no dot at
+          // all, because people act on it.
+          const online = new Set(event.onlineUserIds);
+          update((s) => ({
+            ...s,
+            users: s.users.map((u) => ({
+              ...u,
+              presence: online.has(u.id) ? "online" : "offline",
+            })),
+          }));
+          // Rule 2, same reason as `message-insert`: a write in flight when
+          // this lands must re-hydrate on failure rather than have its
+          // rollback silently restore a snapshot with stale presence in it.
+          writeSeq.current += 1;
           return;
         }
         default:
