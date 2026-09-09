@@ -23,6 +23,7 @@ import * as chat from "./chat";
 import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
+import { subscribeToWorkspace } from "./realtime";
 import * as roles from "./roles";
 import * as storage from "./storage";
 import * as tasks from "./tasks";
@@ -75,19 +76,28 @@ export class SupabaseBackend implements Backend {
   }
 
   /**
-   * Live changes. Inert until Task 3, which builds `./realtime.ts` and makes
-   * this a one-line delegation to `subscribeToWorkspace(client, onEvent)`.
+   * Live changes: delegates to `subscribeToWorkspace` (./realtime.ts) for the
+   * channel and the payload→model mapping.
    *
-   * Inert rather than absent, and inert rather than half-built: `Backend` now
-   * declares `subscribe`, so this class must answer it or nothing compiles —
-   * and an unsubscribed teardown that does nothing is honest about there being
-   * no channel yet, where a channel opened here without the payload→model
-   * mapping and the tests Task 3 specifies would be a socket nobody had
-   * proved anything about. The store's apply core (lib/store.tsx) is complete
-   * either way; what is missing is only the thing that feeds it.
+   * `subscribe` itself must return a teardown SYNCHRONOUSLY (the `Backend`
+   * interface says `Unsubscribe`, not `Promise<Unsubscribe>`), but getting a
+   * client is async — the production path loads `lib/supabase.ts` on demand
+   * (see `./client.ts`). So this opens the channel once `this.client()`
+   * resolves and hands back a teardown that works either way: torn down
+   * before the client resolved, the `cancelled` flag stops the channel from
+   * ever being opened; torn down after, it calls the real unsubscribe.
    */
-  subscribe(_onEvent: (event: RealtimeEvent) => void): Unsubscribe {
-    return () => {};
+  subscribe(onEvent: (event: RealtimeEvent) => void): Unsubscribe {
+    let cancelled = false;
+    let unsubscribe: Unsubscribe | null = null;
+    void this.client().then((client) => {
+      if (cancelled) return;
+      unsubscribe = subscribeToWorkspace(client, onEvent);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }
 
   /** Deliberately nothing. Each write persists its own rows; there is no
