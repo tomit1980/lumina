@@ -224,6 +224,26 @@ columns, sign in as the second user in another tab and confirm the restricted pr
 absent and the message is present. Every step is recorded with what was observed. Then the
 eight existing probes plus the new one. This task produces the go/no-go note for Plan 3.
 
+### Task 10 — file storage (added 2026-09-09 at the user's request)
+
+Pulled in from the spec's Phase 2 rather than deferred to a later plan, because until it lands
+the Supabase path cannot do file sharing or in-app document editing at all — those operations
+currently reject with "plan 3 — Storage", and lumina-dev has no buckets. The cutover must
+therefore never precede this task.
+
+- Buckets for project, task and message files. Storage access rules **mirror the row policies**:
+  a file is reachable exactly when the project, task or message it hangs off is. Prove it with a
+  probe, not by inspection.
+- `Attachment.dataUrl` becomes `storage_path`, fetched through signed URLs. Rework
+  `readFileAsAttachment` (`lib/attachments.ts:20-49`) to upload and `resolveMessageAttachment`
+  (`:54-61`) to resolve.
+- Swap only the load and save ends of `components/documents/document-page.tsx` and the three
+  editors. **Their editing internals are untouched** — that code is tested and works.
+- Raise `MAX_ATTACHMENT_BYTES` from 3 MB to 10 MB, and delete the localStorage quota toast, which
+  has no meaning once bytes live in Storage.
+- Verify in a browser: upload, share into chat, open in the editor, save, reload, and confirm a
+  person without access to the parent project cannot fetch the file by its path.
+
 ## Verification (whole plan)
 
 ```
