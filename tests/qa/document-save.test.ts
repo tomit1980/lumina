@@ -117,7 +117,14 @@ async function renderDocumentPage(project: ReturnType<typeof seedProjectWithDoc>
       )
     )
   );
-  return screen.findByPlaceholderText("# Start writing…");
+  // The Markdown editor is a `next/dynamic` import, so this genuinely waits
+  // on a chunk load. Testing Library's default is one second, which is fine
+  // for this file alone and not fine when the whole suite runs in parallel —
+  // it produced an intermittent failure that had nothing to do with what the
+  // test asserts. Nothing here is weakened; it just waits long enough.
+  return screen.findByPlaceholderText("# Start writing…", undefined, {
+    timeout: 15_000,
+  });
 }
 
 function ctrlS() {

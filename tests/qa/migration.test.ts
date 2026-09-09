@@ -336,3 +336,57 @@ describe("lumina:auth desync — a valid lumina:v1 alongside a corrupt lumina:au
     unmount();
   });
 });
+
+
+// ---------------------------------------------------------------------
+// The seeded admin was renamed (Vlad Plaskov -> Moshe Cohen, handle `vlad`
+// -> `moshe`). Renaming the seed alone only reaches a *fresh* workspace:
+// anyone who had already used the demo kept the old name and saw it in the
+// sidebar and greeting while the login screen offered the new one.
+// Reported from the live site, which is why these drive real hydration
+// rather than calling migrate() directly.
+// ---------------------------------------------------------------------
+describe("the seeded admin's rename reaches an existing workspace", () => {
+  it("renames Vlad Plaskov to Moshe Cohen and moves the handle", async () => {
+    const stored = createSeed() as AppState;
+    stored.version = 12;
+    stored.users = stored.users.map((u) =>
+      u.id === "u_vlad" ? { ...u, name: "Vlad Plaskov", handle: "vlad" } : u
+    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+
+    const { result } = await mountFromExistingStorage();
+
+    const admin = result.current.state.users.find((u) => u.id === "u_vlad")!;
+    expect(admin.name).toBe("Moshe Cohen");
+    expect(admin.handle).toBe("moshe");
+  });
+
+  it("leaves an already-migrated workspace alone", async () => {
+    const stored = createSeed() as AppState;
+    expect(stored.users.find((u) => u.id === "u_vlad")!.name).toBe("Moshe Cohen");
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+
+    const { result } = await mountFromExistingStorage();
+
+    expect(result.current.state.users.find((u) => u.id === "u_vlad")!.name).toBe(
+      "Moshe Cohen"
+    );
+  });
+
+  it("never renames anybody else, whatever they happen to be called", async () => {
+    const stored = createSeed() as AppState;
+    stored.version = 12;
+    stored.users = stored.users.map((u) =>
+      u.id === "u_maya" ? { ...u, name: "Vlad Plaskov", handle: "vlad" } : u
+    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+
+    const { result } = await mountFromExistingStorage();
+
+    // Same name, different id — untouched, because the match is on both.
+    const maya = result.current.state.users.find((u) => u.id === "u_maya")!;
+    expect(maya.name).toBe("Vlad Plaskov");
+    expect(maya.handle).toBe("vlad");
+  });
+});

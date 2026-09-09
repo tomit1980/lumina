@@ -89,7 +89,18 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
     currentUserId: parsed.currentUserId,
     users: parsed.users.map((u) => {
       const { role, ...rest } = u;
-      return { ...rest, roleId: u.roleId ?? role ?? "member" };
+      const migrated = { ...rest, roleId: u.roleId ?? role ?? "member" };
+      // The seeded admin was renamed (Vlad Plaskov -> Moshe Cohen, handle
+      // `vlad` -> `moshe`). Renaming the seed alone only reaches a *fresh*
+      // workspace: anyone who had already used the demo kept the old name,
+      // and saw it in the sidebar and greeting while the login screen offered
+      // the new one. Matched on the seeded id *and* the old name so a
+      // workspace that has already been migrated is untouched, and nothing
+      // else is ever renamed.
+      if (migrated.id === "u_vlad" && migrated.name === "Vlad Plaskov") {
+        return { ...migrated, name: "Moshe Cohen", handle: "moshe" };
+      }
+      return migrated;
     }),
     channels: parsed.channels.map((c) => ({
       id: c.id,
