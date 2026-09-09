@@ -3,7 +3,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-import { createBackend } from "./backend";
+import { backendKind, createBackend } from "./backend";
 import type {
   Backend,
   ChannelAccessPatch,
@@ -419,6 +419,10 @@ export function StoreProvider({
     () => injectedBackend ?? createBackend(),
     [injectedBackend]
   );
+  // Only a session-backed backend has anything to re-fetch when the signed-in
+  // user changes. The local demo already holds the whole workspace, and
+  // re-hydrating it there would throw away an injected test fixture.
+  const refetchesOnSignIn = !injectedBackend && backendKind === "supabase";
   const [state, setState] = React.useState<AppState | null>(null);
 
   // `stateRef` — not `state` — is the synchronous source of truth actions
@@ -635,7 +639,14 @@ export function StoreProvider({
         (s) => ({ ...s, currentUserId: userId }),
         () => backend.switchUser(userId),
         { ok: () => undefined, failed: undefined, describe: "switch user" }
-      );
+      ).then(() => {
+        // Signing in is the moment the workspace becomes fetchable. The
+        // hydrate effect ran once on mount, when there was no session, and
+        // adopted the empty shell; without this the user lands in an app with
+        // no channels, no projects and no name until they reload by hand.
+        // Re-uses the retry counter rather than adding a second path.
+        if (refetchesOnSignIn) setHydrateAttempt((n) => n + 1);
+      });
 
     const setUserRole: StoreValue["setUserRole"] = (userId, roleId) => {
       const s = stateRef.current;
