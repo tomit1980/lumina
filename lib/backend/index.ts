@@ -7,6 +7,7 @@
  * matters for a static export.
  */
 import { LocalBackend } from "./local";
+import { SupabaseBackend } from "./supabase";
 import type { Backend } from "./types";
 
 export type { Backend } from "./types";
@@ -30,10 +31,13 @@ export const backendKind: BackendKind = resolveBackendKind();
  * edge-triggered quota flag) has exactly the lifetime the provider's old
  * `useRef` had.
  *
- * Only `LocalBackend` exists today. Task 4 adds `SupabaseBackend` and this
- * becomes a switch on `backendKind`; until then a `supabase` build would
- * have nothing to talk to, so it deliberately still gets the local one.
+ * The switch reads the module-level `backendKind` above, which is a literal
+ * `process.env` comparison so a static export can inline it. Importing
+ * `SupabaseBackend` statically is safe: nothing under `lib/backend/supabase/`
+ * statically imports `lib/supabase.ts` (see `./supabase/client.ts`), so the
+ * module that throws on missing `NEXT_PUBLIC_SUPABASE_*` stays out of the
+ * always-loaded graph and the unit suite keeps running without credentials.
  */
 export function createBackend(): Backend {
-  return new LocalBackend();
+  return backendKind === "supabase" ? new SupabaseBackend() : new LocalBackend();
 }

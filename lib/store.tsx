@@ -400,16 +400,35 @@ export function StoreProvider({
     setState(next);
   }, []);
 
+  /** Set when the *first* hydrate rejects, so the screen below can offer a
+   *  retry instead of spinning forever. `LocalBackend` never rejects; a real
+   *  one does — a dropped connection, an expired session, a database that is
+   *  briefly unreachable. Deliberately NOT falling back to `createSeed()`:
+   *  that would put fictional colleagues, messages and tasks in front of a
+   *  real user and let them type into a workspace that does not exist. */
+  const [hydrateFailed, setHydrateFailed] = React.useState(false);
+  /** Bumped by the retry button; re-runs the effect below. */
+  const [hydrateAttempt, setHydrateAttempt] = React.useState(0);
+
   // Hydration: the loading screen below shows until this resolves.
   React.useEffect(() => {
     let cancelled = false;
-    void backend.hydrate().then((next) => {
-      if (!cancelled) adopt(next);
-    });
+    void backend.hydrate().then(
+      (next) => {
+        if (cancelled) return;
+        setHydrateFailed(false);
+        adopt(next);
+      },
+      (error: unknown) => {
+        if (cancelled) return;
+        console.error("Lumina: could not load the workspace", error);
+        setHydrateFailed(true);
+      }
+    );
     return () => {
       cancelled = true;
     };
-  }, [backend, adopt]);
+  }, [backend, adopt, hydrateAttempt]);
 
   React.useEffect(() => {
     if (!state) return;
@@ -1418,6 +1437,40 @@ export function StoreProvider({
   }, [update, adopt, backend]);
 
   if (!state) {
+    // Failure, not a slow load: say so, and give the user something to press.
+    // A blank page or an endless spinner would leave them guessing, and a
+    // silent seed would be a lie about whose workspace they are looking at.
+    if (hydrateFailed) {
+      return (
+        <div className="flex h-svh items-center justify-center bg-background p-6">
+          <div
+            role="alert"
+            className="flex max-w-sm flex-col items-center gap-3 text-center"
+          >
+            <div className="flex size-11 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+              <svg viewBox="0 0 24 24" className="size-5" fill="currentColor">
+                <path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4L12 2z" />
+              </svg>
+            </div>
+            <h1 className="text-sm font-medium">We couldn&rsquo;t load your workspace</h1>
+            <p className="text-xs text-muted-foreground">
+              Lumina reached the server but didn&rsquo;t get your data back. This is
+              usually a connection problem. Nothing has been lost.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setHydrateFailed(false);
+                setHydrateAttempt((n) => n + 1);
+              }}
+              className="mt-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex h-svh items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
