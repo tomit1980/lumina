@@ -8,6 +8,7 @@ import type { Backend } from "@/lib/backend/types";
 import { StoreProvider, useStore } from "@/lib/store";
 import { createSeed } from "@/lib/seed";
 import type {
+  Activity,
   AppState,
   Channel,
   DM,
@@ -317,6 +318,22 @@ export class FailingBackend extends LocalBackend {
   override setRolePermission(): Promise<void> {
     return this.run("setRolePermission", undefined);
   }
+
+  /** Every activity this backend was asked to persist, in call order — so a
+   *  test can assert the feed line actually reached the seam rather than only
+   *  reaching `AppState`. Recorded before the reject check, because a refused
+   *  write is still a write that was attempted. */
+  activityWrites: Activity[] = [];
+
+  /** The parameter is optional only so this stays assignable to
+   *  `LocalBackend.putActivity()`, which declares none — the house style there
+   *  is that a method ignoring its arguments names none of them, and the
+   *  contract's parameters live in lib/backend/types.ts. Callers always pass
+   *  one. */
+  override putActivity(activity?: Activity): Promise<void> {
+    if (activity) this.activityWrites.push(activity);
+    return this.run("putActivity", undefined);
+  }
 }
 
 /** The operations `FailingBackend` can be told to reject.
@@ -346,7 +363,8 @@ export type FailingOp =
   | "setUserRole"
   | "setRolePermission"
   | "deleteChannel"
-  | "deleteProject";
+  | "deleteProject"
+  | "putActivity";
 
 /** Runs a store action inside act() and returns whatever it returned, so
  *  `result.current` reflects the resulting state by the time this resolves.

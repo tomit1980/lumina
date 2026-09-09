@@ -219,6 +219,19 @@ function activity(
   return [...state.activities, entry].slice(-MAX_ACTIVITIES);
 }
 
+/** The ids `patch` appended to the feed — i.e. the log lines this one write
+ *  produced. Diffed rather than passed in, so the ~15 `activity(...)` call
+ *  sites need no second argument and a call site added by a later task is
+ *  persisted the moment it exists. Ids, not the entries themselves: `commit`
+ *  re-reads them from state after the backend has resolved, because
+ *  `adoptDmId` can rewrite an entry's `conversationId` in exactly that window
+ *  and the stale id would name a conversation the server never had. */
+function appendedActivityIds(before: AppState, after: AppState | null): string[] {
+  if (!after || after.activities === before.activities) return [];
+  const had = new Set(before.activities.map((a) => a.id));
+  return after.activities.filter((a) => !had.has(a.id)).map((a) => a.id);
+}
+
 function findRole(s: AppState, roleId: string | undefined): RoleDef | undefined {
   return s.roles.find((r) => r.id === roleId);
 }
@@ -488,6 +501,61 @@ export function StoreProvider({
     const deny = (why: string) => toast.error("Not allowed", { description: why });
 
     /**
+     * Persists the feed lines a write produced, and reconciles the screen with
+     * whatever the server actually kept.
+     *
+     * ATOMICITY, stated plainly: there is none between a write and its log
+     * line, on purpose. An activity is an append-only record *about* a change,
+     * not part of it, so a failed log line must never undo a change that
+     * really happened — a rolled-back project because its feed row was
+     * refused would be a far worse lie than a missing feed row. Hence this
+     * runs after `op()` has resolved and NEVER rejects: the action still
+     * reports success and `commit` still returns `outcome.ok(...)`.
+     *
+     * What it does instead is delete the optimistic entry from `AppState`. The
+     * store put the line on screen before the server had it; if the server
+     * then refuses it, leaving it there would show something that vanishes on
+     * the next reload — the precise failure this whole seam exists to stop.
+     * Removing it by id (rather than restoring a snapshot) is safe whatever
+     * else has landed in the meantime, and per-entry, so one refused line out
+     * of three does not take the other two with it.
+     *
+     * Deliberately no toast. The user's action succeeded and has already been
+     * confirmed; a "couldn't save" on top of it would misreport what happened,
+     * and it would fire on every successful delete — `deleted the X project`
+     * is un-persistable by design (the scope foreign keys cascade), so its
+     * insert is *expected* to be refused. The correction of the feed is the
+     * honest signal; the console carries the reason.
+     */
+    const logActivities = (ids: string[]): Promise<void> => {
+      const state = stateRef.current;
+      if (ids.length === 0 || !state) return Promise.resolve();
+      const byId = new Map(state.activities.map((a) => [a.id, a]));
+      return Promise.all(
+        ids.map((id) => {
+          // Gone already (rolled back, or aged past MAX_ACTIVITIES) — nothing
+          // on screen to justify, so nothing to write.
+          const entry = byId.get(id);
+          if (!entry) return Promise.resolve(null);
+          return backend.putActivity(entry).then(
+            () => null,
+            (error: unknown) => {
+              console.error("Lumina: could not log activity", entry.text, error);
+              return id;
+            }
+          );
+        })
+      ).then((refused) => {
+        const drop = new Set(refused.filter((id): id is string => id !== null));
+        if (drop.size === 0) return;
+        update((s) => ({
+          ...s,
+          activities: s.activities.filter((a) => !drop.has(a.id)),
+        }));
+      });
+    };
+
+    /**
      * The one implementation of the plan's write sequence. Every write action
      * ends in a call to this — the optimistic/rollback logic exists here and
      * nowhere else, so Tasks 5–8 change backends without re-rolling it.
@@ -503,6 +571,10 @@ export function StoreProvider({
      * 4. resolve with `outcome.ok(result)`, or roll back, toast, and resolve
      *    with `outcome.failed` — the same falsy value a guard refusal gives,
      *    so callers need only one check to stay honest.
+     * 5. on success only, persist whatever feed lines the patch appended (see
+     *    `logActivities`). It runs after `outcome.ok`, because that is where
+     *    server-assigned ids are adopted and an activity may be re-scoped;
+     *    it cannot change the action's result, and it cannot fail the write.
      *
      * Rollback rule: if no later optimistic write landed while `op` was in
      * flight (`writeSeq` still holds this write's number), the snapshot is
@@ -526,9 +598,14 @@ export function StoreProvider({
       const snapshot = stateRef.current;
       if (!snapshot) return Promise.resolve(outcome.failed);
       update(patch);
+      const logged = appendedActivityIds(snapshot, stateRef.current);
       const seq = (writeSeq.current += 1);
       return op().then(
-        (result) => outcome.ok(result),
+        (result) => {
+          const value = outcome.ok(result);
+          if (logged.length === 0) return value;
+          return logActivities(logged).then(() => value);
+        },
         () => {
           toast.error("Couldn't save", {
             description: `We couldn't ${outcome.describe}. Your change has been undone.`,

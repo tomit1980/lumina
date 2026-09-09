@@ -209,6 +209,14 @@ export class LocalBackend implements Backend {
   // contract's parameters are named and documented. `SupabaseBackend` is
   // where they start doing work.
 
+  /** Like every other operation here, nothing of its own to do: the entry is
+   *  already in the `AppState` that `persist` writes as one blob. Local
+   *  behaviour is therefore exactly what it was before the seam grew this
+   *  method — the demo's feed still survives a reload. */
+  putActivity(): Promise<void> {
+    return Promise.resolve();
+  }
+
   switchUser(): Promise<void> {
     return Promise.resolve();
   }

@@ -269,6 +269,7 @@ describe("SupabaseBackend — the operations Tasks 7-8 still owe", () => {
     ["updateProject", () => backend.updateProject("p", { name: "n" })],
     ["deleteProject", () => backend.deleteProject("p")],
     ["setProjectAccess", () => backend.setProjectAccess("p", { restricted: false, members: [] })],
+    ["putActivity", () => backend.putActivity({ id: "a", ts: 0, actorId: "u", text: "x", kind: "member" } as never)],
   ];
 
   const writes: Array<[string, () => Promise<unknown>]> = [

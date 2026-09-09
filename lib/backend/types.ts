@@ -18,6 +18,7 @@
  * operation resolving immediately) and, from Task 4, `SupabaseBackend`.
  */
 import type {
+  Activity,
   AppState,
   Attachment,
   Channel,
@@ -73,6 +74,33 @@ export type AttachmentOwner =
 export interface Backend {
   /** The whole visible workspace for the current user. */
   hydrate(): Promise<AppState>;
+  /**
+   * Appends one line to the activity feed.
+   *
+   * The exception to the "one method per write action" rule above, and
+   * deliberately so. An activity is not part of the row a write produces: it
+   * is an append-only *log line about* that write, several actions emit more
+   * than one, and — critically — it must not be able to undo the thing it
+   * describes. Bundling it into `createProject(project, activity)` would put
+   * both writes behind one promise, so a rejected log line would reject the
+   * project too and `commit` would roll a project that really exists off the
+   * screen. (It would not even buy atomicity in exchange: supabase-js has no
+   * client-side transaction, so a bundled parameter is still two statements.)
+   *
+   * `commit` (lib/store.tsx) therefore calls this AFTER the main write has
+   * resolved, and treats a rejection as "the line was not logged", not "the
+   * write did not happen": the real change stands, and the optimistic feed
+   * entry is removed from `AppState` so the screen matches what a reload
+   * would show. That reconciliation is the whole point — an activity that
+   * appears and then vanishes on reload is the exact failure this seam exists
+   * to stop.
+   *
+   * Resolves with `void`, never with the stored row. Reading an activity back
+   * would evaluate `activities_read` against the row as the scan finds it,
+   * which is the `RETURNING`/`on conflict` trap Task 6 hit twice; there is
+   * nothing server-assigned to adopt here, so there is no reason to look.
+   */
+  putActivity(activity: Activity): Promise<void>;
   /** Drops everything this backend holds and resolves with the state to
    *  adopt in its place (a fresh seed locally; a signed-out shell later). */
   reset(): Promise<AppState>;

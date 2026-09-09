@@ -17,6 +17,7 @@
  * optimistic patch still applied. `Promise.reject` keeps the failure on the
  * path that undoes it.
  */
+import * as activityWrites from "./activity";
 import * as chat from "./chat";
 import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
@@ -29,7 +30,15 @@ import type {
   ProjectAccessPatch,
   ProjectPatch,
 } from "../types";
-import type { Channel, DM, Message, Project, RoleDef, Task } from "../../types";
+import type {
+  Activity,
+  Channel,
+  DM,
+  Message,
+  Project,
+  RoleDef,
+  Task,
+} from "../../types";
 
 /** `owner` names who fills this in, so a failure in the intervening weeks
  *  points straight at the task that owes it rather than at a mystery. */
@@ -84,6 +93,17 @@ export class SupabaseBackend implements Backend {
     if (data.user.id !== userId) {
       throw new Error("You can only act as the signed-in user.");
     }
+  }
+
+  /**
+   * The activity feed. Implemented in ./activity; a single insert, never read
+   * back. `commit` (lib/store.tsx) calls this after the main write resolves and
+   * treats a rejection as "not logged" rather than "not written" — see
+   * `Backend.putActivity` in lib/backend/types.ts for why the log line is a
+   * separate call instead of a parameter on each write.
+   */
+  async putActivity(activity: Activity): Promise<void> {
+    return activityWrites.putActivity(await this.client(), activity);
   }
 
   // -------------------------------------------------------------------------
@@ -144,27 +164,23 @@ export class SupabaseBackend implements Backend {
   // Task 6 — channels, projects, access. Implemented in ./workspace; these are
   // the seam, so each one is a single delegation.
   //
-  // ON DELETE-ACTIVITIES — the decision the ledger asks each of Tasks 5-8 to
-  // make explicitly. `deleteChannel` and `deleteProject` write NO activity row,
-  // and none of the five surviving actions writes one either.
+  // ON DELETE-ACTIVITIES. Task 6 recorded that none of these seven writes a
+  // feed row, because `Backend` carried no way to express one. `putActivity`
+  // above closed that for six of them: the store's line for `created the X
+  // project`, `updated access for #X` and the rest now reaches Postgres.
   //
-  // For the deletes this is forced, and correctly so. `activities.project_id` /
-  // `.conversation_id` cascade (20260909000900_activity_scope.sql): sequenced
-  // before the delete, a `deleted the X project` row is removed by the same
-  // cascade a moment later; sequenced after, it fails the foreign key outright.
-  // The tempting "fix" — switching the scope FK to set null — is the one the
-  // migration forbids by name: it would promote the row to workspace-wide and
-  // republish the very project and channel names 66cddf1 hid. A durable record
-  // of who deleted what belongs in a server-side audit log with its own access
-  // rules, not in a feed every user reads.
-  //
-  // For the other five it is a scope decision, not a schema one: `Backend`
-  // (lib/backend/types.ts) carries no activity parameter on any method, so the
-  // row the store composed is not available here, and inventing a second copy
-  // of each activity's text in this file is exactly the drift the plan keeps
-  // closing. Task 5 wrote no activity rows for the same reason. The store's
-  // optimistic line therefore lives for the session and is gone after a reload
-  // — which for a delete is not a bug to fix but the cascade rule working.
+  // The two deletes are the exception, and it is a schema fact rather than a
+  // choice. `activities.project_id` / `.conversation_id` cascade
+  // (20260909000900_activity_scope.sql): sequenced before the delete, a
+  // `deleted the X project` row is removed by the same cascade a moment later;
+  // sequenced after — which is where `commit` puts it — it fails the foreign
+  // key outright (23503). The tempting "fix", switching the scope FK to set
+  // null, is the one the migration forbids by name: it would promote the row to
+  // workspace-wide and republish the very project and channel names 66cddf1
+  // hid. So a delete-activity is simply not persistable, the insert is allowed
+  // to fail, and `commit` drops the optimistic line so the feed matches what a
+  // reload shows. A durable record of who deleted what belongs in a server-side
+  // audit log with its own access rules, not in a feed every user reads.
   // -------------------------------------------------------------------------
   async createChannel(channel: Channel): Promise<Channel> {
     return workspace.createChannel(await this.client(), channel);
