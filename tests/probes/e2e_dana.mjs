@@ -2,8 +2,14 @@
 // does one thing, so the first browser can be watched for a live update.
 //
 //   node tests/probes/e2e_dana.mjs post "hello"   — post to #general
-//   node tests/probes/e2e_dana.mjs presence 45    — hold a presence channel N seconds
+//   node tests/probes/e2e_dana.mjs clean           — remove every message it posted
 //   node tests/probes/e2e_dana.mjs react <msgId>  — toggle a reaction
+//
+// WARNING: `post` writes a REAL row into c_general, and
+// tests/rls/store-swap.test.ts asserts that channel is empty. Always run
+// `clean` before the access suite, or that test fails on a stale row from a
+// browser pass — which looks like a regression and is not one.
+//   node tests/probes/e2e_dana.mjs presence 45    — hold a presence channel N seconds
 import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
@@ -55,6 +61,15 @@ if (action === "post") {
   await channel.untrack();
   await c.removeChannel(channel);
   console.log("Dana left");
+} else if (action === "clean") {
+  const { data, error: err } = await c
+    .from("messages")
+    .delete()
+    .like("id", "m_dana_%")
+    .eq("conversation_id", "c_general")
+    .select("id");
+  if (err) throw new Error(`clean: ${err.message}`);
+  console.log(`removed ${(data ?? []).length} message(s)`);
 } else if (action === "react") {
   const { error: err } = await c.rpc("toggle_reaction", {
     p_message_id: arg,
@@ -63,6 +78,6 @@ if (action === "post") {
   if (err) throw new Error(`toggle_reaction: ${err.message}`);
   console.log(`reacted to ${arg}`);
 } else {
-  console.log("usage: post <text> | presence <seconds> | react <messageId>");
+  console.log("usage: post <text> | clean | presence <seconds> | react <messageId>");
   process.exit(1);
 }
