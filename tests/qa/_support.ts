@@ -10,6 +10,7 @@ import { createSeed } from "@/lib/seed";
 import type {
   AppState,
   Channel,
+  DM,
   Message,
   Permission,
   Project,
@@ -241,8 +242,28 @@ export class FailingBackend extends LocalBackend {
     return this.run("sendMessage", message);
   }
 
+  override sendToUser(dm: DM): Promise<DM> {
+    return this.run("sendToUser", dm);
+  }
+
   override editMessage(): Promise<void> {
     return this.run("editMessage", undefined);
+  }
+
+  override deleteMessage(): Promise<void> {
+    return this.run("deleteMessage", undefined);
+  }
+
+  override toggleReaction(): Promise<void> {
+    return this.run("toggleReaction", undefined);
+  }
+
+  override markChannelRead(): Promise<void> {
+    return this.run("markChannelRead", undefined);
+  }
+
+  override openDm(dm: DM): Promise<DM> {
+    return this.run("openDm", dm);
   }
 
   override createTask(task: Task): Promise<Task> {
@@ -286,10 +307,21 @@ export class FailingBackend extends LocalBackend {
   }
 }
 
-/** The operations `FailingBackend` can be told to reject. */
+/** The operations `FailingBackend` can be told to reject.
+ *
+ *  An operation missing from the overrides above inherits `LocalBackend`'s
+ *  immediate resolve, so a test that names it gets a "failing" backend that
+ *  quietly succeeds and an assertion that proves nothing. Task 1's own
+ *  deletes were found in exactly that state — keep this union and the
+ *  overrides in step. */
 export type FailingOp =
   | "sendMessage"
+  | "sendToUser"
   | "editMessage"
+  | "deleteMessage"
+  | "toggleReaction"
+  | "markChannelRead"
+  | "openDm"
   | "createTask"
   | "updateTask"
   | "moveTask"

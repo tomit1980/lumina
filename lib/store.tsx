@@ -820,6 +820,41 @@ export function StoreProvider({
       );
     };
 
+    /**
+     * A DM's id belongs to the server.
+     *
+     * `sendToUser` and `openDm` both create the thread optimistically with a
+     * client-side `uid("d")` so the conversation is on screen at once, but the
+     * row that actually exists is the one `find_or_create_dm` returns — the
+     * same RPC that makes two tabs racing on the same pair impossible. When
+     * the two ids differ (always, for a genuinely new thread) the optimistic
+     * one has to be renamed everywhere it was written, or the caller navigates
+     * to `row.id` and finds a conversation the store does not have.
+     *
+     * A no-op on `LocalBackend`, which hands back the id it was given.
+     */
+    const adoptDmId = (optimisticId: string, row: DM) => {
+      if (row.id === optimisticId) return;
+      update((st) => {
+        const oldKey = `${st.currentUserId}:${optimisticId}`;
+        const { [oldKey]: readAt, ...lastRead } = st.lastRead;
+        return {
+          ...st,
+          dms: st.dms.map((d) => (d.id === optimisticId ? row : d)),
+          messages: st.messages.map((m) =>
+            m.channelId === optimisticId ? { ...m, channelId: row.id } : m
+          ),
+          activities: st.activities.map((a) =>
+            a.conversationId === optimisticId ? { ...a, conversationId: row.id } : a
+          ),
+          lastRead:
+            readAt === undefined
+              ? lastRead
+              : { ...lastRead, [`${st.currentUserId}:${row.id}`]: readAt },
+        };
+      });
+    };
+
     const sendToUser: StoreValue["sendToUser"] = (
       otherUserId,
       content,
@@ -848,7 +883,14 @@ export function StoreProvider({
         // One operation: creating the thread and posting the first message
         // must succeed or fail together.
         () => backend.sendToUser(dm, !existing, message),
-        { ok: (row) => row, failed: null, describe: "send your message" }
+        {
+          ok: (row) => {
+            adoptDmId(dm.id, row);
+            return row;
+          },
+          failed: null,
+          describe: "send your message",
+        }
       );
     };
 
@@ -1056,7 +1098,14 @@ export function StoreProvider({
       return commit(
         (st) => ({ ...st, dms: [...st.dms, dm] }),
         () => backend.openDm(dm),
-        { ok: (row) => row, failed: null, describe: "open that conversation" }
+        {
+          ok: (row) => {
+            adoptDmId(dm.id, row);
+            return row;
+          },
+          failed: null,
+          describe: "open that conversation",
+        }
       );
     };
 

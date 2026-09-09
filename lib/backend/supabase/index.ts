@@ -1,8 +1,9 @@
 /**
  * `SupabaseBackend` — the real backend.
  *
- * Task 4 implements the read path only. Every write still rejects with a
- * named "not implemented" error, which Tasks 5–8 replace one group at a time.
+ * Task 4 implemented the read path; Task 5 the chat writes (delegated to
+ * ./chat). The remaining writes still reject with a named "not implemented"
+ * error, which Tasks 6–8 replace one group at a time.
  *
  * Why *reject* rather than no-op: the store has already applied the optimistic
  * patch by the time it calls one of these (see `commit` in lib/store.tsx), so
@@ -15,6 +16,7 @@
  * optimistic patch still applied. `Promise.reject` keeps the failure on the
  * path that undoes it.
  */
+import * as chat from "./chat";
 import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
@@ -97,28 +99,38 @@ export class SupabaseBackend implements Backend {
   }
 
   // -------------------------------------------------------------------------
-  // Task 5 — messages, DMs, reactions, read state.
+  // Task 5 — messages, DMs, reactions, read state. Implemented in ./chat;
+  // these are the seam, so each one is a single delegation.
+  //
+  // None of them is awaited by its call site: `commit` has already put the
+  // message, the edit or the emoji on screen, and chat is the surface where a
+  // round trip to Mumbai between keystroke and render would be felt. Each
+  // therefore either resolves (the rows are there) or rejects (roll it back).
   // -------------------------------------------------------------------------
-  sendMessage(): Promise<Message> {
-    return pending("sendMessage", "store-swap task 5");
+  async sendMessage(message: Message): Promise<Message> {
+    return chat.sendMessage(await this.client(), message);
   }
-  sendToUser(): Promise<DM> {
-    return pending("sendToUser", "store-swap task 5");
+  /** `isNewDm` is unused here on purpose — `find_or_create_dm` answers that
+   *  question authoritatively, and it is the client's stale belief about it
+   *  that the RPC exists to retire. It stays in the seam for `LocalBackend`,
+   *  which has no server to ask. */
+  async sendToUser(dm: DM, _isNewDm: boolean, message: Message): Promise<DM> {
+    return chat.sendToUser(await this.client(), dm, message);
   }
-  editMessage(): Promise<void> {
-    return pending("editMessage", "store-swap task 5");
+  async editMessage(messageId: string, content: string, editedAt: number): Promise<void> {
+    return chat.editMessage(await this.client(), messageId, content, editedAt);
   }
-  deleteMessage(): Promise<void> {
-    return pending("deleteMessage", "store-swap task 5");
+  async deleteMessage(messageId: string): Promise<void> {
+    return chat.deleteMessage(await this.client(), messageId);
   }
-  toggleReaction(): Promise<void> {
-    return pending("toggleReaction", "store-swap task 5");
+  async toggleReaction(messageId: string, emoji: string): Promise<void> {
+    return chat.toggleReaction(await this.client(), messageId, emoji);
   }
-  markChannelRead(): Promise<void> {
-    return pending("markChannelRead", "store-swap task 5");
+  async markChannelRead(conversationId: string, readAt: number): Promise<void> {
+    return chat.markChannelRead(await this.client(), conversationId, readAt);
   }
-  openDm(): Promise<DM> {
-    return pending("openDm", "store-swap task 5");
+  async openDm(dm: DM): Promise<DM> {
+    return chat.openDm(await this.client(), dm);
   }
 
   // -------------------------------------------------------------------------

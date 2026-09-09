@@ -28,6 +28,7 @@ type QueryResult = { data: unknown[] | null; error: { message: string; code?: st
 function fakeClient(opts: {
   rows?: Record<string, unknown[]>;
   errors?: Record<string, { message: string; code?: string }>;
+  rpcData?: Record<string, unknown>;
   userId?: string | null;
 } = {}) {
   const issued: string[] = [];
@@ -43,6 +44,16 @@ function fakeClient(opts: {
       order: () => self,
       limit: () => self,
       eq: () => self,
+      // Task 5's writes. Each still settles through `settle()`, so a table
+      // named in `errors` fails and every other one comes back empty — which
+      // is exactly the "RLS filtered it away" shape the update and delete
+      // guards below have to notice.
+      insert: () => self,
+      update: () => self,
+      delete: () => self,
+      upsert: () => self,
+      single: () => self,
+      maybeSingle: () => settle().then((r) => ({ data: null, error: r.error })),
       then: (resolve: (v: QueryResult) => unknown, reject?: (e: unknown) => unknown) =>
         settle().then(resolve, reject),
     };
@@ -60,6 +71,23 @@ function fakeClient(opts: {
             : { data: { user: { id: opts.userId ?? ME } }, error: null }
         );
       },
+      // Read locally, not over the network — see `currentUserId` in
+      // lib/backend/supabase/chat.ts for why the hot path uses this one.
+      getSession: () => {
+        issued.push("auth.getSession");
+        return Promise.resolve(
+          opts.userId === null
+            ? { data: { session: null }, error: null }
+            : { data: { session: { user: { id: opts.userId ?? ME } } }, error: null }
+        );
+      },
+    },
+    rpc: (name: string) => {
+      issued.push(`rpc.${name}`);
+      const error = opts.errors?.[`rpc.${name}`];
+      return Promise.resolve(
+        error ? { data: null, error } : { data: opts.rpcData?.[name] ?? null, error: null }
+      );
     },
     from: (table: string) => {
       issued.push(table);
@@ -216,11 +244,24 @@ describe("hydrateWorkspace — failure", () => {
   });
 });
 
-describe("SupabaseBackend — the operations Tasks 5-8 still owe", () => {
+describe("SupabaseBackend — the operations Tasks 6-8 still owe", () => {
   // Typed as `Backend`, not as the class: lib/backend/types.ts is where the
   // contract's parameters are named, and the implementations deliberately
   // declare none (same style as LocalBackend).
   const backend: Backend = new SupabaseBackend(asClient(fakeClient()));
+
+  /** Task 5's seven moved out of this list when they were implemented. They
+   *  keep the second property below — never a synchronous throw — because
+   *  `commit()` calls `op()` outside a try/catch either way. */
+  const implemented: Array<[string, () => Promise<unknown>]> = [
+    ["sendMessage", () => backend.sendMessage({ attachments: [] } as never)],
+    ["sendToUser", () => backend.sendToUser({ memberIds: ["a", "b"] } as never, true, { attachments: [] } as never)],
+    ["editMessage", () => backend.editMessage("m", "hi", 0)],
+    ["deleteMessage", () => backend.deleteMessage("m")],
+    ["toggleReaction", () => backend.toggleReaction("m", "👍")],
+    ["markChannelRead", () => backend.markChannelRead("c", 0)],
+    ["openDm", () => backend.openDm({ memberIds: ["a", "b"] } as never)],
+  ];
 
   const writes: Array<[string, () => Promise<unknown>]> = [
     ["setUserRole", () => backend.setUserRole("u", "r")],
@@ -228,13 +269,6 @@ describe("SupabaseBackend — the operations Tasks 5-8 still owe", () => {
     ["updateRole", () => backend.updateRole("r", {})],
     ["setRolePermission", () => backend.setRolePermission("r", "task.edit", true)],
     ["deleteRole", () => backend.deleteRole("r")],
-    ["sendMessage", () => backend.sendMessage({} as never)],
-    ["sendToUser", () => backend.sendToUser({} as never, true, {} as never)],
-    ["editMessage", () => backend.editMessage("m", "hi", 0)],
-    ["deleteMessage", () => backend.deleteMessage("m")],
-    ["toggleReaction", () => backend.toggleReaction("m", "👍")],
-    ["markChannelRead", () => backend.markChannelRead("c", 0)],
-    ["openDm", () => backend.openDm({} as never)],
     ["createChannel", () => backend.createChannel({} as never)],
     ["deleteChannel", () => backend.deleteChannel("c")],
     ["setChannelAccess", () => backend.setChannelAccess("c", {} as never)],
@@ -256,7 +290,7 @@ describe("SupabaseBackend — the operations Tasks 5-8 still owe", () => {
     await expect(call()).rejects.toThrow(new RegExp(`${name}\\(\\) is not implemented yet`));
   });
 
-  it.each(writes)("%s rejects asynchronously, never throwing synchronously", async (name, call) => {
+  it.each([...writes, ...implemented])("%s rejects asynchronously, never throwing synchronously", async (name, call) => {
     // `commit()` in lib/store.tsx calls `op()` outside a try/catch, so a
     // synchronous throw would escape past the rollback with the optimistic
     // patch still applied. Every one of these must return a promise.
@@ -266,6 +300,60 @@ describe("SupabaseBackend — the operations Tasks 5-8 still owe", () => {
     }).not.toThrow();
     expect(promise).toBeInstanceOf(Promise);
     await promise!.catch(() => undefined);
+  });
+});
+
+describe("SupabaseBackend — a write RLS filtered away is not a success", () => {
+  // PostgREST resolves an UPDATE or DELETE that matched zero rows with
+  // `error: null` — the request was well-formed, it just found nothing. That
+  // is what an RLS policy filtering the row away looks like from here, and
+  // taking it as success would leave the store's optimistic patch on screen
+  // with nothing written behind it. The fake client returns an empty `data`
+  // for every table, which is precisely that case.
+  const backend = new SupabaseBackend(asClient(fakeClient()));
+
+  it("editMessage rejects when no row came back", async () => {
+    await expect(backend.editMessage("m_someone_elses", "vandalised", 0)).rejects.toThrow(
+      /your own messages/i
+    );
+  });
+
+  it("deleteMessage rejects when no row came back", async () => {
+    await expect(backend.deleteMessage("m_someone_elses")).rejects.toThrow(/not yours/i);
+  });
+
+  it("sendMessage refuses a message carrying files rather than dropping them", async () => {
+    // Storage is Task 10. Posting the text and silently losing the files
+    // would be a write that looked like it worked.
+    const message = {
+      id: "m1", channelId: "c1", authorId: ME, content: "here you go",
+      createdAt: 0, reactions: [],
+      attachments: [{ id: "a1", name: "notes.md", size: 1, type: "text/markdown",
+        dataUrl: "data:,", uploadedBy: ME, uploadedAt: 0 }],
+    };
+    await expect(backend.sendMessage(message as never)).rejects.toThrow(/task 10|storage/i);
+  });
+
+  it("openDm rejects when the RPC hands back no thread", async () => {
+    // Not "carry on with the id the client invented": there would be no such
+    // conversation, and every message posted into it would be orphaned.
+    const dm = { id: "d_optimistic", memberIds: [ME, "u_other"], createdAt: 0 };
+    await expect(backend.openDm(dm as never)).rejects.toThrow(/no thread was returned/);
+  });
+
+  it("openDm adopts the id the RPC chose", async () => {
+    // Positive control for all four rejections above: the same code path
+    // resolves when the database answers properly.
+    const client = fakeClient({ rpcData: { find_or_create_dm: "d_from_the_server" } });
+    const ok = new SupabaseBackend(asClient(client));
+    const dm = { id: "d_optimistic", memberIds: [ME, "u_other"], createdAt: 0 };
+
+    await expect(ok.openDm(dm as never)).resolves.toMatchObject({
+      id: "d_from_the_server",
+      memberIds: [ME, "u_other"],
+    });
+    // Through the RPC, never a client-side find-then-create.
+    expect(client.issued).toContain("rpc.find_or_create_dm");
   });
 });
 
