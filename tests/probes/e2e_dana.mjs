@@ -5,11 +5,12 @@
 //   node tests/probes/e2e_dana.mjs clean           — remove every message it posted
 //   node tests/probes/e2e_dana.mjs react <msgId>  — toggle a reaction
 //
+//   node tests/probes/e2e_dana.mjs presence 45    — hold a presence channel N seconds
+//
 // WARNING: `post` writes a REAL row into c_general, and
 // tests/rls/store-swap.test.ts asserts that channel is empty. Always run
 // `clean` before the access suite, or that test fails on a stale row from a
 // browser pass — which looks like a regression and is not one.
-//   node tests/probes/e2e_dana.mjs presence 45    — hold a presence channel N seconds
 import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
