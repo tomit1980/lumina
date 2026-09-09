@@ -183,10 +183,28 @@ interface StoreValue {
 
 const StoreContext = React.createContext<StoreValue | null>(null);
 
+/** Which resource an activity's text names. At most one field is set; `{}`
+ *  (spelled WORKSPACE_WIDE at the call sites) means the event belongs to
+ *  nobody in particular and everyone may read it. */
+interface ActivityScope {
+  projectId?: string;
+  conversationId?: string;
+}
+
+/** A role change, a new role, a permission grant: these name no project and no
+ *  channel, so there is nothing to hide and every user sees them. */
+const WORKSPACE_WIDE: ActivityScope = {};
+
+/** `scope` is required rather than optional on purpose. Defaulting it would
+ *  make "workspace-wide" — the one value that is readable by everyone — the
+ *  thing you get by forgetting, which is precisely how `created the Payroll
+ *  project` ended up in every browser. Making it explicit means a new call
+ *  site cannot leak by omission; it fails to compile instead. */
 function activity(
   state: AppState,
   kind: ActivityKind,
   text: string,
+  scope: ActivityScope,
   actorId?: string
 ): Activity[] {
   const entry: Activity = {
@@ -195,6 +213,8 @@ function activity(
     actorId: actorId ?? state.currentUserId,
     text,
     kind,
+    projectId: scope.projectId ?? null,
+    conversationId: scope.conversationId ?? null,
   };
   return [...state.activities, entry].slice(-MAX_ACTIVITIES);
 }
@@ -562,7 +582,7 @@ export function StoreProvider({
         (st) => ({
           ...st,
           users: st.users.map((u) => (u.id === userId ? { ...u, roleId } : u)),
-          activities: activity(st, "member", `made ${target.name} a ${role.name}`),
+          activities: activity(st, "member", `made ${target.name} a ${role.name}`, WORKSPACE_WIDE),
         }),
         () => backend.setUserRole(userId, roleId),
         {
@@ -592,7 +612,7 @@ export function StoreProvider({
         (st) => ({
           ...st,
           roles: [...st.roles, role],
-          activities: activity(st, "member", `created the ${name} role`),
+          activities: activity(st, "member", `created the ${name} role`, WORKSPACE_WIDE),
         }),
         () => backend.createRole(role),
         {
@@ -676,7 +696,8 @@ export function StoreProvider({
           activities: activity(
             st,
             "member",
-            `${enabled ? "granted" : "revoked"} “${PERMISSION_META[permission].label}” ${enabled ? "to" : "for"} ${role.name}s`
+            `${enabled ? "granted" : "revoked"} “${PERMISSION_META[permission].label}” ${enabled ? "to" : "for"} ${role.name}s`,
+            WORKSPACE_WIDE
           ),
         }),
         () => backend.setRolePermission(roleId, permission, enabled),
@@ -705,7 +726,7 @@ export function StoreProvider({
         (st) => ({
           ...st,
           roles: st.roles.filter((r) => r.id !== roleId),
-          activities: activity(st, "member", `deleted the ${role.name} role`),
+          activities: activity(st, "member", `deleted the ${role.name} role`, WORKSPACE_WIDE),
         }),
         () => backend.deleteRole(roleId),
         {
@@ -764,7 +785,7 @@ export function StoreProvider({
         ...st.lastRead,
         [`${st.currentUserId}:${message.channelId}`]: message.createdAt,
       },
-      activities: note ? activity(st, "message", note) : st.activities,
+      activities: note ? activity(st, "message", note, { conversationId: message.channelId }) : st.activities,
     });
 
     const sendMessage: StoreValue["sendMessage"] = (
@@ -947,7 +968,7 @@ export function StoreProvider({
         (st) => ({
           ...st,
           channels: [...st.channels, channel],
-          activities: activity(st, "channel", `created #${input.name}`),
+          activities: activity(st, "channel", `created #${input.name}`, { conversationId: channel.id }),
         }),
         () => backend.createChannel(channel),
         {
@@ -977,7 +998,9 @@ export function StoreProvider({
           channels: st.channels.map((c) =>
             c.id === channelId ? { ...c, ...resolved } : c
           ),
-          activities: activity(st, "channel", `updated access for #${channel.name}`),
+          activities: activity(st, "channel", `updated access for #${channel.name}`, {
+            conversationId: channelId,
+          }),
         }),
         () => backend.setChannelAccess(channelId, resolved),
         {
@@ -1005,7 +1028,7 @@ export function StoreProvider({
           ...st,
           channels: st.channels.filter((c) => c.id !== channelId),
           messages: st.messages.filter((m) => m.channelId !== channelId),
-          activities: activity(st, "channel", `deleted #${channel.name}`),
+          activities: activity(st, "channel", `deleted #${channel.name}`, { conversationId: channelId }),
         }),
         () => backend.deleteChannel(channelId),
         { ok: () => true, failed: false, describe: `delete #${channel.name}` }
@@ -1054,7 +1077,9 @@ export function StoreProvider({
         (st) => ({
           ...st,
           projects: [...st.projects, project],
-          activities: activity(st, "project", `created the ${input.name} project`),
+          activities: activity(st, "project", `created the ${input.name} project`, {
+            projectId: project.id,
+          }),
         }),
         () => backend.createProject(project),
         {
@@ -1104,10 +1129,11 @@ export function StoreProvider({
             ? activity(
                 s,
                 "project",
-                `renamed “${prev.name}” to “${patch.name}”`
+                `renamed “${prev.name}” to “${patch.name}”`,
+                { projectId }
               )
             : attachmentNote
-              ? activity(s, "project", attachmentNote)
+              ? activity(s, "project", attachmentNote, { projectId })
               : s.activities,
         };
         },
@@ -1130,7 +1156,9 @@ export function StoreProvider({
           ...st,
           projects: st.projects.filter((p) => p.id !== projectId),
           tasks: st.tasks.filter((t) => t.projectId !== projectId),
-          activities: activity(st, "project", `deleted the ${project.name} project`),
+          activities: activity(st, "project", `deleted the ${project.name} project`, {
+            projectId,
+          }),
         }),
         () => backend.deleteProject(projectId),
         {
@@ -1177,7 +1205,7 @@ export function StoreProvider({
           ...st,
           projects: st.projects.map((p) => (p.id === projectId ? updatedProject : p)),
           tasks,
-          activities: activity(st, "project", `updated access for ${project.name}`),
+          activities: activity(st, "project", `updated access for ${project.name}`, { projectId }),
         };
         },
         () => backend.setProjectAccess(projectId, resolved),
@@ -1238,7 +1266,7 @@ export function StoreProvider({
         (s) => ({
           ...s,
           tasks: [...s.tasks, task],
-          activities: activity(s, "task", `created “${input.title}”`),
+          activities: activity(s, "task", `created “${input.title}”`, { projectId: task.projectId }),
         }),
         () => backend.createTask(task),
         {
@@ -1311,10 +1339,10 @@ export function StoreProvider({
           const next: Task = { ...prev, ...resolved };
           const assignmentTexts = assignmentActivityTexts(s, prev, next);
           let activities = completed
-            ? activity(s, "task", `completed “${prev.title}”`)
+            ? activity(s, "task", `completed “${prev.title}”`, { projectId: next.projectId })
             : s.activities;
           for (const text of assignmentTexts) {
-            activities = activity({ ...s, activities }, "task", text);
+            activities = activity({ ...s, activities }, "task", text, { projectId: next.projectId });
           }
           return {
             ...s,
@@ -1373,7 +1401,7 @@ export function StoreProvider({
           ...s,
           tasks: s.tasks.map((t) => reordered.get(t.id) ?? t),
           activities: completed
-            ? activity(s, "task", `completed “${task.title}”`)
+            ? activity(s, "task", `completed “${task.title}”`, { projectId: task.projectId })
             : s.activities,
         };
         },
@@ -1399,7 +1427,7 @@ export function StoreProvider({
           return {
             ...s,
             tasks: s.tasks.filter((t) => t.id !== taskId),
-            activities: activity(s, "task", `deleted “${task.title}”`),
+            activities: activity(s, "task", `deleted “${task.title}”`, { projectId: task.projectId }),
           };
         },
         () => backend.deleteTask(taskId),

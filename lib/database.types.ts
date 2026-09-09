@@ -42,22 +42,28 @@ export type Database = {
       activities: {
         Row: {
           actor_id: string | null
+          conversation_id: string | null
           id: string
           kind: string
+          project_id: string | null
           text: string
           ts: string
         }
         Insert: {
           actor_id?: string | null
+          conversation_id?: string | null
           id: string
           kind: string
+          project_id?: string | null
           text: string
           ts?: string
         }
         Update: {
           actor_id?: string | null
+          conversation_id?: string | null
           id?: string
           kind?: string
+          project_id?: string | null
           text?: string
           ts?: string
         }
@@ -67,6 +73,20 @@ export type Database = {
             columns: ["actor_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "activities_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "activities_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           },
         ]

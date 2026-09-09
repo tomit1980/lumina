@@ -70,6 +70,11 @@ import {
 type Row<T extends keyof Database["public"]["Tables"]> =
   Database["public"]["Tables"][T]["Row"];
 
+type Insert<T extends keyof Database["public"]["Tables"]> =
+  Database["public"]["Tables"][T]["Insert"];
+
+export type ActivityInsert = Insert<"activities">;
+
 export type ProfileRow = Row<"profiles">;
 export type RoleRow = Row<"roles">;
 export type ChannelRow = Row<"channels">;
@@ -255,6 +260,29 @@ export function toActivity(row: ActivityRow): Activity {
     actorId: owner(row.actor_id),
     text: row.text,
     kind: toKind(row.kind),
+    projectId: row.project_id,
+    conversationId: row.conversation_id,
+  };
+}
+
+/**
+ * Model → insert row, the direction activities are written in. Both scope
+ * columns are always emitted rather than omitted-when-absent: activities_insert
+ * (20260909000900_activity_scope.sql) checks the caller can see whatever the
+ * scope names, so sending the column explicitly as null is the difference
+ * between "this event belongs to nobody" and "I forgot to say". Undefined is
+ * folded to null so a model built before the fields existed still writes a
+ * well-formed workspace-wide row rather than letting the column default.
+ */
+export function fromActivity(activity: Activity): ActivityInsert {
+  return {
+    id: activity.id,
+    ts: new Date(activity.ts).toISOString(),
+    actor_id: activity.actorId === "" ? null : activity.actorId,
+    text: activity.text,
+    kind: activity.kind,
+    project_id: activity.projectId ?? null,
+    conversation_id: activity.conversationId ?? null,
   };
 }
 

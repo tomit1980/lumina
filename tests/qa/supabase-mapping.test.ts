@@ -14,8 +14,11 @@ import { describe, expect, it } from "vitest";
 
 import { ALL_PERMISSIONS } from "@/lib/permissions";
 import { SEED_VERSION } from "@/lib/seed";
+import type { Activity } from "@/lib/types";
 import {
+  fromActivity,
   signedOutState,
+  toActivity,
   toAppState,
   toDms,
   toEpoch,
@@ -171,6 +174,8 @@ function activity(over: Partial<ActivityRow> & Pick<ActivityRow, "id">): Activit
     actor_id: ME,
     text: "did a thing",
     kind: "task",
+    project_id: null,
+    conversation_id: null,
     ...over,
   };
 }
@@ -521,8 +526,76 @@ describe("profiles, roles, channels, projects, activities", () => {
       actorId: ME,
       text: "did a thing",
       kind: "project",
+      projectId: null,
+      conversationId: null,
     });
     expect(state.activities[1].actorId).toBe("");
+  });
+
+  // The scope columns are what activities_read filters on
+  // (20260909000900_activity_scope.sql). If the mapping dropped them, the
+  // client would hold a feed it could not tell apart from the old unscoped
+  // one — and every consumer downstream would treat a restricted row as
+  // workspace-wide.
+  it("carries an activity's project and conversation scope through", () => {
+    const state = toAppState({
+      ...empty(),
+      activities: [
+        activity({ id: "act_p", kind: "project", project_id: "p_payroll" }),
+        activity({ id: "act_c", kind: "channel", conversation_id: "c_board" }),
+        activity({ id: "act_w", kind: "member" }),
+      ],
+    });
+    expect(state.activities[0].projectId).toBe("p_payroll");
+    expect(state.activities[0].conversationId).toBeNull();
+    expect(state.activities[1].conversationId).toBe("c_board");
+    expect(state.activities[1].projectId).toBeNull();
+    // A workspace-wide row: both null, never undefined. The distinction
+    // matters on the way back out — see fromActivity below.
+    expect(state.activities[2].projectId).toBeNull();
+    expect(state.activities[2].conversationId).toBeNull();
+  });
+
+  describe("fromActivity: model → insert row", () => {
+    const base: Activity = {
+      id: "act_x", ts: AT_10_UTC, actorId: ME, text: "did a thing", kind: "task",
+    };
+
+    it("emits a project scope", () => {
+      const row = fromActivity({ ...base, projectId: "p_payroll", conversationId: null });
+      expect(row.project_id).toBe("p_payroll");
+      expect(row.conversation_id).toBeNull();
+      expect(row.id).toBe("act_x");
+      expect(row.text).toBe("did a thing");
+    });
+
+    it("emits a conversation scope", () => {
+      const row = fromActivity({ ...base, kind: "channel", conversationId: "c_board" });
+      expect(row.conversation_id).toBe("c_board");
+      expect(row.project_id).toBeNull();
+    });
+
+    // activities_insert checks the scope, so an omitted column is not the same
+    // as an explicit null: it would let the column default rather than state
+    // that the event belongs to nobody.
+    it("writes both columns as explicit null for a workspace-wide event", () => {
+      const row = fromActivity({ ...base, kind: "member" });
+      expect(row).toHaveProperty("project_id", null);
+      expect(row).toHaveProperty("conversation_id", null);
+    });
+
+    // `ts` is deliberately excluded from the equality: Postgres hands back
+    // "+00:00" and Date#toISOString emits "Z" for the same instant, so
+    // comparing the strings would assert a formatting choice rather than a
+    // round-trip. The instant itself is compared separately.
+    it("round-trips a row through toActivity and back", () => {
+      const row = activity({ id: "act_r", kind: "project", project_id: "p_payroll" });
+      const back = fromActivity(toActivity(row));
+      const { ts: backTs, ...backRest } = back;
+      const { ts: rowTs, ...rowRest } = row;
+      expect(backRest).toEqual(rowRest);
+      expect(new Date(backTs as string).getTime()).toBe(new Date(rowTs).getTime());
+    });
   });
 });
 

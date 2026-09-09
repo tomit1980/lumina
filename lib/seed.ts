@@ -1,7 +1,7 @@
 import { DEFAULT_ROLES } from "./permissions";
 import type { AppState, DM, Message, Task } from "./types";
 
-export const SEED_VERSION = 11;
+export const SEED_VERSION = 12;
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -391,26 +391,37 @@ export function createSeed(): AppState {
     }),
   ];
 
+  // Every seeded row carries its scope explicitly (SEED_VERSION 12): the two
+  // task lines name p_website, the two message lines name the channel they
+  // happened in, and the member line names nothing because a membership change
+  // is workspace-wide. None of them name c_leadership, the one private channel
+  // in the seed — a seeded activity naming it would be the very leak
+  // 20260909000900_activity_scope.sql closes.
   const activities = [
     {
       id: id("a"), ts: now - 26 * HOUR, actorId: "u_sam",
       text: "added Elena Rossi as a guest", kind: "member" as const,
+      projectId: null, conversationId: null,
     },
     {
       id: id("a"), ts: now - 6 * HOUR, actorId: "u_jonas",
       text: "moved “Fix font-swap layout shift” to In Review", kind: "task" as const,
+      projectId: "p_website", conversationId: null,
     },
     {
       id: id("a"), ts: now - 4 * HOUR, actorId: "u_maya",
       text: "completed “Design system tokens: color, type, spacing”", kind: "task" as const,
+      projectId: "p_website", conversationId: null,
     },
     {
       id: id("a"), ts: now - 3 * HOUR, actorId: "u_vlad",
       text: "posted an update in #general", kind: "message" as const,
+      projectId: null, conversationId: "c_general",
     },
     {
       id: id("a"), ts: now - 1.5 * HOUR, actorId: "u_priya",
       text: "announced the Friday deploy freeze in #engineering", kind: "message" as const,
+      projectId: null, conversationId: "c_engineering",
     },
   ];
 

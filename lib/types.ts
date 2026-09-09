@@ -147,6 +147,15 @@ export interface Activity {
   actorId: string;
   text: string;
   kind: ActivityKind;
+  /** The resource this activity's text names, so the feed can be filtered to
+   *  what the reader is allowed to see (activities_read,
+   *  20260909000900_activity_scope.sql). At most one is set: a project, a
+   *  conversation (channel or DM — they share one table), or neither, which
+   *  marks a workspace-wide event such as a role change that everyone may
+   *  read. Text alone is unfilterable, which is how `created the Payroll
+   *  project` used to reach every browser. */
+  projectId?: string | null;
+  conversationId?: string | null;
 }
 
 export interface AppState {

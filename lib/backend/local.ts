@@ -131,7 +131,18 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
       // Collaborators are new — older tasks have none.
       collaboratorIds: t.collaboratorIds ?? [],
     })),
-    activities: parsed.activities ?? [],
+    // Activity scope is new — rows written before it exist named their project
+    // or channel only inside free text, and there is no way to recover which
+    // one after the fact. They become workspace-wide (both columns null),
+    // which is the honest answer: an unscoped row is exactly a row whose
+    // subject is unknown. Same shape as collaboratorIds above, except that
+    // null rather than [] is the empty value here, so `?? null` normalises a
+    // missing key instead of leaving it undefined.
+    activities: (parsed.activities ?? []).map((a) => ({
+      ...a,
+      projectId: a.projectId ?? null,
+      conversationId: a.conversationId ?? null,
+    })),
     roles,
     lastRead: parsed.lastRead ?? {},
   };

@@ -13,7 +13,10 @@ const pw = "probe-password-7c1d";
 const OPEN = `p_att_open_${stamp}`;
 const SECRET = `p_att_secret_${stamp}`;
 const CH = `c_att_${stamp}`;
+const CH_PRIV = `c_att_priv_${stamp}`;
 const SECRET_FILE = `payroll-${stamp}.xlsx`;
+const SECRET_ACTIVITY_TEXT = `created the Payroll ${stamp} project`;
+const PRIVATE_ACTIVITY_TEXT = `deleted #board-only-${stamp}`;
 const ids = {};
 const clients = {};
 let failures = 0;
@@ -130,13 +133,46 @@ try {
   check("outsider cannot write read_state on someone else's behalf",
     rsWrite.error !== null, rsWrite.error?.code ?? "NO ERROR RAISED");
 
-  // Known, accepted limitation — asserted so a future change is noticed.
-  await svc.from("activities").insert({
-    id: `a_att_${stamp}`, actor_id: ids.owner, text: `created the Payroll project`, kind: "project",
+  // QA-001's last hole, now closed by 20260909000900_activity_scope.sql.
+  // This block used to print a NOTE recording the leak as accepted; it now
+  // asserts the leak is shut. A private channel is added for the conversation
+  // half — CH above is public, so it proves nothing about scoping.
+  await svc.from("conversations").insert({ id: CH_PRIV, kind: "channel" });
+  await svc.from("channels").insert({
+    id: CH_PRIV, name: `att-probe-priv-${stamp}`, description: "", is_private: true,
+    is_team: false, created_by: ids.owner,
   });
-  const act = await out.from("activities").select("text").eq("id", `a_att_${stamp}`);
-  console.log(`NOTE  activities_read is using(true) by design: outsider sees ${(act.data ?? []).length} row(s)` +
-    ` -> ${(act.data ?? []).length ? "leaks restricted names, flagged for follow-up" : "filtered"}`);
+  const actIns = await svc.from("activities").insert([
+    { id: `a_att_wide_${stamp}`, actor_id: ids.owner, kind: "member",
+      text: `made someone a guest ${stamp}`, project_id: null, conversation_id: null },
+    { id: `a_att_${stamp}`, actor_id: ids.owner, kind: "project",
+      text: SECRET_ACTIVITY_TEXT, project_id: SECRET, conversation_id: null },
+    { id: `a_att_priv_${stamp}`, actor_id: ids.owner, kind: "channel",
+      text: PRIVATE_ACTIVITY_TEXT, project_id: null, conversation_id: CH_PRIV },
+  ]);
+  if (actIns.error) throw new Error(`seed activities: ${actIns.error.message}`);
+
+  // Positive control FIRST: without it, a feed that returned nothing at all —
+  // or a table that had vanished — would sail through every check below.
+  const actCtrl = await out.from("activities").select("id").eq("id", `a_att_wide_${stamp}`);
+  check("positive control: outsider CAN see a workspace-wide activity",
+    (actCtrl.data ?? []).length === 1, `sees ${(actCtrl.data ?? []).length} row(s)`);
+
+  const actScan = await out.from("activities").select("id,text");
+  const actTexts = (actScan.data ?? []).map((a) => a.text ?? "");
+  check("restricted project name absent from an UNFILTERED activity scan",
+    !actTexts.includes(SECRET_ACTIVITY_TEXT), `scanned ${actTexts.length}`);
+  check("private channel name absent from an UNFILTERED activity scan",
+    !actTexts.includes(PRIVATE_ACTIVITY_TEXT), `scanned ${actTexts.length}`);
+  check("the same scan still returns the workspace-wide activity",
+    (actScan.data ?? []).some((a) => a.id === `a_att_wide_${stamp}`));
+
+  const actForge = await out.from("activities").insert({
+    id: `a_att_forge_${stamp}`, actor_id: ids.outsider, kind: "project",
+    text: "forged", project_id: SECRET, conversation_id: null,
+  });
+  check("outsider cannot scope an activity to a project they cannot see",
+    actForge.error !== null, actForge.error?.code ?? "NO ERROR RAISED");
 } catch (err) {
   // A throw here means the checks below never ran. Without this, `failures`
   // stays 0 and the epilogue cheerfully reports success for a probe that
@@ -146,8 +182,10 @@ try {
   console.log(`*** SETUP/RUN ERROR *** ${err && err.message ? err.message : err}`);
 } finally {
   await svc.from("projects").delete().in("id", [OPEN, SECRET]);
-  await svc.from("conversations").delete().eq("id", CH);
-  await svc.from("activities").delete().eq("id", `a_att_${stamp}`);
+  await svc.from("conversations").delete().in("id", [CH, CH_PRIV]);
+  await svc.from("activities").delete().in("id", [
+    `a_att_${stamp}`, `a_att_wide_${stamp}`, `a_att_priv_${stamp}`, `a_att_forge_${stamp}`,
+  ]);
   await svc.from("attachments").delete()
     .in("id", [`att_open_${stamp}`, `att_secret_${stamp}`, `att_task_${stamp}`]);
   for (const id of Object.values(ids)) await svc.auth.admin.deleteUser(id);

@@ -133,6 +133,12 @@ function assertCoherentShape(state: AppState) {
   for (const m of state.messages) {
     expect(Array.isArray(m.attachments)).toBe(true);
   }
+  for (const a of state.activities) {
+    // Never undefined: activities_read filters on these, and fromActivity
+    // must be able to write an explicit null rather than omit the column.
+    expect(a.projectId === null || typeof a.projectId === "string").toBe(true);
+    expect(a.conversationId === null || typeof a.conversationId === "string").toBe(true);
+  }
 }
 
 describe("migrate() backfills collaboratorIds for pre-collaborator tasks", () => {
@@ -142,6 +148,29 @@ describe("migrate() backfills collaboratorIds for pre-collaborator tasks", () =>
     expect(result.current.state.tasks.length).toBeGreaterThan(0);
     for (const t of result.current.state.tasks) {
       expect(t.collaboratorIds).toEqual([]);
+    }
+  });
+});
+
+describe("migrate() backfills the activity scope for pre-scope rows", () => {
+  // Same shape as the collaboratorIds backfill above. A row written before
+  // 20260909000900_activity_scope.sql named its project or channel only inside
+  // free text; there is no way to recover which one, so it becomes
+  // workspace-wide. What must NOT happen is the fields staying undefined: the
+  // feed would then be neither scoped nor honestly unscoped, and fromActivity
+  // would omit the columns rather than writing an explicit null.
+  it("a legacy blob whose activities lack a scope migrates to null on both fields", async () => {
+    const blob = legacyBlob(11) as Record<string, unknown>;
+    blob.activities = [
+      { id: "a_old_1", ts: 1, actorId: "u_legacy", text: "created the Payroll project", kind: "project" },
+      { id: "a_old_2", ts: 2, actorId: "u_legacy", text: "deleted #board-only", kind: "channel" },
+    ];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
+    const { result } = await mountFromExistingStorage();
+    expect(result.current.state.activities.length).toBe(2);
+    for (const a of result.current.state.activities) {
+      expect(a.projectId).toBeNull();
+      expect(a.conversationId).toBeNull();
     }
   });
 });
