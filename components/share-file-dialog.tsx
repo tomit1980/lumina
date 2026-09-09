@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { FileText, Hash, Lock, Megaphone, Share2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { useAttachmentUrl } from "@/components/attachment-url";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,7 +28,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
-import { formatBytes } from "@/lib/attachments";
+import { formatBytes, isStorageRef } from "@/lib/attachments";
 import { chatHref, dmHref } from "@/lib/routes";
 import { useStore } from "@/lib/store";
 import type { MessageAttachment } from "@/lib/types";
@@ -42,11 +43,14 @@ export function ShareFileDialog() {
   // "channel:<id>" | "user:<id>"
   const [target, setTarget] = React.useState("");
   const [note, setNote] = React.useState("");
-
   const project = shareFileDialog
     ? state.projects.find((p) => p.id === shareFileDialog.projectId)
     : undefined;
   const file = project?.attachments.find((a) => a.id === shareFileDialog?.attachmentId);
+  // Before the early return below, because it is a hook. `""` when there is no
+  // file resolves to no URL and renders nothing, which is what a closed dialog
+  // should show anyway.
+  const preview = useAttachmentUrl(file?.dataUrl ?? "");
 
   React.useEffect(() => {
     if (shareFileDialog?.open) {
@@ -66,7 +70,16 @@ export function ShareFileDialog() {
   const share = async () => {
     const [kind, id] = target.split(":");
     if (!kind || !id) return;
-    const payload: MessageAttachment = { ...file, dataUrl: "", sourceProjectId: project.id };
+    // The reference is kept when it points at Storage and blanked when it is
+    // the bytes themselves. Both mean the same thing — "no second copy" — but
+    // locally that has to be an empty `dataUrl` resolved back through the
+    // project (see resolveMessageAttachment), while on the real backend the
+    // path is what makes the shared file render before the next hydrate.
+    const payload: MessageAttachment = {
+      ...file,
+      dataUrl: isStorageRef(file.dataUrl) ? file.dataUrl : "",
+      sourceProjectId: project.id,
+    };
     let label: string;
     let href: string;
     if (kind === "channel") {
@@ -104,7 +117,7 @@ export function ShareFileDialog() {
           <div className="flex items-center gap-2.5 rounded-lg border bg-muted/40 px-2.5 py-2">
             {isImage ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={file.dataUrl} alt="" className="size-10 shrink-0 rounded-md object-cover" />
+              <img src={preview} alt="" className="size-10 shrink-0 rounded-md object-cover" />
             ) : (
               <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted">
                 <FileText className="size-4 text-muted-foreground" />

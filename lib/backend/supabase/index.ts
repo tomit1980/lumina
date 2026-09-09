@@ -3,10 +3,11 @@
  *
  * Task 4 implemented the read path; Task 5 the chat writes (delegated to
  * ./chat); Task 6 channels, projects and access (delegated to ./workspace);
- * Task 7 tasks and collaborators (delegated to ./tasks). The remaining writes
- * still reject with a named "not implemented" error, which Task 8 replaces.
+ * Task 7 tasks and collaborators (delegated to ./tasks); Task 8 roles and
+ * users (./roles); Task 10 attachment bytes (./storage). Every method on the
+ * seam now reaches Postgres or Storage — there is nothing left pending.
  *
- * Why *reject* rather than no-op: the store has already applied the optimistic
+ * Why a failed write *rejects* rather than no-ops: the store has already applied the optimistic
  * patch by the time it calls one of these (see `commit` in lib/store.tsx), so
  * a method that resolved would leave the change on screen, toast nothing, and
  * persist nothing — a write that looks like it worked. A rejection is what
@@ -23,10 +24,12 @@ import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
 import * as roles from "./roles";
+import * as storage from "./storage";
 import * as tasks from "./tasks";
 import * as workspace from "./workspace";
 import type { AppState } from "../../types";
 import type {
+  AttachmentOwner,
   Backend,
   ChannelAccessPatch,
   ProjectAccessPatch,
@@ -36,6 +39,7 @@ import type {
 } from "../types";
 import type {
   Activity,
+  Attachment,
   Channel,
   DM,
   Message,
@@ -45,14 +49,6 @@ import type {
   Task,
   TaskStatus,
 } from "../../types";
-
-/** `owner` names who fills this in, so a failure in the intervening weeks
- *  points straight at the task that owes it rather than at a mystery. */
-function pending(method: string, owner: string): Promise<never> {
-  return Promise.reject(
-    new Error(`SupabaseBackend.${method}() is not implemented yet (${owner}).`)
-  );
-}
 
 export class SupabaseBackend implements Backend {
   /** Test seam, mirroring `AuthProvider`'s `client` prop: the RLS suite
@@ -265,12 +261,59 @@ export class SupabaseBackend implements Backend {
   }
 
   // -------------------------------------------------------------------------
-  // Plan 3 — attachment bytes in Storage.
+  // Task 10 — attachment bytes in Storage. Implemented in ./storage; these
+  // are the seam, so each one is a single delegation.
+  //
+  // These five are the only methods on this class not called from a store
+  // action. A file becomes an `Attachment` in the file picker's own handler,
+  // before any write action has seen it, so `lib/attachments.ts` calls them
+  // directly — which is also why they take a `Blob` where everything else on
+  // the seam takes a model object.
+  //
+  // The rules they respect are stated where they are enforced,
+  // supabase/migrations/20260910001000_storage.sql, and the two that decide
+  // the ORDER of statements are worth repeating at the seam:
+  //
+  //   * Uploading writes the `attachments` ROW first and the bytes second.
+  //     The Storage INSERT policy is answered from that row.
+  //   * Deleting goes the other way — bytes first, row second — because BOTH
+  //     delete predicates are answered from the row, so removing it first
+  //     would strand the object in the bucket with nobody able to reach it.
+  //     Safe because the two predicates are identical: an allowed object
+  //     delete implies an allowed row delete against the same state.
   // -------------------------------------------------------------------------
-  putAttachment(): Promise<void> {
-    return pending("putAttachment", "plan 3 — Storage");
+  async putAttachment(
+    owner: AttachmentOwner,
+    attachment: Attachment,
+    file: Blob
+  ): Promise<string> {
+    return storage.uploadAttachment(await this.client(), owner, attachment, file);
   }
-  deleteAttachment(): Promise<void> {
-    return pending("deleteAttachment", "plan 3 — Storage");
+  async saveAttachment(
+    attachment: Attachment,
+    file: Blob,
+    editedBy: string,
+    editedAt: number
+  ): Promise<string> {
+    await storage.overwriteAttachment(
+      await this.client(),
+      attachment,
+      attachment.dataUrl,
+      file,
+      editedBy,
+      editedAt
+    );
+    // The object is overwritten in place, so the reference is unchanged and
+    // every link, message and cached copy of it stays valid.
+    return attachment.dataUrl;
+  }
+  async deleteAttachment(attachment: Attachment): Promise<void> {
+    return storage.deleteAttachments(await this.client(), [attachment]);
+  }
+  async attachmentUrl(ref: string, downloadName?: string): Promise<string> {
+    return storage.signedUrl(await this.client(), ref, downloadName);
+  }
+  async readAttachment(ref: string, mime: string): Promise<string> {
+    return storage.downloadAttachment(await this.client(), ref, mime);
   }
 }

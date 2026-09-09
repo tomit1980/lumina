@@ -38,11 +38,12 @@ import { DocumentPage } from "@/components/documents/document-page";
 import { Board } from "@/components/kanban/board";
 import { ListView } from "@/components/kanban/list-view";
 import { useUI } from "@/components/ui-context";
-import { emptySpreadsheetDataUrl, dataUrlByteLength, MIME, textToDataUrl, withExtension } from "@/lib/documents";
+import { createAttachmentFromDataUrl } from "@/lib/attachments";
+import { emptySpreadsheetDataUrl, MIME, textToDataUrl, withExtension } from "@/lib/documents";
 import { isMine } from "@/lib/permissions";
 import { fileHref } from "@/lib/routes";
-import { uid, useStore } from "@/lib/store";
-import { PRIORITIES, PRIORITY_META, type Attachment, type Priority } from "@/lib/types";
+import { useStore } from "@/lib/store";
+import { PRIORITIES, PRIORITY_META, type Priority } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function EmptyState({
@@ -132,15 +133,21 @@ function ProjectPageInner() {
     const dataUrl = isSheet
       ? await emptySpreadsheetDataUrl()
       : textToDataUrl(`# ${fullName.replace(/\.md$/, "")}\n\n`, MIME.md);
-    const attachment: Attachment = {
-      id: uid("att"),
-      name: fullName,
-      size: dataUrlByteLength(dataUrl),
-      type: isSheet ? MIME.xlsx : MIME.md,
+    // A generated file is stored exactly like a picked one — same cap, same
+    // bucket, same `{ ok }` result — so "New document" cannot quietly become
+    // the one path that writes bytes nowhere.
+    const stored = await createAttachmentFromDataUrl(
       dataUrl,
-      uploadedBy: currentUser.id,
-      uploadedAt: Date.now(),
-    };
+      fullName,
+      isSheet ? MIME.xlsx : MIME.md,
+      currentUser.id,
+      { owner: "project" }
+    );
+    if (!stored.ok) {
+      toast.error(stored.error);
+      return;
+    }
+    const attachment = stored.attachment;
     // Awaited: the next line navigates to the file's page, which only
     // exists once the write has actually gone through.
     const ok = await updateProject(project.id, {

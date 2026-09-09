@@ -30,7 +30,7 @@ import type {
   Task,
   User,
 } from "../types";
-import type { Backend } from "./types";
+import type { AttachmentOwner, Backend } from "./types";
 
 export const STORAGE_KEY = "lumina:v1";
 
@@ -313,11 +313,60 @@ export class LocalBackend implements Backend {
     return Promise.resolve();
   }
 
-  putAttachment(): Promise<void> {
+  /**
+   * The demo's file store: a base64 `data:` URL, read straight off the File
+   * and handed back to be kept inline in the one JSON blob `persist` writes.
+   * This is the whole of the local path's storage, by design — the public
+   * site has no server to put bytes on.
+   *
+   * Moved here from `readFileAsAttachment` unchanged, `reader.onerror`
+   * included, when Task 10 gave that helper a second backend to serve. The
+   * bytes still never leave the browser and the workspace is still one
+   * localStorage key, so the demo behaves exactly as it did.
+   */
+  putAttachment(_owner: AttachmentOwner, _attachment: Attachment, file: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("couldn't be read"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** Saving is the same operation as uploading here — the new bytes replace
+   *  the old `data:` URL in the blob `persist` writes. */
+  saveAttachment(
+    attachment: Attachment,
+    file: Blob,
+    editedBy: string,
+    editedAt: number
+  ): Promise<string> {
+    // `editedBy`/`editedAt` are stamped onto the `Attachment` the store
+    // patches, and `persist` writes that. There is no separate row here to
+    // carry them, unlike `SupabaseBackend`, which updates `attachments`.
+    // Named rather than dropped because the seam's parameters are declared in
+    // lib/backend/types.ts and a subclass has to be able to override this.
+    void editedBy;
+    void editedAt;
+    return this.putAttachment("project", attachment, file);
+  }
+
+  /** Nothing to undo: the bytes were never written anywhere of their own.
+   *  Dropping the `Attachment` from `AppState` is the whole deletion, and
+   *  `persist` has already been asked to write the result. */
+  deleteAttachment(attachment: Attachment): Promise<void> {
+    void attachment;
     return Promise.resolve();
   }
 
-  deleteAttachment(): Promise<void> {
-    return Promise.resolve();
+  /** The `data:` URL is already a URL, and already the bytes. Both of these
+   *  are the identity function on this backend, which is why the demo does no
+   *  work it did not do before Storage existed. */
+  attachmentUrl(ref: string): Promise<string> {
+    return Promise.resolve(ref);
+  }
+
+  readAttachment(ref: string): Promise<string> {
+    return Promise.resolve(ref);
   }
 }

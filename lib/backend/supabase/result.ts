@@ -1,11 +1,15 @@
 /**
- * The three checks every write in this directory makes, in one place.
+ * The two checks every write in this directory makes, in one place.
  *
- * Tasks 5 and 6 each wrote their own copy of `fail` and `refuseAttachments`
- * inside `./chat.ts` and `./workspace.ts`, and Task 6 added `requireRows`.
- * Task 7 would have been the third copy, so they moved here instead. The
- * behaviour and the wording are unchanged — the strings below are the ones the
- * existing suites match on.
+ * Tasks 5 and 6 each wrote their own copy of `fail` inside `./chat.ts` and
+ * `./workspace.ts`, and Task 6 added `requireRows`. Task 7 would have been the
+ * third copy, so they moved here instead. The behaviour and the wording are
+ * unchanged — the strings below are the ones the existing suites match on.
+ *
+ * A third check, `refuseAttachments`, lived here from Tasks 5–7 and made every
+ * write carrying a file reject outright, because the bytes had nowhere to go.
+ * Task 10 gave them somewhere (./storage.ts) and removed it — there is no
+ * longer anything to refuse.
  */
 
 /**
@@ -36,15 +40,3 @@ export function requireRows(
   }
 }
 
-/**
- * `Attachment.dataUrl` has nowhere to go until Storage exists (Task 10), so a
- * write carrying files is refused outright rather than persisting everything
- * *except* the files — which would look like it worked.
- */
-export function refuseAttachments(count: number): void {
-  if (count > 0) {
-    throw new Error(
-      "Sharing files isn't available on this workspace yet (store-swap task 10 — Storage)."
-    );
-  }
-}

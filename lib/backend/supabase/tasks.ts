@@ -40,7 +40,8 @@
  * collaborator, B becomes the owner — only works if `assignee_id` lands first;
  * the other order tries to add A while A is still the owner and raises.
  */
-import { fail, refuseAttachments, requireRows } from "./result";
+import { fail, requireRows } from "./result";
+import { syncAttachmentLinks } from "./storage";
 import type { LuminaClient } from "./client";
 import type { TaskPatch } from "../types";
 import type { Task, TaskStatus } from "../../types";
@@ -113,7 +114,6 @@ function refuseFrozen(patch: TaskPatch): void {
  */
 export async function createTask(client: LuminaClient, task: Task): Promise<Task> {
   const what = "creating that task";
-  refuseAttachments(task.attachments.length);
 
   const inserted = await client
     .from("tasks")
@@ -151,6 +151,34 @@ export async function createTask(client: LuminaClient, task: Task): Promise<Task
     if (error) {
       await client.from("tasks").delete().eq("id", task.id);
       fail(what, error);
+    }
+  }
+
+  // Files picked in the new-task dialog. Their bytes are already in Storage;
+  // this is the link, and it is swept the same way the collaborators are if
+  // it fails — a task on the board missing the files the dialog showed is the
+  // same half-write.
+  //
+  // PERMISSION NOTE, and it is a real mismatch rather than a hypothetical:
+  // `task_attachments_insert` requires `has_permission('task.edit')`, while
+  // the store guards this action on `task.create`. A role holding
+  // `task.create` but not `task.edit` gets a 42501 here — LOUDLY, so `commit`
+  // rolls the card back and says so, unlike Task 7's `move_task`, where the
+  // same class of mismatch produced a clean void return having moved nothing.
+  // Neither default role is in that position (Member holds both). Recorded in
+  // task-10-report.md rather than papered over with a client-side check.
+  if (task.attachments.length > 0) {
+    try {
+      await syncAttachmentLinks(
+        client,
+        "task",
+        task.id,
+        task.attachments,
+        what
+      );
+    } catch (err) {
+      await client.from("tasks").delete().eq("id", task.id);
+      throw err;
     }
   }
 
@@ -197,7 +225,6 @@ export async function updateTask(
 ): Promise<void> {
   const what = "saving that task";
   const denied = "you don't have permission to edit this task";
-  if (patch.attachments !== undefined) refuseAttachments(patch.attachments.length);
   refuseFrozen(patch);
 
   // Before any write: the current owner, which decides whether `assignee_id`
@@ -247,6 +274,21 @@ export async function updateTask(
 
   if (patch.collaboratorIds !== undefined) {
     await syncCollaborators(client, taskId, patch.collaboratorIds, what);
+  }
+
+  // Last, for the same reason the collaborator diff is not first: everything
+  // above narrows nothing the attachment policies read, but going in this
+  // order means the file links are never evaluated against a half-written
+  // task row. `task_attachments_*` all name `task.edit`, which is exactly
+  // what the store guards `updateTask` on — no mismatch here.
+  if (patch.attachments !== undefined) {
+    await syncAttachmentLinks(
+      client,
+      "task",
+      taskId,
+      patch.attachments,
+      "saving that task's files"
+    );
   }
 }
 

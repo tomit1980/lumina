@@ -396,7 +396,7 @@ describe("dm_members → the [string, string] tuple", () => {
 });
 
 describe("attachments", () => {
-  it("renames mime → type and leaves dataUrl empty until Storage exists", () => {
+  it("renames mime → type and carries storage_path into dataUrl", () => {
     const state = toAppState({
       ...empty(),
       projects: [project({ id: "p_1" })],
@@ -406,8 +406,11 @@ describe("attachments", () => {
     const file = state.projects[0].attachments[0];
     expect(file.type).toBe("image/png");
     expect(file.size).toBe(2048);
-    // Not a fabricated data: URL — Plan 3 fills the bytes in.
-    expect(file.dataUrl).toBe("");
+    // Task 10: `dataUrl` is a REFERENCE to the bytes, and on this backend the
+    // reference is the Storage location. It was the empty string while there
+    // was nowhere for bytes to live; dropping the column now would leave every
+    // file rendering as broken and look like a bug in the file.
+    expect(file.dataUrl).toBe("files/a_1");
     expect(file.uploadedAt).toBe(AT_10_UTC);
   });
 

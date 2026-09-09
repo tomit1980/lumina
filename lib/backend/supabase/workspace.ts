@@ -41,7 +41,8 @@
  * genuinely removed members are deleted; everyone else is upserted, which is an
  * UPDATE and fires nothing.
  */
-import { fail, refuseAttachments, requireRows } from "./result";
+import { fail, requireRows } from "./result";
+import { syncAttachmentLinks } from "./storage";
 import type { LuminaClient } from "./client";
 import type { ChannelAccessPatch, ProjectAccessPatch, ProjectPatch } from "../types";
 import type { Channel, Project, ResourceMember } from "../../types";
@@ -254,8 +255,6 @@ export async function createProject(
   client: LuminaClient,
   project: Project
 ): Promise<Project> {
-  refuseAttachments(project.attachments.length);
-
   const row = await client.from("projects").insert({
     id: project.id,
     name: project.name,
@@ -283,14 +282,45 @@ export async function createProject(
     }
   }
 
+  // A brand-new project has no files in practice (`createProject` in
+  // lib/store.tsx builds it with `attachments: []`), but the parameter can
+  // carry them and dropping them silently is the failure mode this plan keeps
+  // closing. The bytes are already in Storage by now; this links them.
+  if (project.attachments.length > 0) {
+    await syncAttachmentLinks(
+      client,
+      "project",
+      project.id,
+      project.attachments,
+      "creating that project"
+    );
+  }
+
   return project;
 }
 
 /**
- * The editable fields. `attachments` is part of `ProjectPatch` and is the one
- * key that cannot be honoured: the bytes live in a `data:` URL that
- * `attachments.storage_path` has nowhere to put. Refused rather than dropped,
- * exactly as a chat message carrying a file is.
+ * The editable fields, `attachments` now included (Task 10).
+ *
+ * Files are three separate things and this only owns the third. The BYTES are
+ * already in Storage before this runs — `readFileAsAttachment` put them there
+ * from the file picker's own handler — and a save from an in-app editor has
+ * already overwritten them through `saveAttachment`. What is left is the
+ * project's *list*: link what arrived, and delete what left, bytes and row
+ * together (see `syncAttachmentLinks`).
+ *
+ * ORDER. The scalar UPDATE goes first and the attachment sync second, which
+ * is the safe direction under Task 6's rule: none of `name`/`description`/
+ * `emoji`/`colour`/`priority` is an input to `can_see_project`, so neither
+ * statement can make the caller lose sight of their own project mid-write —
+ * but `project_attachments_insert` is answered by `project_is_manageable`,
+ * which reads `projects`, so the sync is the one that would notice. Doing it
+ * last means it is never evaluated against a half-written row.
+ *
+ * NOT TRANSACTIONAL, like `setProjectAccess` and `updateTask` before it: a
+ * rename that lands followed by a refused link leaves the rename applied.
+ * `commit` rolls the screen back and the next hydrate corrects it, so nothing
+ * is shown that a reload would not. An RPC would close the window.
  *
  * A patch that names no persistable field at all is a no-op, not a write — it
  * must not issue an empty UPDATE, which PostgREST rejects outright.
@@ -300,8 +330,6 @@ export async function updateProject(
   projectId: string,
   patch: ProjectPatch
 ): Promise<void> {
-  if (patch.attachments !== undefined) refuseAttachments(patch.attachments.length);
-
   // Spread rather than assignment so the object's inferred type stays exactly
   // the set of columns being written — PostgREST's generated `Update` type
   // rejects a `Record<string, unknown>`, and rightly: a typo in a key would
@@ -313,13 +341,23 @@ export async function updateProject(
     ...(patch.color !== undefined ? { color: patch.color } : {}),
     ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
   };
-  if (Object.keys(row).length === 0) return;
+  if (Object.keys(row).length > 0) {
+    requireRows(
+      "saving that project",
+      "you don't have permission to edit this project",
+      await client.from("projects").update(row).eq("id", projectId).select("id")
+    );
+  }
 
-  requireRows(
-    "saving that project",
-    "you don't have permission to edit this project",
-    await client.from("projects").update(row).eq("id", projectId).select("id")
-  );
+  if (patch.attachments !== undefined) {
+    await syncAttachmentLinks(
+      client,
+      "project",
+      projectId,
+      patch.attachments,
+      "saving that project's files"
+    );
+  }
 }
 
 /** One delete. The cascade takes the project's tasks (and with them their

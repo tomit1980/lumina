@@ -4,12 +4,13 @@ import * as React from "react";
 import { act, render, renderHook } from "@testing-library/react";
 
 import { LocalBackend } from "@/lib/backend/local";
-import type { Backend } from "@/lib/backend/types";
+import type { AttachmentOwner, Backend } from "@/lib/backend/types";
 import { StoreProvider, useStore } from "@/lib/store";
 import { createSeed } from "@/lib/seed";
 import type {
   Activity,
   AppState,
+  Attachment,
   Channel,
   DM,
   Message,
@@ -346,6 +347,59 @@ export class FailingBackend extends LocalBackend {
     if (activity) this.activityWrites.push(activity);
     return this.run("putActivity", undefined);
   }
+
+  /** Every file this backend was asked to store, in call order. */
+  attachmentWrites: Array<{ owner: AttachmentOwner; id: string; bytes: number }> = [];
+  /** Every attachment this backend was asked to throw away. */
+  attachmentDeletes: string[] = [];
+
+  /**
+   * Task 10's five. Added BEFORE the first test that names any of them, for
+   * the reason this union's own comment gives: an operation with no override
+   * inherits `LocalBackend`'s immediate resolve, so a "failing" backend
+   * quietly succeeds and the test asserts nothing. That trap has now been
+   * found four separate times in this plan (`deleteChannel`/`deleteProject`,
+   * `deleteTask`, `updateRole`/`deleteRole`), which is why these are written
+   * first and not after.
+   *
+   * `putAttachment` records the call and then delegates to `LocalBackend`, so
+   * a NON-failing FailingBackend still produces a real data: URL and a test
+   * about anything else is unaffected.
+   */
+  override putAttachment(
+    owner: AttachmentOwner,
+    attachment: Attachment,
+    file: Blob
+  ): Promise<string> {
+    this.attachmentWrites.push({ owner, id: attachment.id, bytes: file.size });
+    return this.failing === "putAttachment"
+      ? Promise.reject(new Error("putAttachment failed"))
+      : super.putAttachment(owner, attachment, file);
+  }
+
+  override saveAttachment(
+    attachment: Attachment,
+    file: Blob,
+    editedBy: string,
+    editedAt: number
+  ): Promise<string> {
+    return this.failing === "saveAttachment"
+      ? Promise.reject(new Error("saveAttachment failed"))
+      : super.saveAttachment(attachment, file, editedBy, editedAt);
+  }
+
+  override deleteAttachment(attachment: Attachment): Promise<void> {
+    this.attachmentDeletes.push(attachment.id);
+    return this.run("deleteAttachment", undefined);
+  }
+
+  override attachmentUrl(ref: string): Promise<string> {
+    return this.run("attachmentUrl", ref);
+  }
+
+  override readAttachment(ref: string): Promise<string> {
+    return this.run("readAttachment", ref);
+  }
 }
 
 /** The operations `FailingBackend` can be told to reject.
@@ -379,7 +433,12 @@ export type FailingOp =
   | "deleteRole"
   | "deleteChannel"
   | "deleteProject"
-  | "putActivity";
+  | "putActivity"
+  | "putAttachment"
+  | "saveAttachment"
+  | "deleteAttachment"
+  | "attachmentUrl"
+  | "readAttachment";
 
 /** Runs a store action inside act() and returns whatever it returned, so
  *  `result.current` reflects the resulting state by the time this resolves.

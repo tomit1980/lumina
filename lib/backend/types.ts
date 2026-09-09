@@ -59,17 +59,17 @@ export interface ProjectAccessPatch {
 }
 
 /**
- * What a file hangs off. Attachments ride along inside the project/task/
- * message rows today because `LocalBackend` persists one JSON blob, but their
- * *bytes* cannot live in a Postgres row — Plan 3 moves them to Storage and
- * fills in the two operations below. Declared here now so the seam Tasks 4–8
- * implement against is complete and `SupabaseBackend` has a named place to
- * return its typed "not available yet" from.
+ * What kind of thing a file hangs off, which is all these two operations need
+ * to know. Deliberately NOT the owning row's id: bytes are uploaded from the
+ * composer and from the "add file" button *before* the message or the task
+ * they will belong to exists, and the link that makes a file part of a
+ * project, a task or a message is written by that row's own action
+ * (`updateProject` / `createTask` / `sendMessage`), not here.
+ *
+ * On `SupabaseBackend` this selects the bucket; on `LocalBackend` it is
+ * ignored, because the bytes go inline into the one JSON blob either way.
  */
-export type AttachmentOwner =
-  | { kind: "project"; id: string }
-  | { kind: "task"; id: string }
-  | { kind: "message"; id: string };
+export type AttachmentOwner = "project" | "task" | "message";
 
 export interface Backend {
   /** The whole visible workspace for the current user. */
@@ -154,8 +154,49 @@ export interface Backend {
   moveTask(taskId: string, toStatus: TaskStatus, toIndex: number): Promise<void>;
   deleteTask(taskId: string): Promise<void>;
 
-  // Attachment bytes — see `AttachmentOwner` above. Plan 3 wires these to
-  // Storage; until then the owning row carries the file inline.
-  putAttachment(owner: AttachmentOwner, attachment: Attachment): Promise<void>;
-  deleteAttachment(owner: AttachmentOwner, attachmentId: string): Promise<void>;
+  // Attachment bytes — see `AttachmentOwner` above.
+  //
+  // These two are the only methods on this seam that take raw bytes, and the
+  // only ones not called from a store action: `lib/attachments.ts` calls them
+  // directly, because a file is turned into an `Attachment` in the file
+  // picker's own handler, long before any write action sees it.
+  /**
+   * Stores a file's bytes and resolves with the reference to put in
+   * `Attachment.dataUrl`: the `data:` URL itself on `LocalBackend`, a
+   * `"<bucket>/<attachment-id>"` Storage path on `SupabaseBackend`.
+   *
+   * Rejecting means the file is not stored, and `readFileAsAttachment` turns
+   * that into `{ ok: false, error }` — the same discriminated result a file
+   * over the size cap produces, so callers have exactly one failure shape.
+   */
+  putAttachment(
+    owner: AttachmentOwner,
+    attachment: Attachment,
+    file: Blob
+  ): Promise<string>;
+  /**
+   * Replaces the bytes behind a file that already exists — the in-app
+   * editors' Save. Resolves with the reference to store, which on
+   * `SupabaseBackend` is the SAME one it had (the object is overwritten in
+   * place, so every copy of the path stays valid).
+   */
+  saveAttachment(
+    attachment: Attachment,
+    file: Blob,
+    editedBy: string,
+    editedAt: number
+  ): Promise<string>;
+  /**
+   * Discards stored bytes that never became part of anything — a file removed
+   * from the chat composer before the message was sent. Attachments that were
+   * saved and are later removed go out through their owner's write
+   * (`updateProject` / `updateTask`), which knows what else changed.
+   */
+  deleteAttachment(attachment: Attachment): Promise<void>;
+  /** A URL the browser can put in `src`/`href`. The reference itself on
+   *  `LocalBackend`; a signed URL, minted per call, on `SupabaseBackend`. */
+  attachmentUrl(ref: string, downloadName?: string): Promise<string>;
+  /** The file's bytes as a `data:` URL — what the three document editors
+   *  parse. `mime` restores the type Storage does not record. */
+  readAttachment(ref: string, mime: string): Promise<string>;
 }

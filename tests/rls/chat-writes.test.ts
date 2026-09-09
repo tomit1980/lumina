@@ -168,18 +168,55 @@ describe("sendMessage", () => {
     expect(data).toEqual([]);
   });
 
-  it("refuses a message carrying files rather than posting it without them", async () => {
-    // Storage is Task 10; `attachments.storage_path` has nowhere to point.
-    // Posting the text and dropping the files would be a write that looked
-    // like it worked, which is the class this plan keeps closing.
+  it("POSTS a message carrying files, and links them (Task 10)", async () => {
+    // Until Task 10 this REFUSED: `attachments.storage_path` had nowhere to
+    // point, and posting the text while dropping the files would be a write
+    // that looked like it worked. The bytes now go up first — this is the
+    // whole round trip, upload included, not a fixture pretending to be one.
     const backend = await backendFor(emails.author);
-    const file: MessageAttachment = {
-      id: `a_cw_${stamp}`, name: "budget.xlsx", size: 12, type: "application/vnd.ms-excel",
-      dataUrl: "data:,", uploadedBy: ids.author, uploadedAt: Date.now(),
+    const attachment: MessageAttachment = {
+      id: `a_cw_${stamp}`, name: "budget.xlsx", size: 5, type: "text/plain",
+      dataUrl: "", uploadedBy: ids.author, uploadedAt: Date.now(),
     };
-    const msg = message("withfile", pubChannel, ids.author, "here you go", [file]);
+    attachment.dataUrl = await backend.putAttachment(
+      "message",
+      attachment,
+      new Blob(["hello"], { type: "text/plain" })
+    );
+    expect(attachment.dataUrl).toBe(`message-files/${attachment.id}`);
 
-    await expect(backend.sendMessage(msg)).rejects.toThrow(/task 10|storage/i);
+    const msg = message("withfile", pubChannel, ids.author, "here you go", [attachment]);
+    await expect(backend.sendMessage(msg)).resolves.toMatchObject({ id: msg.id });
+
+    const posted = await serviceClient.from("messages").select("id").eq("id", msg.id);
+    expect(posted.data).toEqual([{ id: msg.id }]);
+    const link = await serviceClient
+      .from("message_attachments").select("attachment_id,source_project_id").eq("message_id", msg.id);
+    expect(link.data).toEqual([{ attachment_id: attachment.id, source_project_id: null }]);
+
+    // And the file is really fetchable by the author through the message.
+    const client = await clientFor(emails.author);
+    const got = await client.storage.from("message-files").download(attachment.id);
+    expect(await got.data!.text()).toBe("hello");
+
+    await serviceClient.storage.from("message-files").remove([attachment.id]);
+    await serviceClient.from("attachments").delete().eq("id", attachment.id);
+  });
+
+  it("SWEEPS the message back out when its file link is refused", async () => {
+    // The other half, and the one that matters: a message whose files could
+    // not be attached must not survive as text. An attachment id with no
+    // `attachments` row behind it fails the foreign key, which is the
+    // cheapest honest way to make the link statement fail after the message
+    // row has already landed.
+    const backend = await backendFor(emails.author);
+    const ghost: MessageAttachment = {
+      id: `a_cw_ghost_${stamp}`, name: "ghost.txt", size: 1, type: "text/plain",
+      dataUrl: `message-files/a_cw_ghost_${stamp}`, uploadedBy: ids.author, uploadedAt: Date.now(),
+    };
+    const msg = message("ghostfile", pubChannel, ids.author, "here you go", [ghost]);
+
+    await expect(backend.sendMessage(msg)).rejects.toThrow(/sending your message failed/i);
 
     const { data } = await serviceClient.from("messages").select("id").eq("id", msg.id);
     expect(data).toEqual([]);

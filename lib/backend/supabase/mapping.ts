@@ -24,9 +24,10 @@
  *      visible members cannot be represented and is dropped (see `toDms`).
  *   7. `reactions` rows (message_id, emoji, user_id) → `Reaction[]`, one
  *      entry per emoji with a `userIds` array.
- *   8. `attachments.mime` → `Attachment.type`, and `storage_path` has no
- *      model field at all: the bytes live in Storage, which Plan 3 wires up.
- *      Until then `dataUrl` is the empty string — not a fabricated value.
+ *   8. `attachments.mime` → `Attachment.type`, and `attachments.storage_path`
+ *      → `Attachment.dataUrl`. The model field names a `data:` URL only on
+ *      the local backend; here it carries the Storage location the bytes are
+ *      fetched from. See `toAttachment`.
  *   9. Nullable owner columns. `created_by`, `author_id`, `actor_id` and
  *      `uploaded_by` are all `on delete set null` in the schema but
  *      non-nullable in the model. Null becomes `""`, which matches no user
@@ -234,10 +235,12 @@ export function toChannel(row: ChannelRow, members: ResourceMember[]): Channel {
   };
 }
 
-/** Mismatch 8. `storage_path` is not carried: it is a Storage key, and the
- *  component layer only ever reads `dataUrl`. Plan 3 fills that in; an
- *  invented value here would render as a broken image and look like a bug in
- *  the file rather than in the plan. */
+/** Mismatch 8. `storage_path` IS `dataUrl` on this backend (Task 10): the
+ *  model field holds a reference to the bytes, and what kind of reference it
+ *  is depends on which backend wrote it — a `data:` URL locally, a
+ *  `"<bucket>/<attachment-id>"` Storage path here. Nothing in the component
+ *  layer parses it; `lib/attachments.ts` resolves it to a signed URL or to
+ *  bytes, and it is the only module that knows the difference. */
 export function toAttachment(row: AttachmentRow): Attachment {
   const editedAt = toEpochOrNull(row.edited_at);
   return {
@@ -245,7 +248,7 @@ export function toAttachment(row: AttachmentRow): Attachment {
     name: row.name,
     size: row.size,
     type: row.mime,
-    dataUrl: "",
+    dataUrl: row.storage_path,
     uploadedBy: owner(row.uploaded_by),
     uploadedAt: toEpoch(row.uploaded_at),
     ...(row.edited_by !== null ? { editedBy: row.edited_by } : {}),

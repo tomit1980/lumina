@@ -24,13 +24,16 @@
  * either here: the client-side version of the first can create two DMs for one
  * pair, and of the second can silently drop a concurrent reaction.
  *
- * **Files are Task 10's.** `attachments.storage_path` has nowhere to point
- * until Storage exists, so a message carrying files is refused outright rather
- * than posted with its attachments silently dropped.
+ * **Files (Task 10).** A message carries no bytes of its own. Whatever the
+ * composer uploaded is already in the `message-files` bucket with its
+ * `attachments` row, and a file shared out of a project's Files tab is the
+ * project's row, untouched and un-copied. All that is written here is the
+ * link — plus `source_project_id`, which is what makes "Share to chat" a
+ * reference rather than a second copy.
  */
-import { fail, refuseAttachments as refuseAttachmentBytes } from "./result";
+import { fail } from "./result";
 import type { LuminaClient } from "./client";
-import type { DM, Message } from "../../types";
+import type { DM, Message, MessageAttachment } from "../../types";
 
 /**
  * `auth.uid()` for the rows that carry it explicitly (`read_state.user_id`).
@@ -50,15 +53,36 @@ async function currentUserId(client: LuminaClient): Promise<string> {
 }
 
 /**
- * Refused, not degraded. `readFileAsAttachment` still produces a data: URL and
- * the `attachments` table wants a `storage_path`, so the honest options are
- * "reject" and "post the message and drop the files". The second would be a
- * write that looks like it worked — the message appears, the files are gone —
- * which is the thing this plan keeps having to fix. Task 10 wires up Storage
- * and this guard goes away with it.
+ * The message's file links, written after the message row because
+ * `message_attachments_insert` asks whether the caller authored the message it
+ * is being attached to — there is no row to author before the insert above.
+ *
+ * A failure here is NOT allowed to pass silently, unlike the read marker: a
+ * message that posts with its files missing is precisely the "looks like it
+ * worked" write this plan keeps closing. The message row is swept back out
+ * first so the rejection `commit` rolls back is the truth on the server too.
  */
-function refuseAttachments(message: Message): void {
-  refuseAttachmentBytes(message.attachments.length);
+async function linkAttachments(
+  client: LuminaClient,
+  message: Message,
+  attachments: MessageAttachment[]
+): Promise<void> {
+  if (attachments.length === 0) return;
+  const { error } = await client.from("message_attachments").insert(
+    attachments.map((a) => ({
+      message_id: message.id,
+      attachment_id: a.id,
+      // Null for a composer upload, the project id for a shared file. It is
+      // what `resolveMessageAttachment` reads on the local path, and what
+      // records that the bytes belong to a project rather than to this
+      // message.
+      source_project_id: a.sourceProjectId ?? null,
+    }))
+  );
+  if (error) {
+    await client.from("messages").delete().eq("id", message.id);
+    fail("sending your message", error);
+  }
 }
 
 /** The message row, as `messages` wants it. `created_at` is the client's own
@@ -120,6 +144,8 @@ async function postMessage(
     .insert(messageRow(message, conversationId));
   if (error) fail("sending your message", error);
 
+  await linkAttachments(client, message, message.attachments);
+
   const readError = await writeReadState(client, conversationId, message.createdAt);
   if (readError) {
     console.warn(
@@ -132,7 +158,6 @@ export async function sendMessage(
   client: LuminaClient,
   message: Message
 ): Promise<Message> {
-  refuseAttachments(message);
   await postMessage(client, message, message.channelId);
   return message;
 }
@@ -187,7 +212,6 @@ export async function sendToUser(
   dm: DM,
   message: Message
 ): Promise<DM> {
-  refuseAttachments(message);
   const me = await currentUserId(client);
   const thread = await resolveDm(client, dm, me);
   // Into `thread.id`, never `message.channelId`: the store built the message

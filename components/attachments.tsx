@@ -5,10 +5,17 @@ import { formatDistanceToNow } from "date-fns";
 import { Download, FileCode2, FileImage, FileSpreadsheet, FileText, Paperclip, Share2, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
+import { useAttachmentUrl } from "@/components/attachment-url";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user-avatar";
-import { formatBytes, MAX_ATTACHMENT_BYTES, readFileAsAttachment } from "@/lib/attachments";
+import {
+  formatBytes,
+  MAX_ATTACHMENT_BYTES,
+  readFileAsAttachment,
+  type AttachmentOwner,
+} from "@/lib/attachments";
+import { backendKind } from "@/lib/backend";
 import { canOpen, documentKind, type DocumentKind } from "@/lib/documents";
 import { useStore } from "@/lib/store";
 import type { Attachment } from "@/lib/types";
@@ -41,6 +48,11 @@ function AttachmentRow({
   onOpen?: () => void;
 }) {
   const { state } = useStore();
+  // Two URLs, not one: the download link asks Storage for a
+  // Content-Disposition, because an `<a download>` attribute is ignored
+  // cross-origin and a signed URL is cross-origin. See useAttachmentUrl.
+  const src = useAttachmentUrl(attachment.dataUrl);
+  const downloadHref = useAttachmentUrl(attachment.dataUrl, attachment.name);
   const uploader = state.users.find((u) => u.id === attachment.uploadedBy);
   const isImage = attachment.type.startsWith("image/");
   const kind = documentKind(attachment);
@@ -65,7 +77,7 @@ function AttachmentRow({
       {isImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={attachment.dataUrl}
+          src={src}
           alt=""
           className="size-8 shrink-0 rounded-md object-cover"
         />
@@ -86,7 +98,7 @@ function AttachmentRow({
         </button>
       ) : (
         <a
-          href={attachment.dataUrl}
+          href={downloadHref}
           download={attachment.name}
           className="min-w-0 flex-1 hover:underline"
           title="Download"
@@ -99,7 +111,7 @@ function AttachmentRow({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button asChild variant="ghost" size="icon" className="size-7 shrink-0 text-muted-foreground">
-              <a href={attachment.dataUrl} download={attachment.name} aria-label={`Download ${attachment.name}`}>
+              <a href={downloadHref} download={attachment.name} aria-label={`Download ${attachment.name}`}>
                 <Download className="size-3.5" />
               </a>
             </Button>
@@ -149,6 +161,7 @@ export function AttachmentsField({
   onRemove,
   onShare,
   onOpen,
+  owner = "project",
   disabled = false,
 }: {
   attachments: Attachment[];
@@ -159,6 +172,9 @@ export function AttachmentsField({
   onShare?: (attachmentId: string) => void;
   /** When provided, openable files (docs, sheets, PDFs, images) open in the editor/viewer. */
   onOpen?: (attachmentId: string) => void;
+  /** Which bucket the bytes go in on the real backend — this field is shared
+   *  between a project's Files tab and the task dialog. Ignored locally. */
+  owner?: AttachmentOwner;
   disabled?: boolean;
 }) {
   const { currentUser } = useStore();
@@ -172,7 +188,7 @@ export function AttachmentsField({
     // callback would let the parent's stale closure overwrite earlier adds.
     const added: Attachment[] = [];
     for (const file of Array.from(files)) {
-      const result = await readFileAsAttachment(file, currentUser.id);
+      const result = await readFileAsAttachment(file, currentUser.id, { owner });
       if (result.ok) added.push(result.attachment);
       else toast.error(result.error);
     }
@@ -218,7 +234,8 @@ export function AttachmentsField({
             {busy ? "Uploading…" : "Add file"}
           </Button>
           <p className="text-[11px] text-muted-foreground">
-            Stored in your browser · max {formatBytes(MAX_ATTACHMENT_BYTES)} per file.
+            {backendKind === "supabase" ? "Shared with the team" : "Stored in your browser"} ·
+            max {formatBytes(MAX_ATTACHMENT_BYTES)} per file.
           </p>
         </>
       )}

@@ -14,8 +14,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DocumentViewer } from "@/components/documents/viewer";
 import { useUI } from "@/components/ui-context";
-import { formatBytes, MAX_ATTACHMENT_BYTES } from "@/lib/attachments";
-import { dataUrlByteLength, documentKind, isEditable, KIND_META } from "@/lib/documents";
+import { useAttachmentUrl } from "@/components/attachment-url";
+import { attachmentBytes, formatBytes, saveAttachmentBytes } from "@/lib/attachments";
+import { documentKind, isEditable, KIND_META } from "@/lib/documents";
 import { projectHref } from "@/lib/routes";
 import { useStore } from "@/lib/store";
 import type { Project } from "@/lib/types";
@@ -68,23 +69,71 @@ export function DocumentPage({
   const editor = file?.editedBy
     ? state.users.find((u) => u.id === file.editedBy)
     : undefined;
+  const downloadHref = useAttachmentUrl(file?.dataUrl ?? "", file?.name);
+
+  // THE LOAD END. The three editors parse a data: URL and always have; what
+  // changed in Task 10 is only where that URL comes from. Locally it is the
+  // reference itself, resolved on the first render with no effect and no
+  // network — the demo is untouched. On the real backend the bytes are
+  // downloaded from Storage once and handed down the same way, which is why
+  // not one line inside markdown-editor / spreadsheet-editor / word-editor
+  // needed to change: they still receive an `Attachment` whose `dataUrl` is
+  // the file.
+  //
+  // `null` means "still loading" and is distinct from a failure, so a slow
+  // download shows a spinner rather than an error and an error is never
+  // mistaken for an empty document — which for an editor would mean saving
+  // emptiness over the real file.
+  const ref = file?.dataUrl ?? "";
+  const mime = file?.type ?? "";
+  const [bytes, setBytes] = React.useState<
+    { ok: true; url: string } | { ok: false; error: string } | null
+  >(null);
+  React.useEffect(() => {
+    if (!ref || !editable) {
+      setBytes(null);
+      return;
+    }
+    let cancelled = false;
+    setBytes(null);
+    void attachmentBytes(ref, mime).then((result) => {
+      if (!cancelled) setBytes(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ref, mime, editable]);
 
   const save = React.useCallback(async () => {
     if (!file || !editorRef.current || readOnly || saving || !dirty) return;
     setSaving(true);
     try {
+      // THE SAVE END, and the only part of saving that Task 10 changed. The
+      // editor still hands back a data: URL — its internals are untouched —
+      // and `saveAttachmentBytes` decides what that means: on the local
+      // backend the bytes ARE the reference and it passes them straight
+      // through; on the real one it overwrites the object in Storage in place
+      // and hands back the same path, so every link to the file stays valid.
+      //
+      // It also owns the size check now, so the cap is enforced against the
+      // real byte count rather than the base64 length, in exactly one place.
       const dataUrl = await editorRef.current.getDataUrl();
-      const size = dataUrlByteLength(dataUrl);
-      if (size > MAX_ATTACHMENT_BYTES) {
-        toast.error(
-          `This file is ${formatBytes(size)} — max is ${formatBytes(MAX_ATTACHMENT_BYTES)}.`
-        );
+      const editedAt = Date.now();
+      const stored = await saveAttachmentBytes(file, dataUrl, currentUser.id, editedAt);
+      if (!stored.ok) {
+        toast.error("Couldn't save", { description: stored.error });
         return;
       }
       const ok = await updateProject(project.id, {
         attachments: project.attachments.map((a) =>
           a.id === file.id
-            ? { ...a, dataUrl, size, editedBy: currentUser.id, editedAt: Date.now() }
+            ? {
+                ...a,
+                dataUrl: stored.dataUrl,
+                size: stored.size,
+                editedBy: currentUser.id,
+                editedAt,
+              }
             : a
         ),
       });
@@ -142,7 +191,13 @@ export function DocumentPage({
   }
 
   const onDirty = () => setDirty(true);
-  const editorProps: DocumentEditorProps = { attachment: file, kind, readOnly, onDirty };
+  // The editors get an attachment whose `dataUrl` is the bytes, exactly as
+  // they always did. `loaded` is only non-null once they are in hand.
+  const loaded =
+    editable && bytes?.ok ? { ...file, dataUrl: bytes.url } : null;
+  const editorProps: DocumentEditorProps | null = loaded
+    ? { attachment: loaded, kind, readOnly, onDirty }
+    : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -193,7 +248,7 @@ export function DocumentPage({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button asChild variant="ghost" size="icon" className="size-8">
-              <a href={file.dataUrl} download={file.name} aria-label="Download">
+              <a href={downloadHref} download={file.name} aria-label="Download">
                 <Download className="size-4" />
               </a>
             </Button>
@@ -239,14 +294,23 @@ export function DocumentPage({
       )}
 
       <div className="min-h-0 flex-1">
-        {kind === "markdown" || kind === "text" ? (
-          <MarkdownEditor ref={editorRef} {...editorProps} />
-        ) : kind === "spreadsheet" ? (
-          <SpreadsheetEditor ref={editorRef} {...editorProps} />
-        ) : kind === "word" ? (
-          <WordEditor ref={editorRef} {...editorProps} />
-        ) : (
+        {!editable ? (
           <DocumentViewer attachment={file} kind={kind} />
+        ) : bytes === null ? (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            <Loader2 className="mr-2 size-4 animate-spin" /> Loading {file.name}…
+          </div>
+        ) : !bytes.ok ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+            <h2 className="text-base font-semibold">Couldn&apos;t open this file</h2>
+            <p className="max-w-md text-sm text-muted-foreground">{bytes.error}</p>
+          </div>
+        ) : kind === "markdown" || kind === "text" ? (
+          <MarkdownEditor ref={editorRef} {...editorProps!} />
+        ) : kind === "spreadsheet" ? (
+          <SpreadsheetEditor ref={editorRef} {...editorProps!} />
+        ) : (
+          <WordEditor ref={editorRef} {...editorProps!} />
         )}
       </div>
 

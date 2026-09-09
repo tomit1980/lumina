@@ -5,11 +5,17 @@ import { format, isToday, isYesterday } from "date-fns";
 import { FileText, Paperclip, SendHorizonal, X } from "lucide-react";
 import { toast } from "sonner";
 
+import { useAttachmentUrl } from "@/components/attachment-url";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MessageItem } from "@/components/chat/message-item";
-import { formatBytes, MAX_ATTACHMENT_BYTES, readFileAsAttachment } from "@/lib/attachments";
+import {
+  discardAttachment,
+  formatBytes,
+  MAX_ATTACHMENT_BYTES,
+  readFileAsAttachment,
+} from "@/lib/attachments";
 import { useStore } from "@/lib/store";
 import type { Attachment, Message } from "@/lib/types";
 
@@ -104,6 +110,17 @@ export function MessageList({
   );
 }
 
+/** The composer's thumbnail for a file that is uploaded but not yet sent.
+ *  A component of its own only because resolving the reference is a hook. */
+function PendingThumb({ attachment }: { attachment: Attachment }) {
+  const src = useAttachmentUrl(attachment.dataUrl);
+  if (!attachment.type.startsWith("image/")) {
+    return <FileText className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt="" className="size-6 rounded object-cover" />;
+}
+
 export function Composer({
   conversationId,
   placeholder,
@@ -148,7 +165,7 @@ export function Composer({
     if (!files || files.length === 0) return;
     setUploading(true);
     for (const file of Array.from(files)) {
-      const result = await readFileAsAttachment(file, currentUser.id);
+      const result = await readFileAsAttachment(file, currentUser.id, { owner: "message" });
       if (result.ok) setPending((p) => [...p, result.attachment]);
       else toast.error(result.error);
     }
@@ -173,19 +190,22 @@ export function Composer({
                 key={a.id}
                 className="flex max-w-56 items-center gap-1.5 rounded-lg border bg-muted/60 py-1 pr-1 pl-1.5 text-[12px]"
               >
-                {a.type.startsWith("image/") ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={a.dataUrl} alt="" className="size-6 rounded object-cover" />
-                ) : (
-                  <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                )}
+                <PendingThumb attachment={a} />
                 <span className="truncate font-medium">{a.name}</span>
                 <span className="shrink-0 text-muted-foreground">{formatBytes(a.size)}</span>
                 <button
                   type="button"
                   aria-label={`Remove ${a.name}`}
                   className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => setPending((p) => p.filter((x) => x.id !== a.id))}
+                  onClick={() => {
+                    setPending((p) => p.filter((x) => x.id !== a.id));
+                    // Taken back out before the message was sent, so nothing
+                    // ever pointed at these bytes. Best-effort and silent: the
+                    // chip is already gone and there is nothing useful to tell
+                    // someone about a file they just abandoned. A no-op on the
+                    // local backend, where the bytes were only ever in memory.
+                    void discardAttachment(a);
+                  }}
                 >
                   <X className="size-3" />
                 </button>

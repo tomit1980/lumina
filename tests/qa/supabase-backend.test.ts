@@ -90,9 +90,64 @@ function fakeClient(opts: {
     return self as PromiseLike<QueryResult> & Record<string, unknown>;
   };
 
+  /**
+   * Task 10's half of the double. Every Storage call this client was handed,
+   * so a test can assert not just that bytes moved but in WHICH ORDER against
+   * the rows — the upload/delete ordering is a correctness rule
+   * (supabase/migrations/20260910001000_storage.sql), not a style choice, and
+   * `issued` alone cannot see it because Storage is not a table.
+   *
+   * `remove` answers with the paths it removed. That matters: storage-api
+   * reports a delete its policy filtered away as `error: null` with an EMPTY
+   * array, the same false-success shape `requireRows` exists for, and
+   * `errors["storage.<bucket>.empty"]` is how a test asks for it.
+   */
+  const storageOps: Array<{ bucket: string; op: string; path: string }> = [];
+  const storage = {
+    from: (bucket: string) => ({
+      upload: (path: string, _body: Blob, options?: { upsert?: boolean }) => {
+        issued.push(`storage.${bucket}`);
+        storageOps.push({ bucket, op: options?.upsert ? "overwrite" : "upload", path });
+        const error = opts.errors?.[`storage.${bucket}`];
+        return Promise.resolve(error ? { data: null, error } : { data: { path }, error: null });
+      },
+      remove: (paths: string[]) => {
+        issued.push(`storage.${bucket}`);
+        for (const path of paths) storageOps.push({ bucket, op: "remove", path });
+        const error = opts.errors?.[`storage.${bucket}`];
+        if (error) return Promise.resolve({ data: null, error });
+        const filtered = (opts.errors?.[`storage.${bucket}.empty`] ?? null) !== null;
+        return Promise.resolve({
+          data: filtered ? [] : paths.map((name) => ({ name })),
+          error: null,
+        });
+      },
+      createSignedUrl: (path: string) => {
+        issued.push(`storage.${bucket}`);
+        storageOps.push({ bucket, op: "sign", path });
+        const error = opts.errors?.[`storage.${bucket}`];
+        return Promise.resolve(
+          error
+            ? { data: null, error }
+            : { data: { signedUrl: `https://signed.test/${bucket}/${path}` }, error: null }
+        );
+      },
+      download: (path: string) => {
+        issued.push(`storage.${bucket}`);
+        storageOps.push({ bucket, op: "download", path });
+        const error = opts.errors?.[`storage.${bucket}`];
+        return Promise.resolve(
+          error ? { data: null, error } : { data: new Blob(["hi"], { type: "text/plain" }), error: null }
+        );
+      },
+    }),
+  };
+
   const client = {
     issued,
     payloads,
+    storageOps,
+    storage,
     auth: {
       getUser: () => {
         issued.push("auth.getUser");
@@ -277,15 +332,17 @@ describe("hydrateWorkspace — failure", () => {
   });
 });
 
-describe("SupabaseBackend — the operations Plan 3 still owes", () => {
+describe("SupabaseBackend — every operation reaches the server", () => {
   // Typed as `Backend`, not as the class: lib/backend/types.ts is where the
   // contract's parameters are named, and the implementations deliberately
   // declare none (same style as LocalBackend).
   const backend: Backend = new SupabaseBackend(asClient(fakeClient()));
 
-  /** Tasks 5 and 6 moved their own out of this list when they were
-   *  implemented. They keep the second property below — never a synchronous
-   *  throw — because `commit()` calls `op()` outside a try/catch either way. */
+  /** Tasks 5–8 moved their own out of the "not implemented" list as they
+   *  landed, and Task 10 emptied it: the two attachment operations were the
+   *  last two owed, and Storage now backs both. Everything keeps the property
+   *  below — never a synchronous throw — because `commit()` calls `op()`
+   *  outside a try/catch either way. */
   const implemented: Array<[string, () => Promise<unknown>]> = [
     ["sendMessage", () => backend.sendMessage({ attachments: [] } as never)],
     ["sendToUser", () => backend.sendToUser({ memberIds: ["a", "b"] } as never, true, { attachments: [] } as never)],
@@ -314,14 +371,23 @@ describe("SupabaseBackend — the operations Plan 3 still owes", () => {
   ];
 
   const writes: Array<[string, () => Promise<unknown>]> = [
-    ["putAttachment", () => backend.putAttachment({} as never, {} as never)],
-    ["deleteAttachment", () => backend.deleteAttachment({} as never, "a")],
+    ["putAttachment", () => backend.putAttachment("project", { id: "a", name: "f" } as never, new Blob(["x"]))],
+    ["saveAttachment", () => backend.saveAttachment({ id: "a", name: "f", dataUrl: "" } as never, new Blob(["x"]), "u", 0)],
+    ["deleteAttachment", () => backend.deleteAttachment({ id: "a", name: "f", dataUrl: "" } as never)],
+    ["attachmentUrl", () => backend.attachmentUrl("project-files/a")],
+    ["readAttachment", () => backend.readAttachment("project-files/a", "text/plain")],
   ];
 
-  it.each(writes)("%s rejects rather than pretending to succeed", async (name, call) => {
-    // A resolving no-op would leave the store's optimistic patch on screen
-    // with nothing written behind it — a write that looks like it worked.
-    await expect(call()).rejects.toThrow(new RegExp(`${name}\\(\\) is not implemented yet`));
+  it("no operation on the seam answers \"not implemented\" any more", async () => {
+    // Task 10 was the last one owed. If a future task parks an operation
+    // behind a typed placeholder again, this is where it gets noticed.
+    const outcomes = await Promise.allSettled(
+      [...writes, ...implemented].map(([, call]) => call())
+    );
+    const parked = outcomes.filter(
+      (o) => o.status === "rejected" && /is not implemented yet/.test(String(o.reason))
+    );
+    expect(parked).toEqual([]);
   });
 
   it.each([...writes, ...implemented])("%s rejects asynchronously, never throwing synchronously", async (name, call) => {
@@ -356,16 +422,49 @@ describe("SupabaseBackend — a write RLS filtered away is not a success", () =>
     await expect(backend.deleteMessage("m_someone_elses")).rejects.toThrow(/not yours/i);
   });
 
-  it("sendMessage refuses a message carrying files rather than dropping them", async () => {
-    // Storage is Task 10. Posting the text and silently losing the files
-    // would be a write that looked like it worked.
+  it("sendMessage LINKS a message's files instead of refusing them (Task 10)", async () => {
+    // Until Task 10 this rejected: the bytes had nowhere to live, and posting
+    // the text while losing the files would be a write that looked like it
+    // worked. Now the bytes are already in Storage and what is written here is
+    // the link - after the message row, because `message_attachments_insert`
+    // asks whether the caller authored the message it is being attached to.
+    const client = fakeClient();
+    const sender = new SupabaseBackend(asClient(client));
     const message = {
       id: "m1", channelId: "c1", authorId: ME, content: "here you go",
       createdAt: 0, reactions: [],
       attachments: [{ id: "a1", name: "notes.md", size: 1, type: "text/markdown",
-        dataUrl: "data:,", uploadedBy: ME, uploadedAt: 0 }],
+        dataUrl: "message-files/a1", uploadedBy: ME, uploadedAt: 0,
+        sourceProjectId: "p_design" }],
     };
-    await expect(backend.sendMessage(message as never)).rejects.toThrow(/task 10|storage/i);
+    await expect(sender.sendMessage(message as never)).resolves.toBeTruthy();
+    expect(client.issued.indexOf("messages")).toBeLessThan(
+      client.issued.indexOf("message_attachments")
+    );
+    expect(
+      client.payloads.find((entry) => entry.table === "message_attachments")?.value
+    ).toEqual([{ message_id: "m1", attachment_id: "a1", source_project_id: "p_design" }]);
+  });
+
+  it("sendMessage sweeps the message row back out when the file link is refused", async () => {
+    // The alternative is a posted message whose files are missing - the
+    // "looks like it worked" write, one door along.
+    const client = fakeClient({
+      errors: {
+        message_attachments: {
+          message: "new row violates row-level security policy",
+          code: "42501",
+        },
+      },
+    });
+    const sender = new SupabaseBackend(asClient(client));
+    const message = {
+      id: "m2", channelId: "c1", authorId: ME, content: "", createdAt: 0, reactions: [],
+      attachments: [{ id: "a2", name: "x.md", size: 1, type: "text/markdown",
+        dataUrl: "message-files/a2", uploadedBy: ME, uploadedAt: 0 }],
+    };
+    await expect(sender.sendMessage(message as never)).rejects.toThrow(/42501/);
+    expect(client.issued.filter((table) => table === "messages")).toHaveLength(2);
   });
 
   it("openDm rejects when the RPC hands back no thread", async () => {
@@ -412,13 +511,62 @@ describe("SupabaseBackend — a write RLS filtered away is not a success", () =>
     expect(client.issued).not.toContain("project_members");
   });
 
-  it("updateProject refuses a patch carrying files rather than saving everything else", async () => {
-    // Same rule as sendMessage above: Storage is Task 10, so a project whose
-    // attachments changed cannot be persisted, and saving the name while
-    // dropping the file would look like it worked.
-    await expect(
-      backend.updateProject("p1", { name: "Renamed", attachments: [{ id: "a1" } as never] })
-    ).rejects.toThrow(/task 10|storage/i);
+  it("updateProject LINKS the files a patch adds, after the scalar update", async () => {
+    // Until Task 10 this rejected. The ORDER is the assertion: the scalar
+    // UPDATE first, the attachment sync last, so the link is never evaluated
+    // against a half-written project row.
+    const client = fakeClient({ rows: { projects: [{ id: "p1" }] } });
+    const editor = new SupabaseBackend(asClient(client));
+    await editor.updateProject("p1", {
+      name: "Renamed",
+      attachments: [{ id: "a1", name: "spec.md", dataUrl: "project-files/a1" } as never],
+    });
+    expect(client.issued.indexOf("projects")).toBeLessThan(
+      client.issued.indexOf("project_attachments")
+    );
+    expect(
+      client.payloads.find((entry) => entry.table === "project_attachments")?.value
+    ).toEqual([{ project_id: "p1", attachment_id: "a1" }]);
+  });
+
+  it("updateProject deletes the BYTES BEFORE the row for a file that was removed", async () => {
+    // A correctness rule, not tidiness: both delete predicates are answered
+    // from the `attachments` row, so removing the row first would strand the
+    // object in the bucket with nobody able to reach it ever again.
+    const client = fakeClient({
+      rows: {
+        projects: [{ id: "p1" }],
+        project_attachments: [{ attachment_id: "a_old" }],
+        attachments: [{ id: "a_old", name: "old.md", storage_path: "project-files/a_old" }],
+      },
+    });
+    const editor = new SupabaseBackend(asClient(client));
+    await editor.updateProject("p1", { attachments: [] });
+    expect(client.storageOps).toEqual([
+      { bucket: "project-files", op: "remove", path: "a_old" },
+    ]);
+    expect(client.issued.indexOf("storage.project-files")).toBeLessThan(
+      client.issued.lastIndexOf("attachments")
+    );
+  });
+
+  it("updateProject reports a refused byte-delete instead of reading the empty array as success", async () => {
+    // storage-api answers a delete its policy filtered away with `error: null`
+    // and an EMPTY array - the same false-success shape `requireRows` exists
+    // for. Verified live against lumina-dev: a member without `project.delete`
+    // who is not the uploader gets exactly that.
+    const client = fakeClient({
+      rows: {
+        projects: [{ id: "p1" }],
+        project_attachments: [{ attachment_id: "a_old" }],
+        attachments: [{ id: "a_old", name: "old.md", storage_path: "project-files/a_old" }],
+      },
+      errors: { "storage.project-files.empty": { message: "filtered" } },
+    });
+    const editor = new SupabaseBackend(asClient(client));
+    await expect(editor.updateProject("p1", { attachments: [] })).rejects.toThrow(
+      /only the person who uploaded it/i
+    );
   });
 
   it("updateProject writes nothing at all for a patch with no persistable field", async () => {
@@ -541,11 +689,36 @@ describe("SupabaseBackend — createTask", () => {
     await expect(backend.createTask(task as never)).rejects.toThrow(/permission/i);
   });
 
-  it("refuses a task carrying files rather than dropping them", async () => {
-    const backend = new SupabaseBackend(asClient(fakeClient()));
+  it("links a new task's files, and sweeps the task back out if that is refused", async () => {
+    const ok = fakeClient({ rows: { tasks: [{ id: "t1", position: 3 }] } });
+    await new SupabaseBackend(asClient(ok)).createTask({
+      ...task,
+      attachments: [{ id: "a1", name: "brief.md", dataUrl: "task-files/a1" }],
+    } as never);
+    expect(ok.payloads.find((entry) => entry.table === "task_attachments")?.value).toEqual([
+      { task_id: "t_new", attachment_id: "a1" },
+    ]);
+
+    // `task_attachments_insert` requires `task.edit` while the store guards
+    // `task.create` - a real mismatch, recorded in task-10-report.md. It fails
+    // LOUDLY, which is the point: the card comes back off the board rather
+    // than sitting there without the files the dialog showed.
+    const refused = fakeClient({
+      rows: { tasks: [{ id: "t1", position: 3 }] },
+      errors: {
+        task_attachments: {
+          message: "new row violates row-level security policy",
+          code: "42501",
+        },
+      },
+    });
     await expect(
-      backend.createTask({ ...task, attachments: [{ id: "a1" }] } as never)
-    ).rejects.toThrow(/task 10|storage/i);
+      new SupabaseBackend(asClient(refused)).createTask({
+        ...task,
+        attachments: [{ id: "a1", name: "brief.md", dataUrl: "task-files/a1" }],
+      } as never)
+    ).rejects.toThrow(/42501/);
+    expect(refused.issued.filter((table) => table === "tasks")).toHaveLength(2);
   });
 });
 
@@ -631,11 +804,18 @@ describe("SupabaseBackend — updateTask keeps 'only what is newly assigned'", (
     await expect(backend.updateTask("t1", { order: 2 })).rejects.toThrow(/moving it/i);
   });
 
-  it("refuses a patch carrying files", async () => {
-    const backend = new SupabaseBackend(asClient(withOwner(null)));
-    await expect(
-      backend.updateTask("t1", { attachments: [{ id: "a1" } as never] })
-    ).rejects.toThrow(/task 10|storage/i);
+  it("syncs a patch's files last, against task.edit - which is what the store guards", async () => {
+    const client = withOwner(null);
+    const backend = new SupabaseBackend(asClient(client));
+    await backend.updateTask("t1", {
+      attachments: [{ id: "a1", name: "brief.md", dataUrl: "task-files/a1" } as never],
+    });
+    expect(client.payloads.find((entry) => entry.table === "task_attachments")?.value).toEqual([
+      { task_id: "t1", attachment_id: "a1" },
+    ]);
+    expect(client.issued.lastIndexOf("task_attachments")).toBeGreaterThan(
+      client.issued.indexOf("tasks")
+    );
   });
 });
 

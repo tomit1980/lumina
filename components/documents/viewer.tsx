@@ -2,16 +2,22 @@
 
 import { Download, File as FileIcon } from "lucide-react";
 
+import { useAttachmentUrl } from "@/components/attachment-url";
 import { Button } from "@/components/ui/button";
 import type { DocumentKind } from "@/lib/documents";
 import type { Attachment } from "@/lib/types";
 
 /** Read-only display for PDFs, images and anything we can't edit. */
 export function DocumentViewer({ attachment, kind }: { attachment: Attachment; kind: DocumentKind }) {
+  // The viewer displays the file rather than parsing it, so it wants a URL,
+  // not the bytes: a signed URL streams a 9 MB PDF straight into the iframe
+  // instead of routing it through a base64 string first.
+  const src = useAttachmentUrl(attachment.dataUrl);
+  const downloadHref = useAttachmentUrl(attachment.dataUrl, attachment.name);
   if (kind === "pdf") {
     return (
       <iframe
-        src={attachment.dataUrl}
+        src={src}
         title={attachment.name}
         className="h-full w-full border-0 bg-muted/30"
       />
@@ -22,7 +28,7 @@ export function DocumentViewer({ attachment, kind }: { attachment: Attachment; k
       <div className="flex h-full items-center justify-center overflow-auto bg-muted/30 p-6">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={attachment.dataUrl}
+          src={src}
           alt={attachment.name}
           className="max-h-full max-w-full rounded-lg border bg-background shadow-sm"
         />
@@ -41,7 +47,7 @@ export function DocumentViewer({ attachment, kind }: { attachment: Attachment; k
         </p>
       </div>
       <Button asChild variant="outline" size="sm">
-        <a href={attachment.dataUrl} download={attachment.name}>
+        <a href={downloadHref} download={attachment.name}>
           <Download className="size-4" /> Download
         </a>
       </Button>

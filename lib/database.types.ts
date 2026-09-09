@@ -761,6 +761,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      attachment_of_object: { Args: { object_name: string }; Returns: string }
       can_join_dm: { Args: { target_dm_id: string }; Returns: boolean }
       can_see_attachment: { Args: { att_id: string }; Returns: boolean }
       can_see_conversation: { Args: { conv_id: string }; Returns: boolean }
@@ -773,6 +774,7 @@ export type Database = {
       dm_pair_key: { Args: { a: string; b: string }; Returns: string }
       find_or_create_dm: { Args: { other_user_id: string }; Returns: string }
       has_permission: { Args: { perm: string }; Returns: boolean }
+      is_attachment_uploader: { Args: { att_id: string }; Returns: boolean }
       move_task: {
         Args: { p_index: number; p_status: string; p_task_id: string }
         Returns: undefined

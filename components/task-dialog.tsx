@@ -666,6 +666,7 @@ export function TaskDialog() {
             <Label>Attachments</Label>
             <AttachmentsField
               attachments={form.attachments}
+              owner="task"
               disabled={readOnly}
               onAdd={(added) => set("attachments", [...form.attachments, ...added])}
               onRemove={(id) =>
