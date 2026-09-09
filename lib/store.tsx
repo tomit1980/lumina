@@ -1377,6 +1377,13 @@ export function StoreProvider({
           return Promise.resolve(null);
         }
       }
+      // The card has to render somewhere before the server answers, and the
+      // end of its column is where it will land — so this is the optimistic
+      // placeholder, NOT the value that gets written. The backend sends no
+      // position at all: a `before insert` trigger appends the row
+      // (20260908000800_store_swap.sql), because two people adding a card to
+      // the same column both counted the same length here and both claimed it.
+      // Whatever the server chose is adopted in `ok` below.
       const columnSize = s0.tasks.filter(
         (t) => t.projectId === input.projectId && t.status === input.status
       ).length;
@@ -1396,7 +1403,23 @@ export function StoreProvider({
         }),
         () => backend.createTask(task),
         {
-          ok: (created) => created,
+          ok: (created) => {
+            // `ok` is the seam a real backend hands server-assigned values back
+            // through. `LocalBackend` returns the task unchanged, so this is a
+            // no-op there; against Postgres it replaces the guess above with
+            // the position the trigger picked, which is what a reload will
+            // show. Matched by id, so a task deleted while the write was in
+            // flight is simply not found.
+            if (created.order !== task.order) {
+              update((s) => ({
+                ...s,
+                tasks: s.tasks.map((t) =>
+                  t.id === created.id ? { ...t, order: created.order } : t
+                ),
+              }));
+            }
+            return created;
+          },
           failed: null,
           describe: `create “${input.title}”`,
         }

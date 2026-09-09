@@ -28,15 +28,9 @@
  * until Storage exists, so a message carrying files is refused outright rather
  * than posted with its attachments silently dropped.
  */
+import { fail, refuseAttachments as refuseAttachmentBytes } from "./result";
 import type { LuminaClient } from "./client";
 import type { DM, Message } from "../../types";
-
-/** supabase-js resolves on a database error instead of rejecting, so every
- *  call below has to be checked by hand. One place to do it. */
-function fail(what: string, error: { message: string; code?: string }): never {
-  const code = error.code ? ` [${error.code}]` : "";
-  throw new Error(`${what} failed${code}: ${error.message}`);
-}
 
 /**
  * `auth.uid()` for the rows that carry it explicitly (`read_state.user_id`).
@@ -64,11 +58,7 @@ async function currentUserId(client: LuminaClient): Promise<string> {
  * and this guard goes away with it.
  */
 function refuseAttachments(message: Message): void {
-  if (message.attachments.length > 0) {
-    throw new Error(
-      "Sharing files isn't available on this workspace yet (store-swap task 10 — Storage)."
-    );
-  }
+  refuseAttachmentBytes(message.attachments.length);
 }
 
 /** The message row, as `messages` wants it. `created_at` is the client's own

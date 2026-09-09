@@ -32,6 +32,13 @@ function fakeClient(opts: {
   userId?: string | null;
 } = {}) {
   const issued: string[] = [];
+  /** Every write this client was handed, so a test can assert what a backend
+   *  actually sent — Task 7 needs it for the two columns whose *absence* is the
+   *  behaviour under test (`tasks.position`, and `assignee_id` on an unchanged
+   *  owner). PostgREST discards nothing, so neither does the double. */
+  const payloads: Array<{ table: string; op: string; value: unknown }> = [];
+  /** The arguments each RPC was called with, by name. */
+  const rpcArgs: Record<string, unknown> = {};
 
   const builder = (table: string): PromiseLike<QueryResult> & Record<string, unknown> => {
     const settle = (): Promise<QueryResult> =>
@@ -39,6 +46,10 @@ function fakeClient(opts: {
         const error = opts.errors?.[table];
         return error ? { data: null, error } : { data: opts.rows?.[table] ?? [], error: null };
       });
+    const record = (op: string) => (value: unknown) => {
+      payloads.push({ table, op, value });
+      return self;
+    };
     const self: Record<string, unknown> = {
       select: () => self,
       order: () => self,
@@ -49,12 +60,17 @@ function fakeClient(opts: {
       // named in `errors` fails and every other one comes back empty — which
       // is exactly the "RLS filtered it away" shape the update and delete
       // guards below have to notice.
-      insert: () => self,
-      update: () => self,
+      insert: record("insert"),
+      update: record("update"),
       delete: () => self,
-      upsert: () => self,
+      upsert: record("upsert"),
       single: () => self,
-      maybeSingle: () => settle().then((r) => ({ data: null, error: r.error })),
+      // The first row, not an unconditional null: `.maybeSingle()` is how a
+      // backend reads one row back, and a double that always answered "no such
+      // row" could only ever exercise the refusal path. Tables with no `rows`
+      // entry still answer null, which is what the Task 6 assertions below
+      // depend on.
+      maybeSingle: () => settle().then((r) => ({ data: r.data?.[0] ?? null, error: r.error })),
       then: (resolve: (v: QueryResult) => unknown, reject?: (e: unknown) => unknown) =>
         settle().then(resolve, reject),
     };
@@ -63,6 +79,7 @@ function fakeClient(opts: {
 
   const client = {
     issued,
+    payloads,
     auth: {
       getUser: () => {
         issued.push("auth.getUser");
@@ -83,8 +100,10 @@ function fakeClient(opts: {
         );
       },
     },
-    rpc: (name: string) => {
+    rpcArgs,
+    rpc: (name: string, args?: unknown) => {
       issued.push(`rpc.${name}`);
+      rpcArgs[name] = args;
       const error = opts.errors?.[`rpc.${name}`];
       return Promise.resolve(
         error ? { data: null, error } : { data: opts.rpcData?.[name] ?? null, error: null }
@@ -270,6 +289,10 @@ describe("SupabaseBackend — the operations Tasks 7-8 still owe", () => {
     ["deleteProject", () => backend.deleteProject("p")],
     ["setProjectAccess", () => backend.setProjectAccess("p", { restricted: false, members: [] })],
     ["putActivity", () => backend.putActivity({ id: "a", ts: 0, actorId: "u", text: "x", kind: "member" } as never)],
+    ["createTask", () => backend.createTask({ attachments: [], collaboratorIds: [], labels: [], createdAt: 0 } as never)],
+    ["updateTask", () => backend.updateTask("t", { title: "n" })],
+    ["moveTask", () => backend.moveTask("t", "todo", 0)],
+    ["deleteTask", () => backend.deleteTask("t")],
   ];
 
   const writes: Array<[string, () => Promise<unknown>]> = [
@@ -278,10 +301,6 @@ describe("SupabaseBackend — the operations Tasks 7-8 still owe", () => {
     ["updateRole", () => backend.updateRole("r", {})],
     ["setRolePermission", () => backend.setRolePermission("r", "task.edit", true)],
     ["deleteRole", () => backend.deleteRole("r")],
-    ["createTask", () => backend.createTask({} as never)],
-    ["updateTask", () => backend.updateTask("t", {})],
-    ["moveTask", () => backend.moveTask("t", "todo", 0)],
-    ["deleteTask", () => backend.deleteTask("t")],
     ["putAttachment", () => backend.putAttachment({} as never, {} as never)],
     ["deleteAttachment", () => backend.deleteAttachment({} as never, "a")],
   ];
@@ -442,6 +461,222 @@ describe("SupabaseBackend — a write RLS filtered away is not a success", () =>
     });
     // Through the RPC, never a client-side find-then-create.
     expect(client.issued).toContain("rpc.find_or_create_dm");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 7 — the four task writes. What is asserted here is what the backend
+// SENDS, because for two of these columns the behaviour under test is an
+// absence: `tasks.position` must not be on an insert (the trigger appends), and
+// `assignee_id` must not be in an UPDATE that does not change the owner (the
+// trigger would re-validate a person who was already there). A test that only
+// checked the resolved value would pass with both columns present.
+// ---------------------------------------------------------------------------
+describe("SupabaseBackend — createTask", () => {
+  const task = {
+    id: "t_new", projectId: "p1", title: "Ship it", description: "",
+    status: "todo", priority: "medium", assigneeId: null, dueDate: null,
+    startTime: null, durationMinutes: null, reminderMinutes: null, labels: [],
+    attachments: [], order: 3, createdAt: 1_700_000_000_000, createdBy: ME,
+    collaboratorIds: [],
+  };
+
+  it("sends NO position, and adopts the one the trigger chose", async () => {
+    const client = fakeClient({ rows: { tasks: [{ id: "t_new", position: 9 }] } });
+    const backend = new SupabaseBackend(asClient(client));
+
+    // 9, not the 3 the store guessed from its own column length.
+    await expect(backend.createTask(task as never)).resolves.toMatchObject({ order: 9 });
+
+    const insert = client.payloads.find((p) => p.table === "tasks" && p.op === "insert");
+    expect(insert).toBeDefined();
+    expect(Object.keys(insert!.value as object)).not.toContain("position");
+  });
+
+  it("writes the task before its collaborators", async () => {
+    // `check_task_collaborator` reads the task's own row to find the owner, and
+    // the foreign key needs it to exist. The reverse order fails every time.
+    const client = fakeClient({ rows: { tasks: [{ id: "t_new", position: 0 }] } });
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.createTask({ ...task, collaboratorIds: ["u_a", "u_b"] } as never);
+
+    expect(client.issued).toEqual(["tasks", "task_collaborators"]);
+    expect(client.payloads.at(-1)!.value).toEqual([
+      { task_id: "t_new", user_id: "u_a" },
+      { task_id: "t_new", user_id: "u_b" },
+    ]);
+  });
+
+  it("sweeps the task row when the collaborator insert is refused", async () => {
+    // Otherwise the board keeps a task the dialog said had two people on it and
+    // the database has none — a create that half worked.
+    const client = fakeClient({
+      rows: { tasks: [{ id: "t_new", position: 0 }] },
+      errors: { task_collaborators: { message: "cannot see this project", code: "P0001" } },
+    });
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(
+      backend.createTask({ ...task, collaboratorIds: ["u_blocked"] } as never)
+    ).rejects.toThrow(/P0001/);
+    expect(client.issued).toEqual(["tasks", "task_collaborators", "tasks"]);
+  });
+
+  it("rejects when the insert came back empty — the filtered-away shape", async () => {
+    const backend = new SupabaseBackend(asClient(fakeClient()));
+    await expect(backend.createTask(task as never)).rejects.toThrow(/permission/i);
+  });
+
+  it("refuses a task carrying files rather than dropping them", async () => {
+    const backend = new SupabaseBackend(asClient(fakeClient()));
+    await expect(
+      backend.createTask({ ...task, attachments: [{ id: "a1" }] } as never)
+    ).rejects.toThrow(/task 10|storage/i);
+  });
+});
+
+describe("SupabaseBackend — updateTask keeps 'only what is newly assigned'", () => {
+  const withOwner = (assignee: string | null, collaborators: string[] = []) =>
+    fakeClient({
+      rows: {
+        tasks: [{ id: "t1", assignee_id: assignee }],
+        task_collaborators: collaborators.map((user_id) => ({ user_id })),
+      },
+    });
+  const sent = (client: ReturnType<typeof fakeClient>, table: string, op: string) =>
+    client.payloads.filter((p) => p.table === table && p.op === op).map((p) => p.value);
+
+  it("OMITS assignee_id when the patch does not change the owner", async () => {
+    // The rule the whole file turns on. `tasks_check_assignee` fires on
+    // `update of assignee_id` — the SET list, not a changed value — and refuses
+    // an owner who cannot see the project. The task dialog sends `assigneeId`
+    // on every save, so including it unchanged would make a task whose owner
+    // has since lost access uneditable by everybody.
+    const client = withOwner("u_stale");
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(
+      backend.updateTask("t1", { title: "Renamed", assigneeId: "u_stale" })
+    ).resolves.toBeUndefined();
+
+    expect(sent(client, "tasks", "update")).toEqual([{ title: "Renamed" }]);
+  });
+
+  it("INCLUDES assignee_id when the patch really reassigns — the positive control", async () => {
+    // Without this, an updateTask that never wrote the owner at all would pass
+    // the test above.
+    const client = withOwner("u_stale");
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.updateTask("t1", { assigneeId: "u_new" });
+
+    expect(sent(client, "tasks", "update")).toEqual([{ assignee_id: "u_new" }]);
+  });
+
+  it("inserts only the collaborators that are NEW, leaving a stale one untouched", async () => {
+    // Same rule, other slot: `check_task_collaborator` refuses an insert naming
+    // somebody who cannot see the project, so re-inserting a collaborator who
+    // was already there would fail an edit that has nothing to do with them.
+    const client = withOwner(null, ["u_stale", "u_going"]);
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.updateTask("t1", { collaboratorIds: ["u_stale", "u_fresh"] });
+
+    expect(sent(client, "task_collaborators", "insert")).toEqual([
+      [{ task_id: "t1", user_id: "u_fresh" }],
+    ]);
+  });
+
+  it("reads the collaborator rows AFTER the task update, never before", async () => {
+    // `drop_collaborator_on_assign` deletes the new owner's collaborator row
+    // when `assignee_id` changes. Diffing against a list read beforehand would
+    // count that row as one this function failed to delete.
+    const client = withOwner("u_old", ["u_new"]);
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.updateTask("t1", { assigneeId: "u_new", collaboratorIds: [] });
+
+    expect(client.issued).toEqual(["tasks", "tasks", "task_collaborators", "task_collaborators"]);
+  });
+
+  it("writes nothing at all for a patch naming no persistable column", async () => {
+    const client = withOwner("u_stale");
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(backend.updateTask("t1", { assigneeId: "u_stale" })).resolves.toBeUndefined();
+    expect(sent(client, "tasks", "update")).toEqual([]);
+  });
+
+  it("rejects a task it cannot even read", async () => {
+    const backend = new SupabaseBackend(asClient(fakeClient()));
+    await expect(backend.updateTask("t1", { title: "x" })).rejects.toThrow(/permission/i);
+  });
+
+  it("refuses to write `order` — that is what moving a task is for", async () => {
+    const backend = new SupabaseBackend(asClient(withOwner(null)));
+    await expect(backend.updateTask("t1", { order: 2 })).rejects.toThrow(/moving it/i);
+  });
+
+  it("refuses a patch carrying files", async () => {
+    const backend = new SupabaseBackend(asClient(withOwner(null)));
+    await expect(
+      backend.updateTask("t1", { attachments: [{ id: "a1" } as never] })
+    ).rejects.toThrow(/task 10|storage/i);
+  });
+});
+
+describe("SupabaseBackend — moveTask", () => {
+  it("goes through the RPC and clamps an out-of-range index to int4", async () => {
+    // board.tsx drops at the end of a column with Number.MAX_SAFE_INTEGER,
+    // which `move_task(p_index integer)` cannot hold — unclamped this is a
+    // 22003 on every "move to done" button, not an append.
+    const client = fakeClient({ rpcData: { has_permission: true } });
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(
+      backend.moveTask("t1", "done", Number.MAX_SAFE_INTEGER)
+    ).resolves.toBeUndefined();
+
+    expect(client.issued).toContain("rpc.move_task");
+    expect(client.rpcArgs["move_task"]).toEqual({
+      p_task_id: "t1", p_status: "done", p_index: 2147483647,
+    });
+  });
+
+  it("rejects a role that can move but not edit, instead of silently doing nothing", async () => {
+    // `move_task` is security invoker, so its UPDATEs run under `tasks_update`,
+    // which demands task.edit. Without that permission every statement inside
+    // is filtered to zero rows and the RPC returns void, cleanly, having moved
+    // nothing.
+    const client = fakeClient({ rpcData: { has_permission: false } });
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(backend.moveTask("t1", "done", 0)).rejects.toThrow(/can't edit tasks/);
+  });
+
+  it("surfaces the RPC's own error for a task it cannot see", async () => {
+    const client = fakeClient({
+      rpcData: { has_permission: true },
+      errors: { "rpc.move_task": { message: "Task t1 not found or not visible", code: "P0001" } },
+    });
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(backend.moveTask("t1", "done", 0)).rejects.toThrow(/not found or not visible/);
+  });
+});
+
+describe("SupabaseBackend — deleteTask", () => {
+  it("rejects when no row came back", async () => {
+    // The boolean this becomes is what stops task-dialog.tsx toasting "Task
+    // deleted" and closing over a task that is still on the board.
+    const backend = new SupabaseBackend(asClient(fakeClient()));
+    await expect(backend.deleteTask("t_theirs")).rejects.toThrow(/permission/i);
+  });
+
+  it("resolves when the row really went — the positive control", async () => {
+    const backend = new SupabaseBackend(asClient(fakeClient({ rows: { tasks: [{ id: "t1" }] } })));
+    await expect(backend.deleteTask("t1")).resolves.toBeUndefined();
   });
 });
 

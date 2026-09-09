@@ -287,6 +287,10 @@ export class FailingBackend extends LocalBackend {
     return this.run("moveTask", undefined);
   }
 
+  override deleteTask(): Promise<void> {
+    return this.run("deleteTask", undefined);
+  }
+
   override createChannel(channel: Channel): Promise<Channel> {
     return this.run("createChannel", channel);
   }
@@ -354,6 +358,7 @@ export type FailingOp =
   | "createTask"
   | "updateTask"
   | "moveTask"
+  | "deleteTask"
   | "createChannel"
   | "setChannelAccess"
   | "createProject"

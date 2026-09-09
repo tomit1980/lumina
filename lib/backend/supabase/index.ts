@@ -2,9 +2,9 @@
  * `SupabaseBackend` — the real backend.
  *
  * Task 4 implemented the read path; Task 5 the chat writes (delegated to
- * ./chat); Task 6 channels, projects and access (delegated to ./workspace).
- * The remaining writes still reject with a named "not implemented" error,
- * which Tasks 7–8 replace one group at a time.
+ * ./chat); Task 6 channels, projects and access (delegated to ./workspace);
+ * Task 7 tasks and collaborators (delegated to ./tasks). The remaining writes
+ * still reject with a named "not implemented" error, which Task 8 replaces.
  *
  * Why *reject* rather than no-op: the store has already applied the optimistic
  * patch by the time it calls one of these (see `commit` in lib/store.tsx), so
@@ -22,6 +22,7 @@ import * as chat from "./chat";
 import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
+import * as tasks from "./tasks";
 import * as workspace from "./workspace";
 import type { AppState } from "../../types";
 import type {
@@ -29,6 +30,7 @@ import type {
   ChannelAccessPatch,
   ProjectAccessPatch,
   ProjectPatch,
+  TaskPatch,
 } from "../types";
 import type {
   Activity,
@@ -38,6 +40,7 @@ import type {
   Project,
   RoleDef,
   Task,
+  TaskStatus,
 } from "../../types";
 
 /** `owner` names who fills this in, so a failure in the intervening weeks
@@ -205,19 +208,31 @@ export class SupabaseBackend implements Backend {
   }
 
   // -------------------------------------------------------------------------
-  // Task 7 — tasks and collaborators.
+  // Task 7 — tasks and collaborators. Implemented in ./tasks; these are the
+  // seam, so each one is a single delegation.
+  //
+  // Two of the four are unlike anything above them. `createTask` does NOT send
+  // a position — a `before insert` trigger appends the card to its column and
+  // the row is read back so the store adopts the server's number — and
+  // `moveTask` renumbers through the `move_task` RPC rather than issuing an
+  // update per card. Both replace a client-side computation that was correct
+  // only while one person was looking at the board.
+  //
+  // Unlike the two deletes above, `deleteTask`'s feed line IS persisted:
+  // `activities.project_id` cascades from `projects`, and the project outlives
+  // the task it scoped.
   // -------------------------------------------------------------------------
-  createTask(): Promise<Task> {
-    return pending("createTask", "store-swap task 7");
+  async createTask(task: Task): Promise<Task> {
+    return tasks.createTask(await this.client(), task);
   }
-  updateTask(): Promise<void> {
-    return pending("updateTask", "store-swap task 7");
+  async updateTask(taskId: string, patch: TaskPatch): Promise<void> {
+    return tasks.updateTask(await this.client(), taskId, patch);
   }
-  moveTask(): Promise<void> {
-    return pending("moveTask", "store-swap task 7");
+  async moveTask(taskId: string, toStatus: TaskStatus, toIndex: number): Promise<void> {
+    return tasks.moveTask(await this.client(), taskId, toStatus, toIndex);
   }
-  deleteTask(): Promise<void> {
-    return pending("deleteTask", "store-swap task 7");
+  async deleteTask(taskId: string): Promise<void> {
+    return tasks.deleteTask(await this.client(), taskId);
   }
 
   // -------------------------------------------------------------------------

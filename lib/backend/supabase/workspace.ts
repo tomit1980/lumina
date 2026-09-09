@@ -41,47 +41,10 @@
  * genuinely removed members are deleted; everyone else is upserted, which is an
  * UPDATE and fires nothing.
  */
+import { fail, refuseAttachments, requireRows } from "./result";
 import type { LuminaClient } from "./client";
 import type { ChannelAccessPatch, ProjectAccessPatch, ProjectPatch } from "../types";
 import type { Channel, Project, ResourceMember } from "../../types";
-
-/** supabase-js resolves on a database error instead of rejecting, so every
- *  call below has to be checked by hand. One place to do it. */
-function fail(what: string, error: { message: string; code?: string }): never {
-  const code = error.code ? ` [${error.code}]` : "";
-  throw new Error(`${what} failed${code}: ${error.message}`);
-}
-
-/**
- * The other half of the same rule, for UPDATE and DELETE. PostgREST reports a
- * statement whose USING clause filtered every candidate row away as
- * `error: null` with an empty body — the request was well-formed, it simply
- * matched nothing. That is exactly what "you are not allowed to touch this
- * project" looks like from here, and reading it as success is the false-success
- * class this project has now fixed seven times.
- */
-function requireRows(
-  what: string,
-  reason: string,
-  result: { data: unknown[] | null; error: { message: string; code?: string } | null }
-): void {
-  if (result.error) fail(what, result.error);
-  if (!result.data || result.data.length === 0) {
-    throw new Error(`${what} failed: ${reason}`);
-  }
-}
-
-/** `Attachment.dataUrl` has nowhere to go until Storage exists (Task 10), so a
- *  write carrying files is refused outright rather than persisting everything
- *  *except* the files — which would look like it worked. Same decision, and the
- *  same wording, as `refuseAttachments` in ./chat.ts. */
-function refuseAttachments(count: number): void {
-  if (count > 0) {
-    throw new Error(
-      "Sharing files isn't available on this workspace yet (store-swap task 10 — Storage)."
-    );
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Membership
