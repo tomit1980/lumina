@@ -39,8 +39,10 @@ const ids = {};
 const clients = {};
 const madeDms = new Set();
 let failures = 0;
+let checks = 0;
 
 const check = (label, pass, detail = "") => {
+  checks++;
   console.log(`${pass ? "PASS" : "*** FAIL ***"}  ${label}${detail ? "  -> " + detail : ""}`);
   if (!pass) failures++;
 };
@@ -412,6 +414,13 @@ try {
   console.log(`\ncleanup: ${data.users.length} users remain (expect 0)`);
   const leftoverDms = await svc.from("dms").select("id");
   console.log(`cleanup: ${(leftoverDms.data ?? []).length} dms remain (expect 0)`);
+  // A probe that asserted nothing must not report success. This is not
+  // hypothetical: on 2026-09-08 a new database trigger made every probe's
+  // setup throw, and all seven printed PASSED having checked nothing.
+  if (checks === 0) {
+    failures++;
+    console.log("\n*** NO CHECKS RAN — this probe asserted nothing ***");
+  }
   console.log(failures === 0 ? "\nALL STORE-SWAP PROBES PASSED" : `\n${failures} STORE-SWAP PROBE(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 }

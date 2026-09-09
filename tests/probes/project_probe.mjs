@@ -163,6 +163,13 @@ try {
   for (const id of Object.values(ids)) await svc.auth.admin.deleteUser(id);
   const { data } = await svc.auth.admin.listUsers({ perPage: 100 });
   console.log(`\ncleanup: ${data.users.length} users remain (expect 0)`);
+  // A probe that asserted nothing must not report success. This is not
+  // hypothetical: on 2026-09-08 a new database trigger made every probe's
+  // setup throw, and all seven printed PASSED having checked nothing.
+  if (checks === 0) {
+    failures++;
+    console.log("\n*** NO CHECKS RAN — this probe asserted nothing ***");
+  }
   console.log(failures === 0 ? "\nALL PROJECT PROBES PASSED" : `\n${failures} PROJECT PROBE(S) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 }

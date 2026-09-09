@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { backendKind } from "./backend";
+import { generateTotpSecret, totpAuthUri, verifyTotp } from "./totp";
 import type { Database } from "./database.types";
 import { createSeed } from "./seed";
 
@@ -41,6 +42,16 @@ const WORKSPACE = "Lumina";
 /** Demo password for every seeded account (surfaced on the login screen —
  *  under the local flag only). */
 export const DEMO_PASSWORD = "lumina24";
+
+/** Where the demo keeps its TOTP records. Plain JSON on purpose — see the
+ *  note on LocalAuthProvider. */
+const LOCAL_FACTOR_KEY = "lumina:factors";
+
+interface LocalFactor {
+  status: Exclude<TwoFactorStatus, "off">;
+  /** Base32, present once enrolled. */
+  secret?: string;
+}
 
 export type TwoFactorStatus = "off" | "pending" | "enrolled";
 
@@ -149,18 +160,17 @@ export function useAuth(): AuthValue {
 // ---------------------------------------------------------------------------
 
 /**
- * Two-factor is not part of the local demo any more.
+ * Two-factor on the local demo is genuine RFC-6238 TOTP — a real Google
+ * Authenticator code, really verified (`lib/totp.ts`). A screen that waved
+ * through any six digits would be a lie in the UI, so this is either honest
+ * or absent. It is honest.
  *
- * It used to be genuine RFC-6238 TOTP, implemented by hand in `lib/crypto.ts`
- * alongside the PBKDF2 password hashing this task retires. Deleting that
- * module (a requirement of the auth swap: no cryptography left to maintain in
- * a build with no server to verify against) takes the demo's TOTP with it,
- * because there is no browser-native primitive to replace HMAC-SHA1 with. The
- * alternative — a "2FA" screen that accepts any six digits — would be a lie in
- * the UI, so the flow is withdrawn from the local path instead of faked: the
- * People-page control and the account-menu security item are not rendered, and
- * `login` never returns the `totp` or `enroll` step. Two-factor now exists only
- * where it is real and server-enforced, on the Supabase path.
+ * What the auth swap did retire is the PBKDF2 password hashing and the
+ * AES-GCM "credential vault" that used to wrap these records. Both were
+ * browser-side theatre — the wrapping key shipped inside the bundle — and
+ * real passwords are Supabase's job now. The secrets below sit in plain
+ * localStorage, which is exactly as secure as the encrypted version was and
+ * does not pretend otherwise. All of it retires at cutover.
  */
 function LocalAuthProvider({ children }: React.PropsWithChildren) {
   const [ready, setReady] = React.useState(false);
@@ -170,14 +180,36 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
   // Resolve handles without importing the store.
   const usersRef = React.useRef(createSeed().users);
 
+  /** Per-user TOTP records for the demo. */
+  const [factors, setFactors] = React.useState<Record<string, LocalFactor>>({});
+  const [pendingLogin, setPendingLogin] = React.useState<string | null>(null);
+  const [loginEnrollment, setLoginEnrollment] =
+    React.useState<EnrollmentDraft | null>(null);
+
   React.useEffect(() => {
     let saved: string | null = null;
     try {
       saved = window.localStorage.getItem(SESSION_KEY);
     } catch {}
     if (saved && usersRef.current.some((u) => u.id === saved)) setSession(saved);
+    try {
+      const raw = window.localStorage.getItem(LOCAL_FACTOR_KEY);
+      if (raw) setFactors(JSON.parse(raw) as Record<string, LocalFactor>);
+    } catch {
+      // Unreadable or corrupt: everyone simply starts with 2FA off.
+    }
     setReady(true);
   }, []);
+
+  const writeFactors = React.useCallback(
+    (next: Record<string, LocalFactor>) => {
+      setFactors(next);
+      try {
+        window.localStorage.setItem(LOCAL_FACTOR_KEY, JSON.stringify(next));
+      } catch {}
+    },
+    []
+  );
 
   const persistSession = React.useCallback((userId: string | null) => {
     setSession(userId);
@@ -208,55 +240,158 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
       if (password !== DEMO_PASSWORD) {
         return { step: "error", message: "Incorrect password." };
       }
+      const factor = factors[userId];
+      if (factor?.status === "enrolled") {
+        setPendingLogin(userId);
+        return { step: "totp" };
+      }
+      if (factor?.status === "pending") {
+        const draft = draftFor(userId);
+        setPendingLogin(userId);
+        setLoginEnrollment(draft);
+        return {
+          step: "enroll",
+          secret: draft.secret,
+          uri: draft.uri,
+          account: draft.account,
+        };
+      }
       persistSession(userId);
       return { step: "success" };
     };
 
-    // Unreachable: `login` never returns the totp/enroll step on this path.
-    const noTwoFactor = async (): Promise<LoginOutcome> => ({
-      step: "error",
-      message: "Two-factor isn't part of the local demo.",
-    });
+    const draftFor = (userId: string): EnrollmentDraft => {
+      const user = usersRef.current.find((u) => u.id === userId);
+      const account = user ? `${user.handle}@northlight.studio` : userId;
+      const secret = generateTotpSecret();
+      return {
+        userId,
+        account,
+        secret,
+        uri: totpAuthUri({ secret, account, issuer: "Lumina" }),
+      };
+    };
+
+    const submitLoginTotp: AuthValue["submitLoginTotp"] = async (code) => {
+      const userId = pendingLogin;
+      const secret = userId ? factors[userId]?.secret : undefined;
+      if (!userId || !secret) {
+        return { step: "error", message: "That sign-in expired. Start again." };
+      }
+      if (!(await verifyTotp(secret, code))) {
+        return {
+          step: "error",
+          message: "That code isn't right. Try the next one.",
+        };
+      }
+      setPendingLogin(null);
+      persistSession(userId);
+      return { step: "success" };
+    };
+
+    const submitEnrollment: AuthValue["submitEnrollment"] = async (code) => {
+      const draft = loginEnrollment;
+      if (!draft) {
+        return { step: "error", message: "That sign-in expired. Start again." };
+      }
+      if (!(await verifyTotp(draft.secret, code))) {
+        return {
+          step: "error",
+          message: "That code isn't right. Try the next one.",
+        };
+      }
+      writeFactors({
+        ...factors,
+        [draft.userId]: { status: "enrolled", secret: draft.secret },
+      });
+      setLoginEnrollment(null);
+      setPendingLogin(null);
+      persistSession(draft.userId);
+      return { step: "success" };
+    };
 
     const logout = () => {
       persistSession(null);
       setPendingSwitch(null);
+      setPendingLogin(null);
+      setLoginEnrollment(null);
+    };
+
+    const setStatus = (userId: string, next: LocalFactor | null) => {
+      const copy = { ...factors };
+      if (next) copy[userId] = next;
+      else delete copy[userId];
+      writeFactors(copy);
     };
 
     return {
       ready,
       session,
       login,
-      submitLoginTotp: noTwoFactor,
-      submitEnrollment: noTwoFactor,
-      cancelPendingLogin: () => setPendingSwitch(null),
-      loginEnrollment: null,
+      submitLoginTotp,
+      submitEnrollment,
+      cancelPendingLogin: () => {
+        setPendingLogin(null);
+        setLoginEnrollment(null);
+      },
+      loginEnrollment,
       logout,
 
       requestSwitch: async (userId) => {
-        if (userId !== session) persistSession(userId);
+        if (userId === session) return;
+        // Switching into an account with 2FA still has to pass it.
+        if (factors[userId]?.status === "enrolled") setPendingSwitch(userId);
+        else persistSession(userId);
       },
       pendingSwitch,
-      submitSwitchTotp: async () => false,
+      submitSwitchTotp: async (code) => {
+        const secret = pendingSwitch ? factors[pendingSwitch]?.secret : undefined;
+        if (!pendingSwitch || !secret) return false;
+        if (!(await verifyTotp(secret, code))) return false;
+        persistSession(pendingSwitch);
+        setPendingSwitch(null);
+        return true;
+      },
       cancelSwitch: () => setPendingSwitch(null),
 
-      twoFactorStatus: () => "off",
-      requireTwoFactor: () => {},
-      clearTwoFactorRequirement: () => {},
-      disableTwoFactor: () => {},
-      resetTwoFactor: () => {},
-      beginSelfEnrollment: async () => null,
-      confirmSelfEnrollment: async () => false,
+      twoFactorStatus: (userId) => factors[userId]?.status ?? "off",
+      requireTwoFactor: (userId) => setStatus(userId, { status: "pending" }),
+      clearTwoFactorRequirement: (userId) => setStatus(userId, null),
+      disableTwoFactor: (userId) => setStatus(userId, null),
+      // Still required, factor dropped: they enroll again at next login.
+      resetTwoFactor: (userId) => setStatus(userId, { status: "pending" }),
+      beginSelfEnrollment: async (userId) => draftFor(userId),
+      confirmSelfEnrollment: async (draft, code) => {
+        if (!(await verifyTotp(draft.secret, code))) return false;
+        writeFactors({
+          ...factors,
+          [draft.userId]: { status: "enrolled", secret: draft.secret },
+        });
+        return true;
+      },
 
       resetAll: async () => {
         try {
           window.localStorage.removeItem(LEGACY_AUTH_KEY);
+          window.localStorage.removeItem(LOCAL_FACTOR_KEY);
         } catch {}
+        setFactors({});
         persistSession(null);
         setPendingSwitch(null);
+        setPendingLogin(null);
+        setLoginEnrollment(null);
       },
     };
-  }, [ready, session, pendingSwitch, persistSession]);
+  }, [
+    ready,
+    session,
+    pendingSwitch,
+    pendingLogin,
+    loginEnrollment,
+    factors,
+    persistSession,
+    writeFactors,
+  ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
