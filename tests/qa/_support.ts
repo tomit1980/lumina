@@ -323,6 +323,14 @@ export class FailingBackend extends LocalBackend {
     return this.run("setRolePermission", undefined);
   }
 
+  override updateRole(): Promise<void> {
+    return this.run("updateRole", undefined);
+  }
+
+  override deleteRole(): Promise<void> {
+    return this.run("deleteRole", undefined);
+  }
+
   /** Every activity this backend was asked to persist, in call order — so a
    *  test can assert the feed line actually reached the seam rather than only
    *  reaching `AppState`. Recorded before the reject check, because a refused
@@ -367,6 +375,8 @@ export type FailingOp =
   | "createRole"
   | "setUserRole"
   | "setRolePermission"
+  | "updateRole"
+  | "deleteRole"
   | "deleteChannel"
   | "deleteProject"
   | "putActivity";

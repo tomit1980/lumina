@@ -30,6 +30,13 @@ function fakeClient(opts: {
   errors?: Record<string, { message: string; code?: string }>;
   rpcData?: Record<string, unknown>;
   userId?: string | null;
+  /** Tables that answer with `rows` for their FIRST statement and with an
+   *  empty body for every one after it. Task 8 needs this: `readRole` and the
+   *  write it precedes both hit `roles`, and the shape under test is "the
+   *  caller could read the row (roles_read is `using (true)`) and the write was
+   *  then filtered away by roles_write" — which a single per-table fixture
+   *  cannot express. */
+  emptyAfterFirst?: string[];
 } = {}) {
   const issued: string[] = [];
   /** Every write this client was handed, so a test can assert what a backend
@@ -40,11 +47,17 @@ function fakeClient(opts: {
   /** The arguments each RPC was called with, by name. */
   const rpcArgs: Record<string, unknown> = {};
 
+  /** How many statements each table has taken, for `emptyAfterFirst`. */
+  const seen: Record<string, number> = {};
+
   const builder = (table: string): PromiseLike<QueryResult> & Record<string, unknown> => {
+    const nth = (seen[table] = (seen[table] ?? 0) + 1);
     const settle = (): Promise<QueryResult> =>
       Promise.resolve().then(() => {
         const error = opts.errors?.[table];
-        return error ? { data: null, error } : { data: opts.rows?.[table] ?? [], error: null };
+        if (error) return { data: null, error };
+        const drained = nth > 1 && (opts.emptyAfterFirst ?? []).includes(table);
+        return { data: drained ? [] : opts.rows?.[table] ?? [], error: null };
       });
     const record = (op: string) => (value: unknown) => {
       payloads.push({ table, op, value });
@@ -264,7 +277,7 @@ describe("hydrateWorkspace — failure", () => {
   });
 });
 
-describe("SupabaseBackend — the operations Tasks 7-8 still owe", () => {
+describe("SupabaseBackend — the operations Plan 3 still owes", () => {
   // Typed as `Backend`, not as the class: lib/backend/types.ts is where the
   // contract's parameters are named, and the implementations deliberately
   // declare none (same style as LocalBackend).
@@ -293,14 +306,14 @@ describe("SupabaseBackend — the operations Tasks 7-8 still owe", () => {
     ["updateTask", () => backend.updateTask("t", { title: "n" })],
     ["moveTask", () => backend.moveTask("t", "todo", 0)],
     ["deleteTask", () => backend.deleteTask("t")],
+    ["setUserRole", () => backend.setUserRole("u", "r")],
+    ["createRole", () => backend.createRole({ permissions: [] } as never)],
+    ["updateRole", () => backend.updateRole("r", { name: "n" })],
+    ["setRolePermission", () => backend.setRolePermission("r", "task.edit", true)],
+    ["deleteRole", () => backend.deleteRole("r")],
   ];
 
   const writes: Array<[string, () => Promise<unknown>]> = [
-    ["setUserRole", () => backend.setUserRole("u", "r")],
-    ["createRole", () => backend.createRole({} as never)],
-    ["updateRole", () => backend.updateRole("r", {})],
-    ["setRolePermission", () => backend.setRolePermission("r", "task.edit", true)],
-    ["deleteRole", () => backend.deleteRole("r")],
     ["putAttachment", () => backend.putAttachment({} as never, {} as never)],
     ["deleteAttachment", () => backend.deleteAttachment({} as never, "a")],
   ];
@@ -677,6 +690,233 @@ describe("SupabaseBackend — deleteTask", () => {
   it("resolves when the row really went — the positive control", async () => {
     const backend = new SupabaseBackend(asClient(fakeClient({ rows: { tasks: [{ id: "t1" }] } })));
     await expect(backend.deleteTask("t1")).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 8 — the five writes that decide what everybody else may do. As with
+// Task 7 above, what is asserted here is what the backend SENDS: the
+// interesting behaviours are a column that must be forced (`is_system`), a
+// statement count that must be exactly one (`updateRole`), and an array that
+// must be computed from the stored row rather than the client's copy.
+//
+// The server-side half — the triggers, and the policies these run under —
+// is in tests/rls/role-writes.test.ts, against the real database.
+// ---------------------------------------------------------------------------
+describe("SupabaseBackend — setUserRole", () => {
+  const withPermission = (allowed: boolean, found = true) =>
+    fakeClient({
+      rpcData: { has_permission: allowed },
+      rows: found ? { profiles: [{ id: "u_them" }] } : {},
+    });
+
+  it("asks for members.manage explicitly, because profiles_update_self does not", async () => {
+    // `profiles` has TWO permissive UPDATE policies and Postgres OR-s them, so
+    // `id = auth.uid()` alone reaches this UPDATE. A caller with no permissions
+    // setting their OWN role to the one they already have changes nothing and
+    // would otherwise resolve — `setUserRole` resolving means "the role was
+    // set", and for someone who may not set roles it must not resolve at all.
+    const backend = new SupabaseBackend(asClient(withPermission(false)));
+    await expect(backend.setUserRole("u_them", "admin")).rejects.toThrow(
+      /can't manage members/
+    );
+  });
+
+  it("resolves for a caller who does hold it — the positive control", async () => {
+    const client = withPermission(true);
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(backend.setUserRole("u_them", "guest")).resolves.toBeUndefined();
+
+    expect(client.payloads.filter((p) => p.table === "profiles")).toEqual([
+      { table: "profiles", op: "update", value: { role_id: "guest" } },
+    ]);
+    // Concurrently, not in sequence: both were issued before either resolved.
+    expect(client.issued).toContain("rpc.has_permission");
+  });
+
+  it("rejects when no row came back — the filtered-away shape", async () => {
+    const backend = new SupabaseBackend(asClient(withPermission(true, false)));
+    await expect(backend.setUserRole("u_them", "guest")).rejects.toThrow(/permission/i);
+  });
+});
+
+describe("SupabaseBackend — createRole", () => {
+  const stored = {
+    id: "r_new", name: "Auditor", description: "Reads everything", color: "#111",
+    permissions: ["message.send"], is_system: false, locked: false,
+  };
+
+  it("forces is_system and locked to false, whatever it was handed", async () => {
+    // `Backend.createRole` takes a whole `RoleDef` and both fields are
+    // optional on it. A role created with `is_system: true` would be
+    // permanently undeletable — `block_role_delete_with_members` refuses
+    // built-ins outright — with no way back short of the secret key.
+    const client = fakeClient({ rows: { roles: [stored] } });
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.createRole({
+      id: "r_new", name: "Auditor", description: "", color: "#111",
+      permissions: ["message.send"], isSystem: true, locked: true,
+    });
+
+    expect(client.payloads.at(-1)!.value).toMatchObject({ is_system: false, locked: false });
+  });
+
+  it("adopts the stored row rather than the one the store drew", async () => {
+    const client = fakeClient({ rows: { roles: [{ ...stored, name: "Auditor (stored)" }] } });
+    const backend = new SupabaseBackend(asClient(client));
+
+    await expect(
+      backend.createRole({
+        id: "r_new", name: "Auditor", description: "", color: "#111", permissions: [],
+      })
+    ).resolves.toMatchObject({ name: "Auditor (stored)", permissions: ["message.send"] });
+  });
+
+  it("rejects when the insert came back empty", async () => {
+    const backend = new SupabaseBackend(asClient(fakeClient()));
+    await expect(
+      backend.createRole({ id: "r", name: "N", description: "", color: "#1", permissions: [] })
+    ).rejects.toThrow(/permission/i);
+  });
+});
+
+describe("SupabaseBackend — updateRole", () => {
+  const role = (over: Record<string, unknown> = {}) =>
+    fakeClient({
+      rows: {
+        roles: [{
+          id: "r1", name: "Auditor", permissions: ["message.send"],
+          is_system: false, locked: false, ...over,
+        }],
+      },
+    });
+  const updates = (client: ReturnType<typeof fakeClient>) =>
+    client.payloads.filter((p) => p.table === "roles" && p.op === "update").map((p) => p.value);
+
+  it("sends the whole patch as ONE update, permissions included", async () => {
+    // The row being updated can be the CALLER'S OWN role, and `roles_write`'s
+    // USING is `has_permission('members.manage')`. Split into two statements,
+    // a permissions write that revoked members.manage would leave the second
+    // statement filtered to zero rows: half-applied, and reported as a
+    // permission error rather than as the lockout it actually is.
+    const client = role();
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.updateRole("r1", {
+      name: "Reviewer", description: "Reads", color: "#222", permissions: ["task.edit"],
+    });
+
+    expect(updates(client)).toEqual([
+      { name: "Reviewer", description: "Reads", color: "#222", permissions: ["task.edit"] },
+    ]);
+  });
+
+  it("refuses a locked role, which the database does not", async () => {
+    // `roles_write` has no opinion on `locked` and no trigger covers UPDATE.
+    // Revoking members.manage from Admin is a one-way lockout.
+    const backend = new SupabaseBackend(asClient(role({ locked: true, name: "Admin" })));
+    await expect(backend.updateRole("r1", { name: "Seized" })).rejects.toThrow(/locked/i);
+  });
+
+  it("refuses a role that is no longer there", async () => {
+    // `roles_read` is `using (true)`, so RLS cannot be hiding it — absent
+    // really does mean deleted, and an UPDATE matching nothing says less.
+    const backend = new SupabaseBackend(asClient(fakeClient()));
+    await expect(backend.updateRole("r_gone", { name: "x" })).rejects.toThrow(/no longer exists/);
+  });
+
+  it("writes nothing at all for an empty patch", async () => {
+    const client = role();
+    const backend = new SupabaseBackend(asClient(client));
+    await expect(backend.updateRole("r1", {})).resolves.toBeUndefined();
+    expect(updates(client)).toEqual([]);
+  });
+});
+
+describe("SupabaseBackend — setRolePermission", () => {
+  const role = (permissions: string[], over: Record<string, unknown> = {}) =>
+    fakeClient({
+      rows: {
+        roles: [{ id: "r1", name: "Auditor", permissions, is_system: false, locked: false, ...over }],
+      },
+    });
+  const written = (client: ReturnType<typeof fakeClient>) =>
+    (client.payloads.find((p) => p.table === "roles" && p.op === "update")!
+      .value as { permissions: string[] }).permissions;
+
+  it("computes the new array from the STORED row, not the client's copy", async () => {
+    // The store's optimistic array can be a hydrate behind; writing it back
+    // would silently reinstate whatever somebody else has changed since.
+    const client = role(["message.send", "task.create"]);
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.setRolePermission("r1", "task.edit", true);
+
+    expect(written(client)).toEqual(["message.send", "task.create", "task.edit"]);
+  });
+
+  it("removes the permission when disabling — the other direction", async () => {
+    const client = role(["message.send", "task.edit"]);
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.setRolePermission("r1", "task.edit", false);
+
+    expect(written(client)).toEqual(["message.send"]);
+  });
+
+  it("is idempotent: enabling one that is already there does not duplicate it", async () => {
+    // `enabled` names the state wanted, not a flip, so re-sending after a
+    // concurrent identical change is a no-op rather than an inversion.
+    const client = role(["task.edit"]);
+    const backend = new SupabaseBackend(asClient(client));
+
+    await backend.setRolePermission("r1", "task.edit", true);
+
+    expect(written(client)).toEqual(["task.edit"]);
+  });
+
+  it("refuses a locked role", async () => {
+    const backend = new SupabaseBackend(asClient(role([], { locked: true, name: "Admin" })));
+    await expect(backend.setRolePermission("r1", "task.edit", false)).rejects.toThrow(/locked/i);
+  });
+});
+
+describe("SupabaseBackend — deleteRole", () => {
+  const role = (over: Record<string, unknown> = {}, emptyAfterFirst?: string[]) =>
+    fakeClient({
+      rows: {
+        roles: [{ id: "r1", name: "Auditor", permissions: [], is_system: false, locked: false, ...over }],
+      },
+      emptyAfterFirst,
+    });
+
+  it("deletes a custom role — the positive control", async () => {
+    await expect(new SupabaseBackend(asClient(role())).deleteRole("r1")).resolves.toBeUndefined();
+  });
+
+  it("refuses a built-in role", async () => {
+    // `block_role_delete_with_members` says so too; this is the instant answer,
+    // in the store's own words.
+    const backend = new SupabaseBackend(asClient(role({ is_system: true, name: "Member" })));
+    await expect(backend.deleteRole("r1")).rejects.toThrow(/built-in/i);
+  });
+
+  it("refuses a locked role", async () => {
+    const backend = new SupabaseBackend(asClient(role({ locked: true, name: "Admin" })));
+    await expect(backend.deleteRole("r1")).rejects.toThrow(/locked/i);
+  });
+
+  it("rejects when the DELETE came back empty — the filtered-away shape", async () => {
+    // The pre-read finds the role (`roles_read` is `using (true)`, so everyone
+    // can see every role); the DELETE then matches nothing, which is exactly
+    // what `roles_write` filtering away a caller without members.manage looks
+    // like from here. The boolean this becomes is what stops
+    // app/people/page.tsx reporting a role gone that is still there.
+    const client = role({}, ["roles"]);
+    const backend = new SupabaseBackend(asClient(client));
+    await expect(backend.deleteRole("r1")).rejects.toThrow(/permission/i);
   });
 });
 

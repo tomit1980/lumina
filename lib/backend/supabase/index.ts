@@ -22,6 +22,7 @@ import * as chat from "./chat";
 import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
+import * as roles from "./roles";
 import * as tasks from "./tasks";
 import * as workspace from "./workspace";
 import type { AppState } from "../../types";
@@ -30,6 +31,7 @@ import type {
   ChannelAccessPatch,
   ProjectAccessPatch,
   ProjectPatch,
+  RolePatch,
   TaskPatch,
 } from "../types";
 import type {
@@ -37,6 +39,7 @@ import type {
   Channel,
   DM,
   Message,
+  Permission,
   Project,
   RoleDef,
   Task,
@@ -110,22 +113,48 @@ export class SupabaseBackend implements Backend {
   }
 
   // -------------------------------------------------------------------------
-  // Task 8 — roles and users.
+  // Task 8 — roles and users. Implemented in ./roles; these are the seam, so
+  // each one is a single delegation.
+  //
+  // These five decide what every other write in this class is allowed to do,
+  // so two things about them are worth stating where they are wired up rather
+  // than only where they are written:
+  //
+  //   * `roles_write` (20260906000100_identity.sql) demands
+  //     `has_permission('members.manage')` in both USING and WITH CHECK, which
+  //     is exactly what `guard(...)` names in lib/store.tsx for all five — no
+  //     repeat of Task 7's `move_task` mismatch, where the policy asked for
+  //     `task.edit` and the store asked for `task.move`. The one place the two
+  //     do NOT match is `setUserRole`, where `profiles_update_self` makes the
+  //     server *looser* than the guard for a self-targeted row; ./roles.ts
+  //     re-imposes the missing check rather than relying on the trigger to make
+  //     the difference unobservable.
+  //   * the self-role and last-admin rules are triggers, not policies, so they
+  //     hold against anything that reaches Postgres. ./roles.ts lets them raise
+  //     and reports their wording; it does not re-derive them.
+  //
+  // Unlike Task 6's two deletes, `deleteRole`'s `deleted the X role` feed line
+  // IS persistable: it is workspace-wide, so both activity scope foreign keys
+  // are null and there is no cascade to race.
   // -------------------------------------------------------------------------
-  setUserRole(): Promise<void> {
-    return pending("setUserRole", "store-swap task 8");
+  async setUserRole(userId: string, roleId: string): Promise<void> {
+    return roles.setUserRole(await this.client(), userId, roleId);
   }
-  createRole(): Promise<RoleDef> {
-    return pending("createRole", "store-swap task 8");
+  async createRole(role: RoleDef): Promise<RoleDef> {
+    return roles.createRole(await this.client(), role);
   }
-  updateRole(): Promise<void> {
-    return pending("updateRole", "store-swap task 8");
+  async updateRole(roleId: string, patch: RolePatch): Promise<void> {
+    return roles.updateRole(await this.client(), roleId, patch);
   }
-  setRolePermission(): Promise<void> {
-    return pending("setRolePermission", "store-swap task 8");
+  async setRolePermission(
+    roleId: string,
+    permission: Permission,
+    enabled: boolean
+  ): Promise<void> {
+    return roles.setRolePermission(await this.client(), roleId, permission, enabled);
   }
-  deleteRole(): Promise<void> {
-    return pending("deleteRole", "store-swap task 8");
+  async deleteRole(roleId: string): Promise<void> {
+    return roles.deleteRole(await this.client(), roleId);
   }
 
   // -------------------------------------------------------------------------
