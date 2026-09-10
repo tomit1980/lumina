@@ -178,6 +178,59 @@ starting point, not a decision.
 
 ---
 
+## Locked out
+
+**Lumina has no "forgot password" link yet.** Until it does, this is the way back
+in for anyone who cannot sign in.
+
+### The email routes, and why they are the second choice
+
+The Supabase dashboard offers **Send password recovery** and **Send magic link**
+on a user's page. Both work, and both depend on Supabase's shared mail service,
+which the free tier caps at roughly two messages an hour. That cap is easy to
+spend without meaning to, and the reply when you do - `email rate limit
+exceeded` - arrives at exactly the moment you are locked out and least able to
+wait an hour.
+
+If you use them, **fix the Site URL first**: Authentication -> URL Configuration
+-> Site URL must be `https://tomit1980.github.io/lumina/`, with
+`https://tomit1980.github.io/lumina/**` in Redirect URLs. The redirect is baked
+into the email when it is sent, so a link generated while Site URL still said
+`localhost` lands on a site that is not running, and is spent either way.
+
+### The route that needs no email
+
+```powershell
+.\scripts\set-password.ps1 -Email you@example.com
+```
+
+It asks for the project's **secret** key and a new password, both hidden, sets
+the password through the Auth Admin API, and then signs in with it to prove the
+change took - because a request that did not throw is not the same as a password
+that works. Nothing is emailed, nothing is written to disk, and no rate limit
+applies.
+
+Add `-ProjectRef nsioivydefazicxnozqw` to work on development instead of
+production.
+
+The secret key is on **Settings -> API Keys** and bypasses every access rule in
+the database. Paste it into the prompt, never into a file, a build, or a chat.
+
+### What happened on day one
+
+The Owner forgot their password hours after the cutover. The magic link was
+sent, arrived, and appeared to do nothing: the app showed the login screen. The
+cause was `detectSessionInUrl: false` in `lib/supabase.ts` - correct when the
+app had no sign-in path but email and password, and wrong the moment a link
+carried a session in the URL fragment. supabase-js read the fragment and
+discarded it, with no error anywhere.
+
+Two working recovery mechanisms had been rendered useless by one boolean, and
+nothing in the app, the console or the dashboard said so. `tests/qa/supabase-client-auth.test.ts`
+now guards it.
+
+---
+
 ## Troubleshooting
 
 **"Invalid login credentials" for a user you just created.**
