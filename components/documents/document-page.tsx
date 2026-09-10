@@ -65,6 +65,11 @@ export function DocumentPage({
   const { openShareFileDialog } = useUI();
   const editorRef = React.useRef<DocumentEditorHandle>(null);
   const [dirty, setDirty] = React.useState(false);
+  // Read inside the bytes effect without making `dirty` one of its
+  // dependencies: the effect must re-run when the FILE changes, not every
+  // time the user's first keystroke flips this.
+  const dirtyRef = React.useRef(false);
+  dirtyRef.current = dirty;
   const [saving, setSaving] = React.useState(false);
   const [confirmLeave, setConfirmLeave] = React.useState(false);
 
@@ -92,23 +97,62 @@ export function DocumentPage({
   // emptiness over the real file.
   const ref = file?.dataUrl ?? "";
   const mime = file?.type ?? "";
+  /**
+   * When the file's CONTENTS last changed, as the server sees it (QA-108).
+   *
+   * `ref` cannot answer that. An in-place overwrite deliberately keeps the
+   * same storage path so every link and message referring to the file stays
+   * valid, so `ref` never changes when the bytes do — and the bytes effect,
+   * keyed on `ref`, never re-ran. A colleague saving the same document was
+   * therefore invisible: a `stale` reload brought in their new `size` and
+   * `editedBy`, so the header updated to "edited by Dana a few seconds ago"
+   * over content downloaded when the page opened, and the next save
+   * serialised that stale document over their version. No conflict detection,
+   * no warning, and the one visible signal was a timestamp that somebody
+   * editing a document is not watching.
+   *
+   * `editedAt` DOES change on every save, which makes it the discriminator
+   * `ref` cannot be.
+   */
+  const editedAt = file?.editedAt ?? 0;
   const [bytes, setBytes] = React.useState<
     { ok: true; url: string } | { ok: false; error: string } | null
   >(null);
+  /** The `editedAt` the bytes on screen were downloaded for; `null` until
+   *  something has actually been loaded. NOT `0` for that — a file nobody has
+   *  ever edited has no `editedAt` and reads as 0, so using 0 as the sentinel
+   *  made "never loaded" and "never edited" indistinguishable and the whole
+   *  check silently inert on exactly the common case. */
+  const loadedEditedAt = React.useRef<number | null>(null);
+  /** Somebody else saved this file while it was open AND there are local
+   *  edits, so it cannot simply be re-read without throwing them away. */
+  const [staleAgainst, setStaleAgainst] = React.useState<number | null>(null);
+
   React.useEffect(() => {
     if (!ref || !editable) {
       setBytes(null);
       return;
     }
+    // Local edits outstanding: re-reading would silently discard what the
+    // user has typed, which is the same class of harm as the overwrite this
+    // fix exists to prevent — so say so and let them decide instead.
+    if (dirtyRef.current && loadedEditedAt.current !== null && editedAt !== loadedEditedAt.current) {
+      setStaleAgainst(editedAt);
+      return;
+    }
     let cancelled = false;
     setBytes(null);
+    setStaleAgainst(null);
+    const forEditedAt = editedAt;
     void attachmentBytes(ref, mime).then((result) => {
-      if (!cancelled) setBytes(result);
+      if (cancelled) return;
+      loadedEditedAt.current = forEditedAt;
+      setBytes(result);
     });
     return () => {
       cancelled = true;
     };
-  }, [ref, mime, editable]);
+  }, [ref, mime, editable, editedAt]);
 
   const save = React.useCallback(async () => {
     if (!file || !editorRef.current || readOnly || saving || !dirty) return;
@@ -167,6 +211,10 @@ export function DocumentPage({
       // persisted (the same lie QA-003b was about, through a different door).
       if (ok) {
         setDirty(false);
+        // Our bytes are now the server's, so there is no longer a newer
+        // version to warn about — and `editedAt` moved to ours.
+        loadedEditedAt.current = editedAt;
+        setStaleAgainst(null);
         toast.success(`Saved ${file.name}`);
       } else if (replaced) {
         // The editor's contents ARE what the server now holds, so leaving
@@ -256,6 +304,18 @@ export function DocumentPage({
             {dirty && (
               <span className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300">
                 <span className="size-1.5 rounded-full bg-current" /> Unsaved changes
+              </span>
+            )}
+            {/* QA-108. Last-writer-wins on a shared document is a defensible
+                product decision, but it has to be TOLD to the user — and the
+                header actively suggested the opposite, showing a fresh
+                "edited by …" stamp over content downloaded when the page
+                opened. This says the thing the timestamp only implied. */}
+            {staleAgainst !== null && (
+              <span className="flex items-center gap-1 text-[11px] font-medium text-destructive">
+                <span className="size-1.5 rounded-full bg-current" />
+                {editor ? `${editor.name} saved a newer version` : "A newer version was saved"}
+                {" — saving will replace it"}
               </span>
             )}
           </div>

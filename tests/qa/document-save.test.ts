@@ -42,7 +42,7 @@ vi.mock("next/dynamic", () => ({
 
 import * as React from "react";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 
@@ -88,7 +88,7 @@ import { DocumentPage } from "@/components/documents/document-page";
 import { textToDataUrl } from "@/lib/documents";
 import { FailingBackend, STORAGE_KEY, addProject, baseState } from "./_support";
 import type { Backend } from "@/lib/backend/types";
-import type { Attachment } from "@/lib/types";
+import type { Attachment, Project } from "@/lib/types";
 
 afterEach(() => {
   cleanup();
@@ -304,5 +304,89 @@ describe("document-page.tsx — an honest failure after the bytes are gone (QA-1
       .join(" | ");
     expect(description).toMatch(/undone/i);
     expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QA-108 (Medium) — a colleague's save to the same document was invisible, and
+// the next save silently overwrote it.
+//
+// An in-place overwrite deliberately keeps the same storage path so every link
+// and message referring to the file stays valid. The consequence was that
+// `file.dataUrl` never changed when the CONTENTS did, and the bytes effect —
+// keyed on exactly that — never re-ran. A `stale` reload brought in the
+// colleague's new `size` and `editedBy`, so the header updated to "edited by
+// … a few seconds ago" over content downloaded when the page opened, and the
+// next save serialised the stale in-memory document over their version. No
+// conflict detection, no warning, and the one visible signal was a timestamp
+// that a person editing a document is not watching.
+//
+// `editedAt` does change on every save, which is what makes the detection
+// possible at all.
+// ---------------------------------------------------------------------------
+describe("someone else saves the same document (QA-108)", () => {
+  const page = (project: Project) =>
+    React.createElement(
+      StoreProvider,
+      null,
+      React.createElement(
+        TooltipProvider,
+        null,
+        React.createElement(
+          UIProvider,
+          null,
+          React.createElement(DocumentPage, {
+            project,
+            fileId: "a_doc",
+            canManageFiles: true,
+          })
+        )
+      )
+    );
+
+  it("says so, instead of letting the next save quietly replace their version", async () => {
+    const { project } = seedProjectWithDoc();
+    // Rendered here rather than through the helper, because the whole point
+    // is to change the file UNDER a component that is already mounted — a
+    // second `render` would be a fresh instance that never saw the original.
+    const view = render(page(project));
+    const textarea = await screen.findByPlaceholderText("# Start writing…", undefined, {
+      timeout: 15_000,
+    });
+
+    // Local edits, so re-reading the file is not an option — this is the case
+    // that used to end in a silent overwrite.
+    fireEvent.change(textarea, { target: { value: "my local rewrite" } });
+    await waitFor(() => expect(screen.getByText("Unsaved changes")).toBeInTheDocument());
+
+    // A colleague saves. The storage path is unchanged — that is the whole
+    // point of an in-place overwrite — so only `editedAt` and `size` move.
+    const edited = {
+      ...project.attachments[0],
+      size: 999,
+      editedBy: "u_maya",
+      editedAt: Date.now() + 60_000,
+    };
+    await act(async () => {
+      view.rerender(page({ ...project, attachments: [edited] }));
+    });
+
+    // THE ASSERTION: the page says a newer version exists. Before the fix
+    // nothing did — the header showed a fresh edit stamp over stale content,
+    // which suggested the opposite of the truth. Matched on the container's
+    // text because the warning is assembled from several JSX children.
+    await waitFor(() =>
+      expect(view.container.textContent).toMatch(/newer version/i)
+    );
+  });
+
+  it("CONTROL: an untouched document shows no such warning", async () => {
+    // Without this, a page that always warned would satisfy the test above
+    // while crying wolf on every document anyone opens.
+    const { project } = seedProjectWithDoc();
+    const view = render(page(project));
+    await screen.findByPlaceholderText("# Start writing…", undefined, { timeout: 15_000 });
+
+    expect(view.container.textContent).not.toMatch(/newer version/i);
   });
 });
