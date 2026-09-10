@@ -11,8 +11,27 @@
 > came back *inconclusive* because its own control never arrived, which is the property the six
 > tests in "Judging the tests" lacked.
 >
-> **What has been fixed:** QA-101, QA-103 and QA-105 in `6b8fecc`; QA-116 and QA-117 in
-> `755eb31`. QA-102 and QA-104 were in progress when this note was written.
+> **Everything Critical, High and Medium in this document is now fixed**, except QA-109, which
+> is deliberately not (see its section — it needs a product decision, not a patch). The eight
+> Low findings are left recorded rather than fixed, by agreement.
+>
+> | finding | commit |
+> |---|---|
+> | QA-101, QA-103, QA-105 | `6b8fecc` |
+> | QA-116, QA-117 | `755eb31` |
+> | QA-102, QA-104, QA-114 | `32ae73a` |
+> | T-01 … T-06, the `FailingBackend` gap | `296dbe2` |
+> | QA-119, QA-122, QA-123 | `3c06723` |
+> | QA-106, QA-107 | `e1d3e74` |
+> | QA-110, QA-111 | `f9fe52d` |
+> | QA-118, QA-120, QA-121, QA-126 | `81a977e` |
+> | QA-108 | `89bb29c` |
+>
+> **Every fix was checked by reverting it and watching its test go red**, and each carries a
+> control that the lazy version of the fix would fail. Two of those controls earned their
+> keep: a state-only double-submit guard passes the obvious test and still lets a double-click
+> through, and a `0` sentinel for "nothing loaded yet" made QA-108's check silently inert on
+> the common case. Both were caught by the tests rather than by review.
 
 A **read-only, code-level** QA pass over `feat/realtime` (merged to main), run entirely by
 reading. Nothing was modified, nothing committed, no browser was driven and the app was not
@@ -481,6 +500,23 @@ workspace is.
 
 **How established.** Read every select in `hydrateWorkspace` and every call site of
 `backend.hydrate()` in `lib/store.tsx`. Not measured.
+
+**DELIBERATELY NOT FIXED, and this is the reasoning rather than an oversight.** The fix for a
+finding like this is pagination — a bounded fetch plus a way to reach what was not fetched.
+Simply capping the select would be a one-line change that silently stops loading a team's
+older history, with nothing in the interface saying so: precisely the "the app quietly did
+less than you think" class that the rest of this pass exists to remove. Which history to load,
+and how someone reaches the rest, is a product decision and not one to guess at inside a QA
+fix.
+
+What *has* changed is the frequency. QA-110's fix removed the most common trigger by a wide
+margin — your own read-marker echo, one per message sent, per participant — so the remaining
+callers are a reload on a genuine upstream change, a reconnect, a sign-in, and a failed write.
+The cost per call is unchanged and still unbounded.
+
+Recommended next step, when it is picked up: a `limit` on `messages` ordered by `created_at`
+descending with an explicit "load earlier messages" affordance, and the same treatment for
+`activities` (already capped) extended to `reactions`.
 
 ---
 
