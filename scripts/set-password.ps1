@@ -42,6 +42,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Windows PowerShell sends "Mozilla/5.0 ... WindowsPowerShell/5.1" as its
+# User-Agent. Supabase's edge reads that as a browser and refuses the secret
+# key outright - "Forbidden use of secret API key in browser" - which is a
+# good rule catching the wrong client. Every call below therefore says what it
+# actually is.
+#
+# The first version of this script was verified with curl, which sends
+# "curl/8.x" and sailed through. The API path was proved; the script was not.
+$UA = 'lumina-set-password/1 (PowerShell)'
+
 function Read-Plain {
   param([Security.SecureString] $Secure)
   $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
@@ -71,21 +81,35 @@ if ($pw1.Length -lt 8) { throw "Use at least 8 characters. Nothing was changed."
 $headers = @{ apikey = $key; Authorization = "Bearer $key"; 'Content-Type' = 'application/json' }
 
 # Find the account. The Admin API addresses users by id, not by address, so
-# this resolves one to the other rather than trusting a hand-copied UUID  - 
-# a mistyped id would otherwise change a different person's password.
+# this resolves one to the other rather than trusting a hand-copied UUID: a
+# mistyped id changes a different person's password and says nothing about it.
+#
+# Paged and matched here rather than server-side. The endpoint takes a
+# `filter` parameter and it looked like the obvious tool - but on this
+# deployment it matched nothing at all and returned an empty list, which is
+# indistinguishable from "no such account". A filter that silently matches
+# nothing is worse than no filter: it turns a working lookup into a confident
+# denial.
 Write-Host "`nLooking up the account..."
-$escaped = [uri]::EscapeDataString($Email)
-$found = Invoke-RestMethod -Method Get -Headers $headers `
-  -Uri "$base/auth/v1/admin/users?page=1&per_page=200&filter=$escaped"
-
-$user = @($found.users) | Where-Object { $_.email -eq $Email }
-if (-not $user)          { throw "No account with that address on $ProjectRef. Nothing was changed." }
-if ($user.Count -gt 1)   { throw "More than one account matched. Refusing to guess." }
+$user = $null
+$page = 1
+while ($page -le 25) {
+  $batch = Invoke-RestMethod -Method Get -Headers $headers -UserAgent $UA `
+    -Uri "$base/auth/v1/admin/users?page=$page&per_page=200"
+  $users = @($batch.users)
+  if ($users.Count -eq 0) { break }
+  $hit = @($users | Where-Object { $_.email -eq $Email })
+  if ($hit.Count -gt 1) { throw "More than one account has that address. Refusing to guess." }
+  if ($hit.Count -eq 1) { $user = $hit[0]; break }
+  if ($users.Count -lt 200) { break }
+  $page++
+}
+if (-not $user) { throw "No account with that address on $ProjectRef. Nothing was changed." }
 
 Write-Host "Found $($user.id)"
 
 $body = @{ password = $pw1 } | ConvertTo-Json -Compress
-$null = Invoke-RestMethod -Method Put -Headers $headers `
+$null = Invoke-RestMethod -Method Put -Headers $headers -UserAgent $UA `
   -Uri "$base/auth/v1/admin/users/$($user.id)" -Body $body
 
 # Prove it, rather than trusting a request that did not throw. A 200 says the
@@ -95,7 +119,7 @@ Write-Host "Password set. Verifying by signing in..."
 $anonPrompt = Read-Host "Publishable key (visible; it ships in the browser bundle anyway)"
 if ($anonPrompt) {
   try {
-    $signIn = Invoke-RestMethod -Method Post `
+    $signIn = Invoke-RestMethod -Method Post -UserAgent $UA `
       -Headers @{ apikey = $anonPrompt; 'Content-Type' = 'application/json' } `
       -Uri "$base/auth/v1/token?grant_type=password" `
       -Body (@{ email = $Email; password = $pw1 } | ConvertTo-Json -Compress)
