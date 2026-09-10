@@ -13,6 +13,7 @@ import type {
   ProjectPatch,
   RealtimeEvent,
   RolePatch,
+  StatusPatch,
   TaskPatch,
 } from "./backend/types";
 import {
@@ -37,6 +38,7 @@ import type {
   Project,
   ResourceMember,
   RoleDef,
+  StatusDef,
   Task,
   TaskStatus,
   User,
@@ -191,6 +193,20 @@ interface StoreValue {
     enabled: boolean
   ) => Promise<boolean>;
   deleteRole: (roleId: string) => Promise<boolean>;
+
+  /**
+   * The board's columns. Owner only — `workspace.statuses` is the one
+   * permission that separates Owner from Admin.
+   *
+   * The refusals live here as well as in the database on purpose: the
+   * database's are absolute (a foreign key, a unique index) but arrive as
+   * constraint errors, and a person deleting a column deserves "3 tasks are
+   * still in Backlog" rather than a Postgres message.
+   */
+  createStatus: (input: { name: string; color: string }) => Promise<StatusDef | null>;
+  updateStatus: (statusId: string, patch: StatusPatch) => Promise<boolean>;
+  deleteStatus: (statusId: string) => Promise<boolean>;
+  reorderStatuses: (orderedIds: string[]) => Promise<boolean>;
   resetDemo: () => Promise<void>;
 
   /** Post to a channel or DM. Empty content is allowed when files are attached.
@@ -1387,6 +1403,140 @@ export function StoreProvider({
       );
     };
 
+    // ------------------------------------------------------------------
+    // The board's columns. Owner only.
+    // ------------------------------------------------------------------
+
+    const createStatus: StoreValue["createStatus"] = (input) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.statuses")) return Promise.resolve(null);
+      const name = input.name.trim();
+      if (!name) {
+        deny("Give the column a name first.");
+        return Promise.resolve(null);
+      }
+      if (s.statuses.some((st) => st.name.toLowerCase() === name.toLowerCase())) {
+        deny(`A column called “${name}” already exists.`);
+        return Promise.resolve(null);
+      }
+      const status: StatusDef = {
+        id: uid("s"),
+        name,
+        color: input.color,
+        // Appended: a new column goes at the end, where the person adding it
+        // can then drag it. Guessing a position would move other columns
+        // nobody asked to move.
+        position: Math.max(-1, ...s.statuses.map((st) => st.position)) + 1,
+        isDone: false,
+      };
+      return commit(
+        (st) => ({
+          ...st,
+          statuses: [...st.statuses, status],
+          activities: activity(st, "member", `added the ${name} column`, WORKSPACE_WIDE),
+        }),
+        () => backend.createStatus(status),
+        { ok: (created) => created, failed: null, describe: `add the ${name} column` }
+      );
+    };
+
+    const updateStatus: StoreValue["updateStatus"] = (statusId, patch) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.statuses")) return Promise.resolve(false);
+      const status = s.statuses.find((st) => st.id === statusId);
+      if (!status) return Promise.resolve(false);
+      const nextName = patch.name?.trim();
+      if (patch.name !== undefined && !nextName) {
+        deny("A column needs a name.");
+        return Promise.resolve(false);
+      }
+      if (
+        nextName &&
+        s.statuses.some(
+          (st) => st.id !== statusId && st.name.toLowerCase() === nextName.toLowerCase()
+        )
+      ) {
+        deny(`A column called “${nextName}” already exists.`);
+        return Promise.resolve(false);
+      }
+      // Moving "done" is a swap, not an addition: the partial unique index
+      // permits exactly one, so the old holder has to give it up in the same
+      // patch. Refused here rather than letting the index reject it, because
+      // the index cannot explain itself.
+      if (patch.isDone === false && status.isDone) {
+        deny("Mark another column as done instead — a board needs one.");
+        return Promise.resolve(false);
+      }
+      return commit(
+        (st) => ({
+          ...st,
+          statuses: st.statuses.map((other) =>
+            other.id === statusId
+              ? { ...other, ...(nextName ? { ...patch, name: nextName } : patch) }
+              : // Only one column can be the done column.
+                patch.isDone === true
+                ? { ...other, isDone: false }
+                : other
+          ),
+        }),
+        () => backend.updateStatus(statusId, nextName ? { ...patch, name: nextName } : patch),
+        { ok: () => true, failed: false, describe: `save the ${status.name} column` }
+      );
+    };
+
+    const deleteStatus: StoreValue["deleteStatus"] = (statusId) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.statuses")) return Promise.resolve(false);
+      const status = s.statuses.find((st) => st.id === statusId);
+      if (!status) return Promise.resolve(false);
+
+      // Three refusals, all of which the database also enforces. They are
+      // here so the person gets a sentence instead of a constraint error.
+      const holding = s.tasks.filter((t) => t.status === statusId).length;
+      if (holding > 0) {
+        deny(
+          `${holding} ${holding === 1 ? "task is" : "tasks are"} still in ${status.name}. Move them first.`
+        );
+        return Promise.resolve(false);
+      }
+      if (status.isDone) {
+        deny("Mark another column as done before removing this one.");
+        return Promise.resolve(false);
+      }
+      if (s.statuses.length <= 1) {
+        deny("A board needs at least one column.");
+        return Promise.resolve(false);
+      }
+      return commit(
+        (st) => ({
+          ...st,
+          statuses: st.statuses.filter((other) => other.id !== statusId),
+          activities: activity(
+            st, "member", `removed the ${status.name} column`, WORKSPACE_WIDE
+          ),
+        }),
+        () => backend.deleteStatus(statusId),
+        { ok: () => true, failed: false, describe: `remove the ${status.name} column` }
+      );
+    };
+
+    const reorderStatuses: StoreValue["reorderStatuses"] = (orderedIds) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.statuses")) return Promise.resolve(false);
+      const order = orderedIds.map((id, position) => ({ id, position }));
+      return commit(
+        (st) => ({
+          ...st,
+          statuses: st.statuses.map((status) => {
+            const at = orderedIds.indexOf(status.id);
+            return at === -1 ? status : { ...status, position: at };
+          }),
+        }),
+        () => backend.reorderStatuses(order),
+        { ok: () => true, failed: false, describe: "reorder the columns" }
+      );
+    };
+
     const resetDemo: StoreValue["resetDemo"] = () =>
       backend.reset().then(
         (fresh) => {
@@ -2198,6 +2348,10 @@ export function StoreProvider({
       updateRole,
       setRolePermission,
       deleteRole,
+      createStatus,
+      updateStatus,
+      deleteStatus,
+      reorderStatuses,
       resetDemo,
       sendMessage,
       sendToUser,

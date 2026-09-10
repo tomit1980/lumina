@@ -28,6 +28,7 @@ import type {
   Project,
   ResourceMember,
   RoleDef,
+  StatusDef,
   Task,
   TaskStatus,
 } from "../types";
@@ -67,6 +68,14 @@ export type ProjectPatch = Partial<
 
 /** The editable fields of a task, as `updateTask` receives them. */
 export type TaskPatch = Partial<Omit<Task, "id" | "projectId">> & AttachmentRemovals;
+
+/** The editable fields of a status. `id` never changes — that is what keeps
+ *  every existing task resolving and every status literal in the suite valid. */
+export interface StatusPatch {
+  name?: string;
+  color?: string;
+  isDone?: boolean;
+}
 
 export interface ChannelAccessPatch {
   isPrivate: boolean;
@@ -184,6 +193,19 @@ export interface Backend {
     enabled: boolean
   ): Promise<void>;
   deleteRole(roleId: string): Promise<void>;
+
+  // The board's columns, workspace-wide. Gated on `workspace.statuses`, which
+  // only the Owner role holds — see 20260910006000_owner_role.sql.
+  createStatus(status: StatusDef): Promise<StatusDef>;
+  updateStatus(statusId: string, patch: StatusPatch): Promise<void>;
+  /** Refused by the database while any task still carries this status: the
+   *  foreign key is `on delete restrict`, so the rule cannot be bypassed by
+   *  calling the API directly. */
+  deleteStatus(statusId: string): Promise<void>;
+  /** Positions for the whole set at once — reordering is a rearrangement, not
+   *  a series of independent edits, and sending it as one call keeps the
+   *  board from passing through orders nobody asked for. */
+  reorderStatuses(order: Array<{ id: string; position: number }>): Promise<void>;
 
   // Messages, DMs, reactions, read state.
   sendMessage(message: Message): Promise<Message>;

@@ -25,6 +25,7 @@ import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
 import { subscribeToWorkspace } from "./realtime";
 import * as roles from "./roles";
+import * as statuses from "./statuses";
 import * as storage from "./storage";
 import * as tasks from "./tasks";
 import * as workspace from "./workspace";
@@ -37,6 +38,7 @@ import type {
   ProjectPatch,
   RealtimeEvent,
   RolePatch,
+  StatusPatch,
   TaskPatch,
   Unsubscribe,
 } from "../types";
@@ -49,6 +51,7 @@ import type {
   Permission,
   Project,
   RoleDef,
+  StatusDef,
   Task,
   TaskStatus,
 } from "../../types";
@@ -195,6 +198,22 @@ export class SupabaseBackend implements Backend {
   }
   async deleteRole(roleId: string): Promise<void> {
     return roles.deleteRole(await this.client(), roleId);
+  }
+
+  async createStatus(status: StatusDef): Promise<StatusDef> {
+    return statuses.createStatus(await this.client(), status);
+  }
+
+  async updateStatus(statusId: string, patch: StatusPatch): Promise<void> {
+    return statuses.updateStatus(await this.client(), statusId, patch);
+  }
+
+  async deleteStatus(statusId: string): Promise<void> {
+    return statuses.deleteStatus(await this.client(), statusId);
+  }
+
+  async reorderStatuses(order: Array<{ id: string; position: number }>): Promise<void> {
+    return statuses.reorderStatuses(await this.client(), order);
   }
 
   // -------------------------------------------------------------------------

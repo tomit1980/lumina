@@ -22,6 +22,7 @@ import type {
   Permission,
   Project,
   RoleDef,
+  StatusDef,
   Task,
   TaskStatus,
   Priority,
@@ -293,6 +294,22 @@ export class FailingBackend extends EventBackend {
     return this.run("reset", createSeed());
   }
 
+  override createStatus(status: StatusDef): Promise<StatusDef> {
+    return this.run("createStatus", status);
+  }
+
+  override updateStatus(): Promise<void> {
+    return this.run("updateStatus", undefined);
+  }
+
+  override deleteStatus(): Promise<void> {
+    return this.run("deleteStatus", undefined);
+  }
+
+  override reorderStatuses(): Promise<void> {
+    return this.run("reorderStatuses", undefined);
+  }
+
   override hydrate(): Promise<AppState> {
     // `super.hydrate()` is what counts the call, so it runs either way.
     const stored = super.hydrate();
@@ -517,7 +534,12 @@ export type FailingOp =
   // a latent hole of exactly the shape that has already cost this project
   // five findings, and the reason `resetDemo` shipped with no rejection
   // handler.
-  | "reset";
+  | "reset"
+  // The board's columns (Owner only).
+  | "createStatus"
+  | "updateStatus"
+  | "deleteStatus"
+  | "reorderStatuses";
 
 /** Runs a store action inside act() and returns whatever it returned, so
  *  `result.current` reflects the resulting state by the time this resolves.

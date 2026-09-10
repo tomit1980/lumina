@@ -23,7 +23,11 @@ import { cn } from "@/lib/utils";
 
 type Step = "credentials" | "totp" | "enroll";
 
+// Owner first: it is the top role, and the demo is the only place it can be
+// signed into without a runbook. `findUserId` already matched it by handle —
+// what was missing was any way to know it existed.
 const DEMO_ACCOUNTS = [
+  { handle: "owner", role: "Owner" },
   { handle: "moshe", role: "Admin" },
   { handle: "maya", role: "Member" },
   { handle: "elena", role: "Guest" },

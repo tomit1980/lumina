@@ -36,7 +36,7 @@ import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
 import { backendKind } from "@/lib/backend";
 import { useStore } from "@/lib/store";
-import { chatHref, dmHref, projectHref } from "@/lib/routes";
+import { chatHref, dmHref, projectHref, settingsHref } from "@/lib/routes";
 
 export function CommandPalette() {
   // Read per render, not once at module load: `backendKind` is a build-time
@@ -88,9 +88,11 @@ export function CommandPalette() {
               Home
               <CommandShortcut>G H</CommandShortcut>
             </CommandItem>
-            <CommandItem onSelect={() => run(() => router.push("/people"))}>
+            {/* Same shortcut, new destination: People is the Members section
+                of Settings now, and muscle memory should keep working. */}
+            <CommandItem onSelect={() => run(() => router.push(settingsHref("members")))}>
               <Users />
-              People
+              Settings
               <CommandShortcut>G P</CommandShortcut>
             </CommandItem>
             {channels.map((c) =>

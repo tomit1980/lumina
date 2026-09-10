@@ -321,6 +321,24 @@ export class LocalBackend implements Backend {
   // contract's parameters are named and documented. `SupabaseBackend` is
   // where they start doing work.
 
+  /** The board's columns, like everything else here: already in the
+   *  `AppState` that `persist` writes as one blob. */
+  createStatus(status: StatusDef): Promise<StatusDef> {
+    return Promise.resolve(status);
+  }
+
+  updateStatus(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteStatus(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  reorderStatuses(): Promise<void> {
+    return Promise.resolve();
+  }
+
   /** Like every other operation here, nothing of its own to do: the entry is
    *  already in the `AppState` that `persist` writes as one blob. Local
    *  behaviour is therefore exactly what it was before the seam grew this

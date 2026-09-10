@@ -60,7 +60,7 @@ import { isMineOrUnclaimed } from "@/lib/permissions";
 import { canUserSeeTaskProject, getUnreadCount, useStore } from "@/lib/store";
 import type { AppState, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { chatHref, dmHref, projectHref, useCurrentRoute, useIsViewing } from "@/lib/routes";
+import { settingsHref, chatHref, dmHref, projectHref, useCurrentRoute, useIsViewing } from "@/lib/routes";
 
 /** Tasks eligible for the current user's schedule (.ics) export: has a due
  *  date, is theirs (owned, collaborated-on, or an unclaimed task they
@@ -360,9 +360,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             <Home className="size-4" />
             Home
           </NavLink>
-          <NavLink href="/people" active={pathname === "/people"} onNavigate={onNavigate}>
+          {/* People became the Members section of Settings. `/people` still
+              redirects, so it stays active here for anyone arriving by an old
+              link mid-redirect. */}
+          <NavLink
+            href={settingsHref("members")}
+            active={pathname === "/settings" || pathname === "/people"}
+            onNavigate={onNavigate}
+          >
             <Users className="size-4" />
-            People
+            Settings
             <span className="ml-auto text-[11px] text-muted-foreground">
               {state.users.length}
             </span>
