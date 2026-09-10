@@ -620,6 +620,30 @@ export type Database = {
         }
         Relationships: []
       }
+      statuses: {
+        Row: {
+          color: string
+          id: string
+          is_done: boolean
+          name: string
+          position: number
+        }
+        Insert: {
+          color?: string
+          id: string
+          is_done?: boolean
+          name: string
+          position?: number
+        }
+        Update: {
+          color?: string
+          id?: string
+          is_done?: boolean
+          name?: string
+          position?: number
+        }
+        Relationships: []
+      }
       task_attachments: {
         Row: {
           attachment_id: string
@@ -754,6 +778,13 @@ export type Database = {
             referencedRelation: "projects"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "tasks_status_fkey"
+            columns: ["status"]
+            isOneToOne: false
+            referencedRelation: "statuses"
+            referencedColumns: ["id"]
+          },
         ]
       }
     }
@@ -794,6 +825,7 @@ export type Database = {
         Returns: boolean
       }
       project_is_viewer_only: { Args: { proj_id: string }; Returns: boolean }
+      session_is_assured: { Args: never; Returns: boolean }
       toggle_reaction: {
         Args: { emoji: string; message_id: string }
         Returns: Json

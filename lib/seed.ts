@@ -1,7 +1,10 @@
 import { DEFAULT_ROLES } from "./permissions";
+import { DEFAULT_STATUSES } from "./statuses";
 import type { AppState, DM, Message, Task } from "./types";
 
-export const SEED_VERSION = 13;
+// 14: statuses became rows (`AppState.statuses`) instead of a hardcoded
+// union, and the Owner role joined the seeded three.
+export const SEED_VERSION = 14;
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -448,6 +451,7 @@ export function createSeed(): AppState {
     tasks,
     activities,
     roles: DEFAULT_ROLES.map((r) => ({ ...r, permissions: [...r.permissions] })),
+    statuses: DEFAULT_STATUSES.map((s) => ({ ...s })),
     lastRead,
   };
 }

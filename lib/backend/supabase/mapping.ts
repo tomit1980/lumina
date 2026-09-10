@@ -53,7 +53,6 @@ import { SEED_VERSION } from "../../seed";
 import type { Database } from "../../database.types";
 import {
   PRIORITIES,
-  TASK_STATUSES,
   type AccessLevel,
   type Activity,
   type ActivityKind,
@@ -64,6 +63,7 @@ import {
   type Message,
   type MessageAttachment,
   type Permission,
+  type StatusDef,
   type Priority,
   type Project,
   type Reaction,
@@ -84,6 +84,7 @@ export type ActivityInsert = Insert<"activities">;
 
 export type ProfileRow = Row<"profiles">;
 export type RoleRow = Row<"roles">;
+export type StatusRow = Row<"statuses">;
 export type ChannelRow = Row<"channels">;
 export type ChannelMemberRow = Row<"channel_members">;
 export type DmRow = Row<"dms">;
@@ -107,6 +108,7 @@ export interface HydrateRows {
   currentUserId: string;
   profiles: ProfileRow[];
   roles: RoleRow[];
+  statuses: StatusRow[];
   channels: ChannelRow[];
   channelMembers: ChannelMemberRow[];
   dms: DmRow[];
@@ -150,10 +152,23 @@ function toLevel(level: string): AccessLevel {
   return level === "viewer" ? "viewer" : "editor";
 }
 
+/**
+ * The status a row carries, taken at its word.
+ *
+ * This used to coerce anything outside a hardcoded five-member union to
+ * `"backlog"`. Statuses are rows now and `tasks.status` is a foreign key to
+ * them with `on delete restrict`, so the database cannot hold a status that
+ * does not exist and cannot lose one that is still in use — the coercion had
+ * nothing left to protect against, and keeping it would have quietly moved a
+ * task into the wrong column of any workspace that renamed its ids.
+ *
+ * A status the CLIENT cannot resolve is still handled, but where it belongs:
+ * the board skips a column it has no definition for, and `isDoneStatus`
+ * answers `false`, so an unknown status reads as open work rather than
+ * vanishing into "completed".
+ */
 function toStatus(status: string): TaskStatus {
-  return (TASK_STATUSES as readonly string[]).includes(status)
-    ? (status as TaskStatus)
-    : "backlog";
+  return status;
 }
 
 function toPriority(priority: string): Priority {
@@ -231,6 +246,16 @@ export function toRole(row: RoleRow): RoleDef {
     permissions: toPermissions(row.permissions),
     isSystem: row.is_system,
     locked: row.locked,
+  };
+}
+
+export function toStatusDef(row: StatusRow): StatusDef {
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    position: row.position,
+    isDone: row.is_done,
   };
 }
 
@@ -377,6 +402,7 @@ export function toAppState(rows: HydrateRows): AppState {
     currentUserId: rows.currentUserId,
     users: rows.profiles.map(toUser),
     roles: rows.roles.map(toRole),
+    statuses: rows.statuses.map(toStatusDef),
     channels: rows.channels.map((c) =>
       toChannel(c, members(channelMembersByChannel.get(c.id)))
     ),
@@ -487,6 +513,7 @@ export function signedOutState(): AppState {
     tasks: [],
     activities: [],
     roles: [],
+    statuses: [],
     lastRead: {},
   };
 }

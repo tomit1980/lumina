@@ -14,6 +14,7 @@
 import { toast } from "sonner";
 
 import { DEFAULT_ROLES } from "../permissions";
+import { DEFAULT_STATUSES } from "../statuses";
 import { createSeed, SEED_VERSION } from "../seed";
 import type {
   AppState,
@@ -27,6 +28,7 @@ import type {
   Project,
   ResourceMember,
   RoleDef,
+  StatusDef,
   Task,
   User,
 } from "../types";
@@ -43,12 +45,15 @@ export const STORAGE_KEY = "lumina:v1";
 interface LegacyState
   extends Omit<
     AppState,
-    "roles" | "users" | "projects" | "tasks" | "channels" | "messages"
+    "roles" | "statuses" | "users" | "projects" | "tasks" | "channels" | "messages"
   > {
   messages: Array<Omit<Message, "attachments"> & { attachments?: MessageAttachment[] }>;
   users: Array<Omit<User, "roleId"> & { roleId?: string; role?: string }>;
   roles?: RoleDef[];
   rolePermissions?: Record<string, Permission[]>;
+  /** Absent in every workspace stored before SEED_VERSION 14, when the board's
+   *  columns were a hardcoded union rather than rows. */
+  statuses?: StatusDef[];
   projects: Array<
     Omit<Project, "priority" | "restricted" | "members" | "attachments"> & {
       priority?: Priority;
@@ -81,6 +86,12 @@ interface LegacyState
 }
 
 export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
+  // A workspace stored before statuses were editable has none, and its tasks
+  // carry the five seeded ids — which is exactly what `DEFAULT_STATUSES`
+  // still defines, ids included. So the backfill is the seed, and every
+  // existing task keeps resolving without being rewritten.
+  const statuses: StatusDef[] =
+    parsed.statuses ?? DEFAULT_STATUSES.map((s) => ({ ...s }));
   const roles: RoleDef[] =
     parsed.roles ??
     DEFAULT_ROLES.map((r) => ({
@@ -160,6 +171,7 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
       conversationId: a.conversationId ?? null,
     })),
     roles,
+    statuses,
     lastRead: parsed.lastRead ?? {},
   };
 }

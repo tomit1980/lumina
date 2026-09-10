@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { SupabaseBackend } from "@/lib/backend/supabase";
 import { DEFAULT_ROLES } from "@/lib/permissions";
+import { DEFAULT_STATUSES } from "@/lib/statuses";
 import { canUserSeeProject } from "@/lib/store";
 import type { AppState, Project } from "@/lib/types";
 import {
@@ -73,6 +74,10 @@ function storeState(project: Project): AppState {
       ...u, name: u.id, handle: u.id, title: "", color: "#000", presence: "offline" as const,
     })),
     roles: DEFAULT_ROLES.map((r) => ({ ...r, permissions: [...r.permissions] })),
+    // The seeded columns, for the same reason the roles line above uses
+    // DEFAULT_ROLES: the client rule and the database rule then read the same
+    // definitions rather than two hand-written approximations.
+    statuses: DEFAULT_STATUSES.map((s) => ({ ...s })),
     channels: [], dms: [], messages: [], tasks: [], activities: [], lastRead: {},
     projects: [project],
   };

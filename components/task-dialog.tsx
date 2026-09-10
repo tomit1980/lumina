@@ -35,12 +35,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { AttachmentsField } from "@/components/attachments";
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
+import { firstOpenStatus, sortedStatuses } from "@/lib/statuses";
 import { canUserSeeProject, normaliseCollaborators, useStore } from "@/lib/store";
 import {
   PRIORITIES,
   PRIORITY_META,
-  STATUS_META,
-  TASK_STATUSES,
   type Attachment,
   type Priority,
   type Task,
@@ -176,7 +175,10 @@ export function TaskDialog() {
         title: "",
         description: "",
         projectId: taskDialog.projectId ?? editableProjects[0]?.id ?? "",
-        status: taskDialog.status ?? "todo",
+        // The first open column, not a hardcoded "todo" — a workspace that
+        // renamed or removed it would otherwise create tasks in a status
+        // that does not exist.
+        status: taskDialog.status ?? firstOpenStatus(state.statuses) ?? "",
         priority: "medium",
         assigneeId: "none",
         collaboratorIds: [],
@@ -442,15 +444,15 @@ export function TaskDialog() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {TASK_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
+                  {sortedStatuses(state.statuses).map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {/* Inline style: a workspace-chosen colour cannot be a
+                          Tailwind class, which is built at compile time. */}
                       <span
-                        className={cn(
-                          "mr-1.5 inline-block size-2 rounded-full",
-                          STATUS_META[s].dot
-                        )}
+                        className="mr-1.5 inline-block size-2 rounded-full"
+                        style={{ backgroundColor: s.color }}
                       />
-                      {STATUS_META[s].label}
+                      {s.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

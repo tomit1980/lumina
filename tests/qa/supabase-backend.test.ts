@@ -252,6 +252,8 @@ describe("hydrateWorkspace — the query plan", () => {
   const TABLES = [
     "profiles",
     "roles",
+    // The board's columns, workspace-wide (20260910005000_statuses.sql).
+    "statuses",
     "channels",
     "channel_members",
     "dms",

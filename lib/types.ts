@@ -84,14 +84,44 @@ export interface Message {
   attachments: MessageAttachment[];
 }
 
-export const TASK_STATUSES = [
-  "backlog",
-  "todo",
-  "in-progress",
-  "in-review",
-  "done",
-] as const;
-export type TaskStatus = (typeof TASK_STATUSES)[number];
+/**
+ * A board column, as the workspace defines it.
+ *
+ * This used to be a five-member union baked into the type system, a `check`
+ * constraint and a `STATUS_META` map, so a team could not rename a column to
+ * match how they work, add one, or drop one they never use. Statuses are now
+ * rows, `tasks.status` is a foreign key to them, and an Owner edits the set.
+ *
+ * `TaskStatus` is therefore a plain `string` — a foreign key into
+ * `AppState.statuses`, exactly as `User.roleId` is one into `roles`. That is
+ * also what let this change stay contained: the ~160 status literals across
+ * the test suite are still valid, because the five seeded ids are unchanged.
+ * Renaming a column changes `name`; `id` never moves.
+ */
+export type TaskStatus = string;
+
+export interface StatusDef {
+  id: string;
+  /** What the column is called. The only thing a rename changes. */
+  name: string;
+  /** Hex, like `RoleDef.color` — NOT a Tailwind class. The old `STATUS_META`
+   *  held `bg-sky-500` and friends, which cannot be built from user input
+   *  because Tailwind only ships classes it can see at build time. */
+  color: string;
+  /** Column order on the board. Was the declaration order of an array. */
+  position: number;
+  /**
+   * This column means the work is finished.
+   *
+   * Exactly one status carries it, enforced by a partial unique index. It
+   * replaces the literal `"done"` that eighteen sites used to test — the
+   * progress bar, the home statistics, reminder suppression, the
+   * quick-complete toggle, the strike-through, and the activity feed's
+   * "completed" line — none of which shared a helper, so a rename broke each
+   * one independently.
+   */
+  isDone: boolean;
+}
 
 export const PRIORITIES = ["high", "medium", "low"] as const;
 export type Priority = (typeof PRIORITIES)[number];
@@ -171,20 +201,12 @@ export interface AppState {
   /** All roles, including custom ones. The locked admin role is always
    *  full-access, so a workspace can never lock itself out. */
   roles: RoleDef[];
+  /** The board's columns, workspace-wide. Ordered by `position` when
+   *  rendered — see `sortedStatuses` in lib/statuses.ts. */
+  statuses: StatusDef[];
   /** Key: `${userId}:${conversationId}` (channel or DM) → last-read epoch ms. */
   lastRead: Record<string, number>;
 }
-
-export const STATUS_META: Record<
-  TaskStatus,
-  { label: string; dot: string }
-> = {
-  backlog: { label: "Backlog", dot: "bg-zinc-400" },
-  todo: { label: "To Do", dot: "bg-sky-500" },
-  "in-progress": { label: "In Progress", dot: "bg-amber-500" },
-  "in-review": { label: "In Review", dot: "bg-violet-500" },
-  done: { label: "Done", dot: "bg-emerald-500" },
-};
 
 export const PRIORITY_META: Record<
   Priority,

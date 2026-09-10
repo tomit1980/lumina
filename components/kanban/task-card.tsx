@@ -9,6 +9,7 @@ import { CalendarDays, Circle, CircleCheck, Flag } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PeopleStack } from "@/components/kanban/people-stack";
 import { taskEvent } from "@/lib/calendar";
+import { isDoneStatus } from "@/lib/statuses";
 import { useStore } from "@/lib/store";
 import { PRIORITY_META, type Task, type User } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -25,10 +26,14 @@ export function TaskCardContent({
   /** Quick complete/reopen toggle. Omitted on read-only cards and the drag overlay. */
   onClose?: () => void;
 }) {
-  const isDone = task.status === "done";
+  const { state: workspace } = useStore();
+  // Whichever column carries `isDone`, not a literal — a team that renamed
+  // "Done" to "Shipped" would otherwise get no strike-through, no completed
+  // icon, and finished work flagged overdue.
+  const isDone = isDoneStatus(workspace.statuses, task.status);
   const overdue =
     task.dueDate !== null &&
-    task.status !== "done" &&
+    !isDone &&
     isPast(task.dueDate) &&
     !isToday(task.dueDate);
 
@@ -92,7 +97,7 @@ export function TaskCardContent({
         <p
           className={cn(
             "text-[13px] leading-snug font-medium",
-            task.status === "done" && "text-muted-foreground line-through decoration-muted-foreground/50"
+            isDone && "text-muted-foreground line-through decoration-muted-foreground/50"
           )}
         >
           {task.title}

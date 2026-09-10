@@ -17,11 +17,11 @@ import { Button } from "@/components/ui/button";
 import { SortableTaskCard, TaskCardContent } from "@/components/kanban/task-card";
 import { COLUMN_PREFIX, useTaskDnd } from "@/components/kanban/use-task-dnd";
 import { useUI } from "@/components/ui-context";
+import { isDone, firstOpenStatus, sortedStatuses } from "@/lib/statuses";
 import { useStore } from "@/lib/store";
 import {
-  STATUS_META,
-  TASK_STATUSES,
   type Project,
+  type StatusDef,
   type Task,
   type TaskStatus,
 } from "@/lib/types";
@@ -37,7 +37,9 @@ function Column({
   onClose,
 }: {
   project: Project;
-  status: TaskStatus;
+  /** The whole column, not its id: the header needs its name and colour, and
+   *  both are workspace-editable now. */
+  status: StatusDef;
   tasks: Task[];
   canCreate: boolean;
   canMove: boolean;
@@ -47,15 +49,20 @@ function Column({
   const { state } = useStore();
   const { openTaskDialog } = useUI();
   const { setNodeRef, isOver } = useDroppable({
-    id: `${COLUMN_PREFIX}${status}`,
-    data: { type: "column", status },
+    id: `${COLUMN_PREFIX}${status.id}`,
+    data: { type: "column", status: status.id },
   });
 
   return (
     <div className="flex w-68 shrink-0 flex-col">
       <div className="mb-2 flex items-center gap-2 px-1">
-        <span className={cn("size-2 rounded-full", STATUS_META[status].dot)} />
-        <h3 className="text-[13px] font-semibold">{STATUS_META[status].label}</h3>
+        {/* Inline style, not a Tailwind class: the colour is user-chosen and
+            Tailwind only ships classes it can see at build time. */}
+        <span
+          className="size-2 rounded-full"
+          style={{ backgroundColor: status.color }}
+        />
+        <h3 className="text-[13px] font-semibold">{status.name}</h3>
         <span className="rounded-full bg-muted px-1.5 py-px text-[11px] font-medium text-muted-foreground">
           {tasks.length}
         </span>
@@ -64,7 +71,7 @@ function Column({
             variant="ghost"
             size="icon"
             className="ml-auto size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => openTaskDialog({ projectId: project.id, status })}
+            onClick={() => openTaskDialog({ projectId: project.id, status: status.id })}
           >
             <Plus className="size-3.5" />
           </Button>
@@ -125,14 +132,21 @@ export function Board({
   const closeTask = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    const toStatus: TaskStatus = task.status === "done" ? "todo" : "done";
+    // The done column and the first open one, both read from the workspace's
+    // own statuses — this used to be `task.status === "done" ? "todo" : "done"`,
+    // which broke the moment a team renamed either column.
+    const doneId = state.statuses.find((s) => s.isDone)?.id;
+    const reopenId = firstOpenStatus(state.statuses);
+    const target = isDone(state, task.status) ? reopenId : doneId;
+    if (!target) return;
+    const toStatus: TaskStatus = target;
     // QA-122: `moveTask` now reports whether the write survived, so this
     // stops announcing a move the store refused or rolled back. The refusal
     // already has its own toast; a second, contradictory one is the failure
     // this seam exists to remove.
     if (!(await moveTask(taskId, toStatus, Number.MAX_SAFE_INTEGER))) return;
     toast(
-      toStatus === "done"
+      toStatus === doneId
         ? `“${task.title}” marked as done`
         : `“${task.title}” reopened`
     );
@@ -148,12 +162,12 @@ export function Board({
       onDragCancel={dnd.onDragCancel}
     >
       <div className="flex h-full gap-4 overflow-x-auto px-6 pt-4 pb-6">
-        {TASK_STATUSES.map((status) => (
+        {sortedStatuses(state.statuses).map((status) => (
           <Column
-            key={status}
+            key={status.id}
             project={project}
             status={status}
-            tasks={dnd.byStatus[status]}
+            tasks={dnd.byStatus[status.id] ?? []}
             canCreate={canCreate}
             canMove={canMove}
             onOpen={(taskId) => openTaskDialog({ taskId })}

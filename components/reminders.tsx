@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { taskEvent } from "@/lib/calendar";
 import { isMineOrUnclaimed } from "@/lib/permissions";
+import { isDoneStatus } from "@/lib/statuses";
 import { canUserSeeTaskProject, useStore } from "@/lib/store";
 import type { AppState } from "@/lib/types";
 
@@ -145,7 +146,7 @@ export function Reminders() {
           task.reminderMinutes == null ||
           !task.startTime ||
           task.dueDate == null ||
-          task.status === "done"
+          isDoneStatus(state.statuses, task.status)
         ) {
           continue;
         }

@@ -4,6 +4,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { backendKind, createBackend } from "./backend";
+import { isDoneStatus } from "./statuses";
 import type {
   AttachmentRemovals,
   Backend,
@@ -2023,7 +2024,13 @@ export function StoreProvider({
         (s) => {
           const prev = s.tasks.find((t) => t.id === taskId);
           if (!prev) return s;
-          const completed = patch.status === "done" && prev.status !== "done";
+          // The done column, whatever it is called — this used to test the
+          // literal "done", so a renamed column silently stopped producing
+          // the feed's "completed" line.
+          const completed =
+            patch.status !== undefined &&
+            isDoneStatus(s.statuses, patch.status) &&
+            !isDoneStatus(s.statuses, prev.status);
           // Same as `updateProject`: the removal list is an instruction to
           // the backend, not a field of the Task.
           const next: Task = { ...prev, ...withoutRemovals(resolved) };
@@ -2086,7 +2093,8 @@ export function StoreProvider({
             .sort((a, b) => a.order - b.order);
           sourceColumn.forEach((t, i) => reordered.set(t.id, { ...t, order: i }));
         }
-        const completed = toStatus === "done" && task.status !== "done";
+        const completed =
+          isDoneStatus(s0.statuses, toStatus) && !isDoneStatus(s0.statuses, task0.status);
         return {
           ...s,
           tasks: s.tasks.map((t) => reordered.get(t.id) ?? t),

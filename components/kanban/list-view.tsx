@@ -21,11 +21,11 @@ import { PeopleStack } from "@/components/kanban/people-stack";
 import { taskEvent } from "@/lib/calendar";
 import { COLUMN_PREFIX, useTaskDnd } from "@/components/kanban/use-task-dnd";
 import { useUI } from "@/components/ui-context";
+import { firstOpenStatus, isDoneStatus, sortedStatuses } from "@/lib/statuses";
 import { useStore } from "@/lib/store";
 import {
   PRIORITY_META,
-  STATUS_META,
-  TASK_STATUSES,
+  type StatusDef,
   type Task,
   type TaskStatus,
   type User,
@@ -44,10 +44,13 @@ function TaskRowContent({
   /** Quick complete/reopen toggle. Omitted on read-only rows and the drag overlay. */
   onClose?: () => void;
 }) {
-  const isDone = task.status === "done";
+  const { state: workspace } = useStore();
+  // `isDoneStatus`, not a literal: the column that means "finished" is
+  // whichever one carries `isDone`, and a team may have renamed it.
+  const isDone = isDoneStatus(workspace.statuses, task.status);
   const overdue =
     task.dueDate !== null &&
-    task.status !== "done" &&
+    !isDone &&
     isPast(task.dueDate) &&
     !isToday(task.dueDate);
 
@@ -75,7 +78,7 @@ function TaskRowContent({
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-[13px] font-medium",
-          task.status === "done" && "text-muted-foreground line-through"
+          isDone && "text-muted-foreground line-through"
         )}
       >
         {task.title}
@@ -188,7 +191,8 @@ function StatusSection({
   onOpen,
   onClose,
 }: {
-  status: TaskStatus;
+  /** The whole column: the header shows its name and colour. */
+  status: StatusDef;
   tasks: Task[];
   canMove: boolean;
   onOpen: (taskId: string) => void;
@@ -196,8 +200,8 @@ function StatusSection({
 }) {
   const { state } = useStore();
   const { setNodeRef, isOver } = useDroppable({
-    id: `${COLUMN_PREFIX}${status}`,
-    data: { type: "column", status },
+    id: `${COLUMN_PREFIX}${status.id}`,
+    data: { type: "column", status: status.id },
   });
 
   // View-only users don't need empty drop targets.
@@ -206,8 +210,13 @@ function StatusSection({
   return (
     <section className="mb-6">
       <div className="mb-1.5 flex items-center gap-2 px-1">
-        <span className={cn("size-2 rounded-full", STATUS_META[status].dot)} />
-        <h3 className="text-[13px] font-semibold">{STATUS_META[status].label}</h3>
+        {/* Inline style: the colour is workspace-editable, and Tailwind only
+            ships classes it can see at build time. */}
+        <span
+          className="size-2 rounded-full"
+          style={{ backgroundColor: status.color }}
+        />
+        <h3 className="text-[13px] font-semibold">{status.name}</h3>
         <span className="text-[11px] text-muted-foreground">{tasks.length}</span>
       </div>
       <SortableContext
@@ -267,14 +276,20 @@ export function ListView({
   const closeTask = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    const toStatus: TaskStatus = task.status === "done" ? "todo" : "done";
+    // Read from the workspace's statuses, not from the literals this used to
+    // hardcode — a renamed or deleted column broke both halves.
+    const doneId = state.statuses.find((s) => s.isDone)?.id;
+    const reopenId = firstOpenStatus(state.statuses);
+    const target = isDoneStatus(state.statuses, task.status) ? reopenId : doneId;
+    if (!target) return;
+    const toStatus: TaskStatus = target;
     // QA-122: `moveTask` now reports whether the write survived, so this
     // stops announcing a move the store refused or rolled back. The refusal
     // already has its own toast; a second, contradictory one is the failure
     // this seam exists to remove.
     if (!(await moveTask(taskId, toStatus, Number.MAX_SAFE_INTEGER))) return;
     toast(
-      toStatus === "done"
+      toStatus === doneId
         ? `“${task.title}” marked as done`
         : `“${task.title}” reopened`
     );
@@ -290,11 +305,11 @@ export function ListView({
       onDragCancel={dnd.onDragCancel}
     >
       <div className="h-full overflow-y-auto px-6 pt-4 pb-6">
-        {TASK_STATUSES.map((status) => (
+        {sortedStatuses(state.statuses).map((status) => (
           <StatusSection
-            key={status}
+            key={status.id}
             status={status}
-            tasks={dnd.byStatus[status]}
+            tasks={dnd.byStatus[status.id] ?? []}
             canMove={canMove}
             onOpen={(taskId) => openTaskDialog({ taskId })}
             onClose={closeTask}

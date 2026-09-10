@@ -13,14 +13,19 @@ import {
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
 import { useStore } from "@/lib/store";
-import { TASK_STATUSES, type Task, type TaskStatus } from "@/lib/types";
+import { sortedStatuses } from "@/lib/statuses";
+import type { Task, TaskStatus } from "@/lib/types";
 
 export const COLUMN_PREFIX = "column:";
 
 /** Shared drag & drop behavior for task collections (board and list views).
  *  Droppable containers must use the id `column:<status>`; draggables use task ids. */
 export function useTaskDnd(tasks: Task[]) {
-  const { moveTask } = useStore();
+  const { state, moveTask } = useStore();
+  // The workspace's columns, not a module constant — an Owner can rename,
+  // add, remove and reorder them, and a drag has to be against the set that
+  // is actually on screen.
+  const statuses = React.useMemo(() => sortedStatuses(state.statuses), [state.statuses]);
   const [activeTask, setActiveTask] = React.useState<Task | null>(null);
 
   const sensors = useSensors(
@@ -30,13 +35,17 @@ export function useTaskDnd(tasks: Task[]) {
 
   const byStatus = React.useMemo(() => {
     const map = Object.fromEntries(
-      TASK_STATUSES.map((s) => [s, [] as Task[]])
+      statuses.map((s) => [s.id, [] as Task[]])
     ) as Record<TaskStatus, Task[]>;
     for (const t of [...tasks].sort((a, b) => a.order - b.order)) {
-      map[t.status].push(t);
+      // A task whose status no longer exists has no column to sit in. It is
+      // skipped here rather than crashing on `map[undefined].push`; the
+      // database refuses to delete a status that still holds work, so this
+      // is the belt to that braces.
+      map[t.status]?.push(t);
     }
     return map;
-  }, [tasks]);
+  }, [tasks, statuses]);
 
   /**
    * Moves issued by this drag, in order, with repeats dropped (QA-118).

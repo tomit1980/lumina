@@ -43,6 +43,7 @@ import { emptySpreadsheetDataUrl, MIME, textToDataUrl, withExtension } from "@/l
 import { isMine } from "@/lib/permissions";
 import { fileHref } from "@/lib/routes";
 import { useStore } from "@/lib/store";
+import { isDone } from "@/lib/statuses";
 import { PRIORITIES, PRIORITY_META, type Priority } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -167,7 +168,7 @@ function ProjectPageInner() {
       (priorityFilter === "all" || t.priority === priorityFilter)
   );
 
-  const done = allTasks.filter((t) => t.status === "done").length;
+  const done = allTasks.filter((t) => isDone(state, t.status)).length;
   const progress = allTasks.length > 0 ? Math.round((done / allTasks.length) * 100) : 0;
   const filtering = assigneeFilter !== "all" || priorityFilter !== "all";
 

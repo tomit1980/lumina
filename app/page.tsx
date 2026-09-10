@@ -27,6 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { UserAvatar } from "@/components/user-avatar";
 import { useUI } from "@/components/ui-context";
 import { isMine } from "@/lib/permissions";
+import { isDone } from "@/lib/statuses";
 import { canUserSeeTaskProject, getUnreadCount, useStore } from "@/lib/store";
 import { PRIORITY_META, type ActivityKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -65,7 +66,7 @@ export default function HomePage() {
       (t) =>
         isMine(t, currentUser.id) &&
         canUserSeeTaskProject(state, t, currentUser.id) &&
-        t.status !== "done"
+        !isDone(state, t.status)
     )
     .sort((a, b) => {
       // Owned tasks first, then collaborated-on ones; due date breaks ties
@@ -94,7 +95,7 @@ export default function HomePage() {
     (t) =>
       isMine(t, currentUser.id) &&
       canUserSeeTaskProject(state, t, currentUser.id) &&
-      t.status === "done"
+      isDone(state, t.status)
   ).length;
 
   const activities = [...state.activities].sort((a, b) => b.ts - a.ts).slice(0, 8);
