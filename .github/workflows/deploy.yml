@@ -41,10 +41,10 @@ jobs:
       # thing entirely and must NEVER appear here; the check below enforces
       # that mechanically rather than by memory.
       - run: npm run build
-        # env:
-        #   NEXT_PUBLIC_BACKEND: supabase
-        #   NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
-        #   NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+        env:
+          NEXT_PUBLIC_BACKEND: supabase
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
 
       # One check, permanently. A service-role credential reaching `out/`
       # would be published to a public URL and would bypass every access rule
