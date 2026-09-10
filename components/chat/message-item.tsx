@@ -56,7 +56,18 @@ export function MessageItem({
   compact,
 }: {
   message: Message;
-  author: User;
+  /**
+   * The person who wrote this, or `undefined` when the client cannot resolve
+   * them — a profile that was deleted (`author_id` is `on delete set null`),
+   * or a teammate who joined after this tab loaded.
+   *
+   * It is optional on purpose. This used to be a required `User` and the
+   * caller supplied `state.users[0]` when the lookup missed, which put a real,
+   * named colleague's avatar, colour and profile card on somebody else's
+   * words — QA-116. A missing name is a small gap; the wrong name is a false
+   * statement about who said something, and it never self-corrected.
+   */
+  author?: User;
   /** True when this message continues a run from the same author. */
   compact: boolean;
 }) {
@@ -87,11 +98,22 @@ export function MessageItem({
     >
       <div className="w-8 shrink-0 pt-0.5">
         {!compact ? (
-          <UserCard user={author}>
-            <button className="rounded-full transition-transform hover:scale-105">
-              <UserAvatar user={author} size="md" />
-            </button>
-          </UserCard>
+          author ? (
+            <UserCard user={author}>
+              <button className="rounded-full transition-transform hover:scale-105">
+                <UserAvatar user={author} size="md" />
+              </button>
+            </UserCard>
+          ) : (
+            // No card and no button: there is no profile to open, and offering
+            // one would imply this resolves to somebody.
+            <div
+              aria-hidden
+              className="flex size-8 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground"
+            >
+              ?
+            </div>
+          )
         ) : (
           <span className="hidden text-[10px] leading-6 text-muted-foreground group-hover:block">
             {format(message.createdAt, "HH:mm")}
@@ -102,11 +124,20 @@ export function MessageItem({
       <div className="min-w-0 flex-1 pb-0.5">
         {!compact && (
           <div className="flex items-baseline gap-2">
-            <UserCard user={author} side="bottom">
-              <button className="text-[13px] font-semibold hover:underline">
-                {author.name}
-              </button>
-            </UserCard>
+            {author ? (
+              <UserCard user={author} side="bottom">
+                <button className="text-[13px] font-semibold hover:underline">
+                  {author.name}
+                </button>
+              </UserCard>
+            ) : (
+              // The word the rest of the app already uses for an actor it
+              // cannot name — app/page.tsx's activity feed and the reaction
+              // tooltips both say "Someone".
+              <span className="text-[13px] font-semibold text-muted-foreground">
+                Someone
+              </span>
+            )}
             <span className="text-[11px] text-muted-foreground">
               {format(message.createdAt, "h:mm a")}
             </span>

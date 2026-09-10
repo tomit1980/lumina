@@ -98,10 +98,12 @@ export function MessageList({
           <MessageItem
             key={row.key}
             message={row.message}
-            author={
-              state.users.find((u) => u.id === row.message.authorId) ??
-              state.users[0]
-            }
+            // No fallback: an author this client cannot resolve is passed
+            // through as `undefined` and rendered as "Someone". The `??
+            // state.users[0]` that used to be here attributed the message to
+            // whoever sorts first by name — a real colleague, with their
+            // avatar and profile card — which is QA-116.
+            author={state.users.find((u) => u.id === row.message.authorId)}
             compact={row.compact}
           />
         )
