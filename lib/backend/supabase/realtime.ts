@@ -147,16 +147,35 @@ function messageFromRow(row: MessageRow): Message {
   };
 }
 
-/** The one payload shape this file builds directly; everything else is `stale`. */
+/**
+ * The one payload shape this file builds directly; everything else is
+ * `stale`. Returns `null` for a change that must not cost a reload at all.
+ *
+ * `read_state` is that case (QA-110). Its policy is `user_id = auth.uid()`,
+ * so nobody else ever sees your marker move — but YOU do, and the catch-all
+ * below turned every echo of your own read marker into a coalesced
+ * whole-workspace hydrate 250 ms later. `postMessage` upserts `read_state` on
+ * every message sent, so posting in a busy channel meant one full re-fetch
+ * per message typed, per participant, on top of the `message-insert` echo
+ * that the dedup rule correctly makes free. It is pure waste besides: the
+ * client already applied its own optimistic `lastRead` patch, so the reload
+ * can only tell it what it already knows.
+ *
+ * Dropped here rather than removed from the publication, because the
+ * subscription is what makes the row's own RLS filter apply — and because a
+ * later feature (read receipts across devices) would want the event, just not
+ * a reload.
+ */
 function toRealtimeEvent(
   payload: RealtimePostgresChangesPayload<Record<string, unknown>>
-): RealtimeEvent {
+): RealtimeEvent | null {
   if (payload.table === "messages" && payload.eventType === "INSERT") {
     return {
       kind: "message-insert",
       message: messageFromRow(payload.new as unknown as MessageRow),
     };
   }
+  if (payload.table === "read_state") return null;
   return { kind: "stale" };
 }
 
@@ -249,6 +268,12 @@ export function subscribeToWorkspace(
   /** Bumped on every re-join so a superseded channel's late status callbacks
    *  and handlers are ignored rather than reported as the current socket's. */
   let generation = 0;
+  /** A repair is already pending for the current channel, so the several
+   *  statuses one drop can produce (CHANNEL_ERROR then CLOSED, say) cost one
+   *  re-join rather than one each. */
+  let repairing = false;
+  /** Consecutive failed joins, for the backoff. Reset by a SUBSCRIBED. */
+  let repairAttempts = 0;
   /** Joins are serialized: a sign-out immediately followed by a sign-in must
    *  not have two `join()`s interleaving their leave/join on one topic. */
   let queue: Promise<void> = Promise.resolve();
@@ -291,7 +316,8 @@ export function subscribeToWorkspace(
       { event: "*", schema: "public" },
       (payload) => {
         if (mine !== generation) return;
-        emit(toRealtimeEvent(payload));
+        const event = toRealtimeEvent(payload);
+        if (event) emit(event);
       }
     );
 
@@ -317,8 +343,52 @@ export function subscribeToWorkspace(
       const up = status === REALTIME_SUBSCRIBE_STATES.SUBSCRIBED;
       if (!up) {
         emit({ kind: "connection", online: false });
+        // QA-111 — AND THEN TRY TO FIX IT, which nothing here used to do.
+        //
+        // This branch reported the drop and returned. `channel` was still
+        // non-null and `joinedAs` still held the current uid, so `join()`'s
+        // idempotence guard and the auth listener's both refused to re-join
+        // for the same identity; the module's only self-repair paths are an
+        // identity CHANGE and the blindness check, and neither fires here.
+        // Recovery was left entirely to supabase-js's internal rejoin timer
+        // producing a fresh SUBSCRIBED through this same callback. When it
+        // does, fine — but a wedged socket, or a channel the server closed
+        // and will not re-authorize, left the app on "Reconnecting…"
+        // indefinitely with no way back but a page reload.
+        //
+        // This file goes to great length to stop claiming a socket is healthy
+        // when it is not; the mirror-image case — saying it is unhealthy and
+        // then never trying again — is the same abdication.
+        //
+        // `joinedAs = undefined` is what makes the retry actually happen: it
+        // is the half of `join()`'s guard that a same-identity re-join trips
+        // on. Clearing `channel` instead would be WRONG and was the first
+        // attempt here — `client.channel(TOPIC)` hands back the EXISTING
+        // channel while the topic is still registered on the client, so
+        // dropping only our reference re-subscribes the dead object rather
+        // than opening a new one. Leaving `channel` set is what lets `join()`
+        // take its `previous` branch and do the real `removeChannel`
+        // teardown.
+        //
+        // The generation is NOT bumped here: this channel is not being
+        // replaced yet — `join()` does that itself — and bumping now would
+        // silence the very SUBSCRIBED that a library-driven recovery
+        // delivers through this same callback.
+        if (mine === generation && !repairing) {
+          repairing = true;
+          const wait = Math.min(30_000, 1_000 * 2 ** repairAttempts++);
+          setTimeout(() => {
+            repairing = false;
+            if (disposed || mine !== generation) return;
+            joinedAs = undefined;
+            schedule(join);
+          }, wait);
+        }
         return;
       }
+      // Back up: forget the backoff, so a socket that flaps once in an hour
+      // does not start its next repair thirty seconds late.
+      repairAttempts = 0;
 
       // The blindness check, and NOTHING is claimed until it answers.
       // `SUBSCRIBED` is precisely the status a channel that joined as nobody

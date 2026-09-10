@@ -549,6 +549,44 @@ export function StoreProvider({
    *  what a real session looks like: the channel is freshly opened by the
    *  time this state exists, well before it could have failed. */
   const [connected, setConnected] = React.useState(true);
+
+  /**
+   * The browser's own view of connectivity (QA-128).
+   *
+   * Nothing here listened to it. Close a laptop, walk into a tunnel, lose
+   * wifi: the browser knows at once and fires `offline`, but the app only
+   * discovered it when the socket's own heartbeat eventually timed out — and
+   * until then the indicator showed nothing, the connection was reported
+   * healthy, and messages simply stopped arriving with nothing to say so.
+   * The length of that silent window was decided by the socket's timeout
+   * rather than by anything the app controls.
+   *
+   * The whole point of the connection indicator is to make "connected" mean
+   * "receiving". A browser that says it is offline is not receiving, so that
+   * answer is taken directly and immediately.
+   *
+   * `navigator.onLine` is famously weak in the other direction — `true` only
+   * means an interface is up, not that anything is reachable — which is
+   * exactly why this is a one-way override: `false` forces the indicator
+   * down, `true` defers to what the channel actually reports.
+   */
+  const [browserOffline, setBrowserOffline] = React.useState(false);
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const goOffline = () => setBrowserOffline(true);
+    const goOnline = () => setBrowserOffline(false);
+    // Read once on mount too: the tab may have been restored offline, in
+    // which case no event is coming.
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setBrowserOffline(true);
+    }
+    window.addEventListener("offline", goOffline);
+    window.addEventListener("online", goOnline);
+    return () => {
+      window.removeEventListener("offline", goOffline);
+      window.removeEventListener("online", goOnline);
+    };
+  }, []);
   /** The same value the apply core can read SYNCHRONOUSLY, so a `connection`
    *  event can tell a transition from a repeat. Starts `true` for the reason
    *  above: nothing has dropped yet, so the first `online: true` is a
@@ -2213,7 +2251,10 @@ export function StoreProvider({
       value={{
         state,
         currentUser,
-        connected,
+        // The browser's `offline` is authoritative in one direction only —
+        // see `browserOffline`. A socket cannot be "receiving" through an
+        // interface the browser says is down.
+        connected: connected && !browserOffline,
         getRole,
         userRole,
         can,

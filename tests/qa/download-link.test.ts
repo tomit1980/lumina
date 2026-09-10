@@ -31,6 +31,14 @@ const FAILED: AttachmentUrlState = { url: undefined, pending: false, failed: tru
 
 function renderLink(state: AttachmentUrlState) {
   return render(
+    // `children` in the props object rather than as a third argument, which
+    // react/no-children-prop would normally prefer: this is a `.ts` file, so
+    // there is no JSX, and `DownloadLink` declares `children` as REQUIRED —
+    // `createElement(Comp, props, child)` does not satisfy that for
+    // TypeScript, which rejects the props object as missing `children`. The
+    // two rules genuinely conflict here and the type is the one worth
+    // keeping.
+    // eslint-disable-next-line react/no-children-prop
     React.createElement(DownloadLink, {
       state,
       fileName: "payroll.xlsx",

@@ -518,7 +518,15 @@ describe("subscribeToWorkspace — connection", () => {
     fake.fireStatus(status);
     await flush();
 
-    expect(events).toEqual([{ kind: "connection", online: false }]);
+    // The FIRST thing said is the drop, which is what this test is about.
+    expect(events[0]).toEqual({ kind: "connection", online: false });
+    // It is no longer the ONLY thing said, and that is QA-111 working:
+    // `flush()` runs every pending timer, so the repair's backoff elapses
+    // inside it and the re-join reports its own teardown. Every event here is
+    // still `online: false` — nothing claims health — but asserting an exact
+    // one-element array would now be asserting that the socket is never
+    // repaired, which is the bug.
+    expect(events.every((e) => e.kind === "connection" && e.online === false)).toBe(true);
   });
 
   // final-review.md finding 7. `connected` means "receiving what this user may
@@ -739,5 +747,118 @@ describe("subscribeToWorkspace — the socket carries the session", () => {
     await flush();
 
     expect(events).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QA-110 — your own read marker cost you a whole-workspace reload.
+//
+// `read_state`'s policy is `user_id = auth.uid()`, so nobody else ever sees
+// your marker move. But YOU do: every upsert echoed back to the client that
+// wrote it, and the catch-all mapped it to `{ kind: "stale" }`, which costs a
+// coalesced full hydrate 250 ms later. `postMessage` upserts `read_state` on
+// every message sent, so posting in a busy channel meant one full re-fetch per
+// message typed, per participant — pure waste, since the client had already
+// applied its own optimistic `lastRead` patch and the reload could only tell
+// it what it already knew.
+// ---------------------------------------------------------------------------
+describe("a read_state echo costs nothing (QA-110)", () => {
+  it("produces no event at all", async () => {
+    const fake = createFakeClient();
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+    await flush();
+
+    fake.handlers[0]({
+      table: "read_state",
+      eventType: "UPDATE",
+      new: { user_id: "u_test", conversation_id: "c_general" },
+      old: { user_id: "u_test" },
+    });
+    await flush();
+
+    expect(events).toEqual([]);
+  });
+
+  it("CONTROL: another table's change still costs a reload", async () => {
+    // Without this, a `toRealtimeEvent` that dropped everything would satisfy
+    // the test above while making live updates stop entirely.
+    const fake = createFakeClient();
+    const events: RealtimeEvent[] = [];
+    subscribeToWorkspace(fake.client, (e) => events.push(e));
+    await flush();
+
+    fake.handlers[0]({
+      table: "read_state_not_really",
+      eventType: "UPDATE",
+      new: { id: "x" },
+      old: { id: "x" },
+    });
+    fake.handlers[0]({
+      table: "projects",
+      eventType: "UPDATE",
+      new: { id: "p_1" },
+      old: { id: "p_1" },
+    });
+    await flush();
+
+    expect(events).toEqual([{ kind: "stale" }, { kind: "stale" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QA-111 — a channel that errored was never re-joined by this module.
+//
+// The `!up` branch emitted `{ online: false }` and returned. `channel` was
+// still non-null and `joinedAs` still held the current uid, so both
+// idempotence guards refused a same-identity re-join, and the module's only
+// self-repair paths — an identity change, and the blindness check — do not
+// fire here. Recovery was left entirely to supabase-js's internal rejoin
+// timer; if that never produced a fresh SUBSCRIBED, the app sat on
+// "Reconnecting…" forever with no way back but a page reload.
+// ---------------------------------------------------------------------------
+describe("a channel that errors repairs itself (QA-111)", () => {
+  it("re-joins after a CHANNEL_ERROR, without an identity change", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = createFakeClient();
+      subscribeToWorkspace(fake.client, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      fake.fireSubscribed();
+      await vi.advanceTimersByTimeAsync(0);
+      const joinsBefore = fake.channels.length;
+
+      fake.fireStatus(REALTIME_SUBSCRIBE_STATES.CHANNEL_ERROR);
+      // The backoff's first step. Nothing yet...
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fake.channels.length).toBe(joinsBefore);
+
+      // ...and then a genuine re-join, for the SAME user. This is the whole
+      // finding: nothing about the identity changed, so every pre-existing
+      // repair path stays silent.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(fake.channels.length).toBeGreaterThan(joinsBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("CONTROL: a healthy channel is not re-joined on a timer", async () => {
+    // Without this, a module that simply re-joined every second would pass
+    // the test above while thrashing the socket forever.
+    vi.useFakeTimers();
+    try {
+      const fake = createFakeClient();
+      subscribeToWorkspace(fake.client, () => {});
+      await vi.advanceTimersByTimeAsync(0);
+      fake.fireSubscribed();
+      await vi.advanceTimersByTimeAsync(0);
+      const joins = fake.channels.length;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fake.channels.length).toBe(joins);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

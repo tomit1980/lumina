@@ -159,3 +159,47 @@ describe("ConnectionStatus", () => {
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 });
+
+// ---------------------------------------------------------------------------
+// QA-128 — the app could be offline and still report itself healthy.
+//
+// Nothing listened to browser connectivity. Close a laptop, walk into a
+// tunnel, lose wifi: the browser knows immediately and fires `offline`, and
+// Lumina ignored it. The app only discovered the drop when the socket's own
+// heartbeat timed out, and until then the indicator showed nothing and the
+// connection was reported healthy while messages simply stopped arriving. The
+// length of that silent window was decided by the socket's timeout rather
+// than by anything the app controls — which is the opposite of this branch's
+// whole purpose, that "connected" should mean "receiving".
+// ---------------------------------------------------------------------------
+describe("browser connectivity (QA-128)", () => {
+  it("reports disconnected the moment the browser says it is offline", async () => {
+    const { result } = await mount(adminState());
+    // CONTROL first: a store with no socket trouble reports connected, so
+    // the assertion below cannot pass by everything being false always.
+    expect(result.current.connected).toBe(true);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("offline"));
+    });
+
+    expect(result.current.connected).toBe(false);
+  });
+
+  it("defers to the channel again once the browser is back", async () => {
+    const { result } = await mount(adminState());
+    await act(async () => {
+      window.dispatchEvent(new Event("offline"));
+    });
+    expect(result.current.connected).toBe(false);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    // `navigator.onLine === true` only means an interface is up, not that
+    // anything is reachable, so coming back must not ASSERT health — it must
+    // hand the question back to the channel, which here has reported none.
+    expect(result.current.connected).toBe(true);
+  });
+});
