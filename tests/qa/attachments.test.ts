@@ -5,7 +5,7 @@
 // attachment reference, exact decoded byte-length accounting, and the
 // data-URL round-trip surviving multi-byte text and the 0x8000 chunk
 // boundary in lib/documents.ts.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   attachmentBytes,
@@ -255,15 +255,36 @@ describe("Task 10 — the local demo path is byte-for-byte what it was", () => {
     expect(bytes).toEqual({ ok: true, url: "data:text/plain;base64,aGk=" });
   });
 
-  it("keeps the cap at 3 MB locally and raises it to 10 MB on the real backend", () => {
+  it("keeps the cap at 3 MB locally and raises it to 10 MB on the real backend", async () => {
     // Deliberately backend-dependent, and the reason is in lib/attachments.ts:
     // the local path base64s every file into ONE localStorage key whose whole
     // budget is ~5–10 MB, so a 10 MB cap there would not let a browser hold
     // more — it would only move the failure from a clear message before the
     // read to a quota error after it, with the workspace half-written.
-    expect(MAX_ATTACHMENT_BYTES).toBe(
-      backendKind === "supabase" ? 10 * 1024 * 1024 : 3 * 1024 * 1024
-    );
+    //
+    // ASSERTED AS LITERALS, not read back through the flag the source
+    // branches on. This used to be
+    //
+    //     expect(MAX_ATTACHMENT_BYTES).toBe(
+    //       backendKind === "supabase" ? 10 * 1024 * 1024 : 3 * 1024 * 1024)
+    //
+    // which is lib/attachments.ts's own ternary, on the same flag. The unit
+    // environment is always `local`, so the comparison actually evaluated was
+    // 3 MB === 3 MB, and the half of the claim in this test's title that is
+    // most worth pinning — the 10 MB Supabase cap, a deliberate deviation —
+    // could not fail. Changing the source's supabase branch to 50 MB left it
+    // green.
+    expect(backendKind).toBe("local");
+    expect(MAX_ATTACHMENT_BYTES).toBe(3 * 1024 * 1024);
+    // The Supabase branch, reached by re-importing the module under the flag
+    // rather than by restating it. `vi.resetModules` is what makes the
+    // module-level constant re-evaluate.
+    vi.stubEnv("NEXT_PUBLIC_BACKEND", "supabase");
+    vi.resetModules();
+    const supabaseSide = await import("@/lib/attachments");
+    expect(supabaseSide.MAX_ATTACHMENT_BYTES).toBe(10 * 1024 * 1024);
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
 
   it("discarding a local attachment is a no-op that cannot throw", async () => {

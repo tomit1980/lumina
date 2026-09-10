@@ -661,3 +661,46 @@ describe("deleteChannel / deleteProject report a failed write", () => {
     expect(result.current.state.projects.some((p) => p.id === project.id)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// `resetDemo`'s failure path, which until now could not be driven at all:
+// `reset` was the only `Backend` method with no `FailingOp` entry, and
+// `resetDemo` correspondingly shipped with no rejection handler, so a failing
+// reset became an unhandled promise rejection caught only by the generic net
+// in providers.tsx — which says "That last action didn't go through" and names
+// nothing.
+// ---------------------------------------------------------------------------
+describe("resetDemo when the backend refuses", () => {
+  it("says so, and leaves the workspace exactly as it was", async () => {
+    const backend = new FailingBackend("reset");
+    const before = adminState();
+    const { result } = await mount(before, backend);
+    const titlesBefore = result.current.state.tasks.map((t) => t.title);
+
+    await run(() => result.current.resetDemo());
+
+    expect(toastMock.error).toHaveBeenCalledWith(
+      "Couldn't reset",
+      expect.objectContaining({ description: expect.stringContaining("unchanged") })
+    );
+    expect(result.current.state.tasks.map((t) => t.title)).toEqual(titlesBefore);
+  });
+
+  it("CONTROL: a reset the backend accepts still replaces the workspace", async () => {
+    // Without this, a `resetDemo` that always failed would satisfy the test
+    // above while breaking the button completely.
+    const backend = new FailingBackend("sendMessage");
+    const seeded = adminState();
+    seeded.tasks = [];
+    const { result } = await mount(seeded, backend);
+    expect(result.current.state.tasks).toHaveLength(0);
+
+    await run(() => result.current.resetDemo());
+
+    expect(result.current.state.tasks.length).toBeGreaterThan(0);
+    expect(toastMock.error).not.toHaveBeenCalledWith(
+      "Couldn't reset",
+      expect.anything()
+    );
+  });
+});

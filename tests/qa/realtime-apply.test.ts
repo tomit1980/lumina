@@ -105,8 +105,22 @@ describe("live updates reach the screen", () => {
     for (let i = 0; i < 5; i++) backend.emit({ kind: "stale" });
 
     await waitFor(() => expect(backend.hydrateCalls).toBe(before + 1));
-    // And it stays one: no trailing reload per event.
-    await waitFor(() => expect(backend.hydrateCalls).toBe(before + 1));
+
+    // AND IT STAYS ONE — which the second `waitFor` that used to be here did
+    // not test. `waitFor` invokes its callback immediately, and the count was
+    // already `before + 1`, so it resolved without ever waiting out another
+    // window: a trailing reload per event would have passed it. Real time has
+    // to go by, so this drives it explicitly.
+    //
+    // The headline claim did survive on the first `waitFor` (five uncoalesced
+    // timers all fire in one tick, giving `before + 5`, never `before + 1`),
+    // so the test was not worthless — one of its two stated claims was.
+    await act(async () => {
+      // Well past STALE_RELOAD_MS (250 ms); the point is that the window
+      // went by, not its exact width.
+      await new Promise((r) => setTimeout(r, 2_000));
+    });
+    expect(backend.hydrateCalls).toBe(before + 1);
     expect(result.current.state).not.toBeNull();
   });
 
@@ -522,8 +536,18 @@ describe("a reload does not blank presence", () => {
     const presenceOf = (id: string) =>
       result.current.state.users.find((u) => u.id === id)!.presence;
 
-    backend.emit({ kind: "presence", onlineUserIds: ["u_maya"] });
+    // Two users lit, so that one of them can be taken away again before the
+    // reload. `u_sam` used to be named only in the final assertion, where he
+    // had never appeared in any presence set — and `RowsOnlyBackend` maps
+    // EVERY user to "offline", so that assertion read offline even with
+    // `withLivePresence` deleted outright. It could not fail. Lighting him
+    // first, then dropping him, is what gives it something to be wrong about.
+    backend.emit({ kind: "presence", onlineUserIds: ["u_maya", "u_sam"] });
     await waitFor(() => expect(presenceOf("u_maya")).toBe("online"));
+    await waitFor(() => expect(presenceOf("u_sam")).toBe("online"));
+
+    backend.emit({ kind: "presence", onlineUserIds: ["u_maya"] });
+    await waitFor(() => expect(presenceOf("u_sam")).toBe("offline"));
 
     const before = backend.hydrateCalls;
     backend.emit({ kind: "stale" });
@@ -531,8 +555,11 @@ describe("a reload does not blank presence", () => {
 
     // The reload answered with rows, and rows say nothing about who is here.
     expect(presenceOf("u_maya")).toBe("online");
-    // The other half of the presence rule still holds across it: someone the
-    // channel did not name is offline, so this is not "presence frozen".
+    // And the reload carried the CURRENT set, not an older one: `u_sam` was
+    // online a moment ago and the channel dropped him, so he must still be
+    // dark. This fails if `livePresence` ever held on to a superseded set, or
+    // if the reload re-applied one — which is the failure a blanket "carry the
+    // dots" fix would produce.
     expect(presenceOf("u_sam")).toBe("offline");
   });
 

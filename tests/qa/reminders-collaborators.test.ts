@@ -92,12 +92,44 @@ describe("components/reminders.tsx — the reminder gate includes collaborators"
         collaboratorIds: ["u_maya"],
       })
     );
+    // A task that SHOULD remind u_jonas, so the negative below has a witness.
+    // Without one, nothing in this test proved the component ever mounted:
+    // `StoreProvider` renders its loading screen — no children, so no
+    // `<Reminders/>` and no `tick()` — until `hydrate()` resolves AND React
+    // commits AND passive effects flush, and the only barrier was
+    // `setTimeout(r, 0)`. It happened to be enough, because React's scheduler
+    // uses MessageChannel and drains before a 1 ms-clamped timer, but the test
+    // was one scheduling change away from asserting nothing at all. Waiting
+    // for a reminder that must fire proves the tick really ran.
+    state = addTask(
+      state,
+      scheduledNowTask({
+        id: "t_definitely_mine",
+        projectId: "p_reminders",
+        title: "u_jonas's own task",
+        createdBy: "u_jonas",
+        assigneeId: "u_jonas",
+        collaboratorIds: [],
+      })
+    );
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(asUser(state, "u_jonas")));
 
     render(React.createElement(StoreProvider, null, React.createElement(Reminders)));
 
-    // Give the on-mount tick() a turn, then confirm it never toasted.
-    await new Promise((r) => setTimeout(r, 0));
-    expect(toastMock).not.toHaveBeenCalled();
+    // The witness: once this has fired, `tick()` has demonstrably run.
+    // The task's title is the toast's TITLE; the description carries the
+    // start time.
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        "u_jonas's own task",
+        expect.objectContaining({ description: expect.any(String) })
+      );
+    });
+
+    // And the task that is none of u_jonas's business was not among them.
+    expect(toastMock).not.toHaveBeenCalledWith(
+      "Not u_jonas's task",
+      expect.anything()
+    );
   });
 });

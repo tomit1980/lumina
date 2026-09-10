@@ -289,6 +289,10 @@ export class FailingBackend extends EventBackend {
       : Promise.resolve(value);
   }
 
+  override reset(): Promise<AppState> {
+    return this.run("reset", createSeed());
+  }
+
   override hydrate(): Promise<AppState> {
     // `super.hydrate()` is what counts the call, so it runs either way.
     const stored = super.hydrate();
@@ -507,7 +511,13 @@ export type FailingOp =
   | "saveAttachment"
   | "deleteAttachment"
   | "attachmentUrl"
-  | "readAttachment";
+  | "readAttachment"
+  // `reset` is the one `Backend` method that had no entry here, so
+  // `resetDemo()`'s failure path could not be driven from a test at all —
+  // a latent hole of exactly the shape that has already cost this project
+  // five findings, and the reason `resetDemo` shipped with no rejection
+  // handler.
+  | "reset";
 
 /** Runs a store action inside act() and returns whatever it returned, so
  *  `result.current` reflects the resulting state by the time this resolves.

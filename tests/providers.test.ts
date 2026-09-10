@@ -78,10 +78,24 @@ describe("useUnhandledRejectionToast (components/providers.tsx)", () => {
     });
   });
 
-  it("does not toast for events other than unhandledrejection", () => {
-    render(React.createElement(Harness));
-    window.dispatchEvent(new Event("some-other-event"));
-    expect(toastMock.error).not.toHaveBeenCalled();
+  // What used to be here — dispatching `new Event("some-other-event")` and
+  // asserting no toast — could not fail: an event of one name can never reach
+  // a listener registered for another, so it asserted that
+  // `addEventListener` works rather than anything about this hook. No
+  // plausible regression in the hook turned it red. It is replaced by the
+  // negative that CAN: a rejection arriving after the hook has gone.
+  it("stops toasting once it is unmounted", () => {
+    const { unmount } = render(React.createElement(Harness));
+    // A positive first, so a harness that never worked cannot pass this by
+    // being broken in both directions.
+    dispatchUnhandledRejection(new Error("before unmount"));
+    expect(toastMock.error).toHaveBeenCalledTimes(1);
+
+    unmount();
+    dispatchUnhandledRejection(new Error("after unmount"));
+
+    // Still one: the listener really is gone, not merely asked to go.
+    expect(toastMock.error).toHaveBeenCalledTimes(1);
   });
 
   it("removes its listener on unmount", () => {

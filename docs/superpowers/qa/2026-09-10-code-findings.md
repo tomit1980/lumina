@@ -949,6 +949,27 @@ already in the tree. `SelfEnrollDialog` also has a `busy` flag (`two-factor-dial
 
 ## Judging the tests
 
+> **All six are fixed, and each was proven by mutating the source it protects** — the only
+> check that distinguishes a test from a decoration. What went red, once fixed:
+>
+> | | now catches |
+> |---|---|
+> | T-01 | deleting `if (!ok) return;` from `TaskDialog.save` — the fix-b001 guard it was named for |
+> | T-02 | changing the Supabase cap to 50 MB, the half of its own title it could not see |
+> | T-03 | a trailing reload per event, by letting the window actually elapse |
+> | T-04 | `livePresence` latching the first set it ever sees |
+> | T-05 | the `unhandledrejection` listener never being removed |
+> | T-06 | reminders firing for someone who is neither assignee nor collaborator |
+>
+> One correction to T-01's entry below: the suggested fix — waiting on `toastMock.error` —
+> would **not** have worked. The store's deny toast is synchronous, so that barrier resolves
+> without waiting for the microtask the bug hides behind. A real flush was needed.
+>
+> The `FailingBackend` gap is closed too: `reset` now has a `FailingOp` entry, and
+> `resetDemo` has the rejection handler whose absence that gap concealed — a failing reset
+> was an unhandled rejection reaching only the generic net in `providers.tsx`.
+
+
 The whole unit suite under `tests/` (41 files, 647 tests) was audited specifically for tests
 that **would not fail if the behaviour they protect regressed**. Two are wholly vacuous; three
 more carry an assertion that cannot fail while the test as a whole still can; one is suspect.

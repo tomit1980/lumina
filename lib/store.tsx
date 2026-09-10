@@ -1279,12 +1279,26 @@ export function StoreProvider({
     };
 
     const resetDemo: StoreValue["resetDemo"] = () =>
-      backend.reset().then((fresh) => {
-        // A whole-state landing like any other (QA-114): a write in flight
-        // when the demo is reset must, on failure, re-hydrate rather than
-        // restore its pre-reset snapshot over the fresh workspace.
-        adoptLanded(fresh);
-      });
+      backend.reset().then(
+        (fresh) => {
+          // A whole-state landing like any other (QA-114): a write in flight
+          // when the demo is reset must, on failure, re-hydrate rather than
+          // restore its pre-reset snapshot over the fresh workspace.
+          adoptLanded(fresh);
+        },
+        () => {
+          // This branch did not exist, so a failing reset became an unhandled
+          // rejection caught only by the generic net in providers.tsx — which
+          // says "That last action didn't go through" and names nothing. It
+          // was unreachable from a test too, because `reset` was the one
+          // `Backend` method with no `FailingOp` entry; both are fixed
+          // together, since a handler nobody can drive is how the first one
+          // went missing.
+          toast.error("Couldn't reset", {
+            description: "The demo workspace is unchanged. Try again.",
+          });
+        }
+      );
 
     /** Builds the activity line for a message that carries files. */
     const shareNote = (

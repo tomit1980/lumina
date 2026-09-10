@@ -118,6 +118,20 @@ describe("TaskDialog — save() honesty on a refused write (fix-b001)", () => {
     fireEvent.change(titleInput, { target: { value: "Renamed while racing" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
+    // THE BARRIER, and this test was worthless without it. `save()` yields at
+    // `await updateTask(...)`, so every negative below used to be evaluated
+    // one microtask too early: deleting `if (!ok) return;` fired
+    // `toast.success` and closed the dialog AFTER all three had already run
+    // and passed. `fireEvent` flushes React's queue, not a promise
+    // continuation. Note that waiting on `toastMock.error` — the fix the
+    // findings document suggested — would NOT do: the store's deny toast is
+    // synchronous, so that barrier resolves without waiting for anything.
+    // This one really does drain the microtask queue and the render it
+    // schedules.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     // The store's own deny toast fires ...
     expect(toastMock.error).toHaveBeenCalledWith(
       "Not allowed",
