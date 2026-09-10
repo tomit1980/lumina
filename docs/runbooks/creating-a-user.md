@@ -1,21 +1,23 @@
 # Creating a user
 
-Lumina has no public sign-up. Accounts are created by an admin in the Supabase
-dashboard, and the database turns each new account into a Lumina member
-automatically.
+Lumina has no public sign-up. **Once the workspace has its first admin, you add
+everybody else from inside the app** — Settings → Members → **Add teammate**.
+Type their email, choose a password, pick a role; the account exists
+immediately and they can sign in with it.
 
-This runbook covers three things, in the order you need them:
+The dashboard route below is what you need *before* that is possible, and as a
+fallback if it ever is not:
 
 1. [Turn public sign-ups off](#1-turn-public-sign-ups-off) — do this once, before anything else.
 2. [Promote the first admin](#2-promote-the-first-admin) — do this once, for yourself.
-3. [Add a teammate](#3-add-a-teammate) — do this for every person after that.
+3. [Add a teammate](#3-add-a-teammate) — in the app; by hand only if you must.
 
 Then, when you need it: [Two-factor](#two-factor) — what the app's controls do,
 and the one case you have to handle in the dashboard.
 
-Everything below happens in the Supabase dashboard for the project you are
-running (**lumina-dev** `nsioivydefazicxnozqw` for development; the production
-project is separate — check the ref in the URL before you touch anything).
+Steps 1 and 2 happen in the Supabase dashboard for the project you are running
+(**lumina-dev** `nsioivydefazicxnozqw` for development; the production project
+is separate — check the ref in the URL before you touch anything).
 
 ---
 
@@ -81,17 +83,50 @@ You only ever run this once. After that, admins are made in the app: **Members �
 
 ## 3. Add a teammate
 
-**Authentication → Users → Add user → Create new user**
+### In the app — the normal way
 
-Fill in:
+**Settings → Members → Add teammate.** You need `members.manage`, which Admin
+and Owner have.
+
+| Field | Value |
+|---|---|
+| Email | their real work email |
+| Name | optional; leave it and the trigger derives one from the address |
+| First password | at least 8 characters — you choose it and tell them |
+| Role | any role at or below your own rank |
+
+The account is confirmed on creation, so they can sign in the moment you press
+the button. Send them the address and the password; they change it themselves
+from their account menu.
+
+**You cannot hand out a role above your own.** An Admin adding an Owner is
+refused by name, before the account is created — so there is no half-made user
+left behind. The rule is re-checked server-side from your own token, not just
+hidden in the interface.
+
+**No email is sent.** That is deliberate: Supabase's shared mail service caps
+the free tier at a handful of messages an hour, and an invitation that silently
+does not arrive is worse than a password you read out loud.
+
+Behind the button is the `create-user` Edge Function
+(`supabase/functions/create-user/index.ts`). Creating an account needs the
+service-role key, which bypasses every access rule in the database — a static
+site cannot hold one, so this runs server-side. The button only appears on the
+real backend; the local demo has no server to create anyone on.
+
+### By hand, in the dashboard
+
+Only needed before the first admin exists, or if the function is down.
+
+**Authentication → Users → Add user → Create new user**
 
 | Field | Value |
 |---|---|
 | Email address | their real work email |
-| Password | a temporary one you send them, or use **Send invite** instead |
+| Password | a temporary one you send them |
 | **Auto Confirm User** | **TICK THIS BOX** |
 
-### Auto Confirm User is not optional
+#### Auto Confirm User is not optional
 
 **An unconfirmed user cannot sign in.** This was verified against lumina-dev,
 not assumed: an account created without it exists in the users list, looks
@@ -102,8 +137,8 @@ If you have already created someone without it, you do not need to delete them �
 open the user in **Authentication → Users**, and confirm their email from the
 row's menu (or re-create them with the box ticked).
 
-If you prefer to invite rather than set a password, **Send invite** confirms the
-address as part of the invitation flow and is equally fine.
+The app's own **Add teammate** passes `email_confirm` for you, which is why it
+has no equivalent box and no equivalent trap.
 
 ### What happens automatically
 
@@ -135,10 +170,11 @@ starting point, not a decision.
 
 ### Then
 
-1. Send the person their email address and temporary password (or the invite).
+1. Send the person their email address and the password you chose.
 2. They sign in and can change their own name, handle, title and password.
-3. If they need more than Member access, promote them in the app: **Members →
-   (person) → Role**.
+3. If you added them by hand and they need more than Member access, promote
+   them in the app: **Members → (person) → Role**. Adding them from the app
+   sets the role at creation, so there is nothing to do here.
 
 ---
 

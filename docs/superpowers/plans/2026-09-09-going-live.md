@@ -194,37 +194,57 @@ Then, and only then:
 Doing any of this earlier removes the safety net while it is still needed. The deletion is the one
 step in this plan with no natural undo — every other step is a revert or a re-run.
 
-## After go-live — in-app user invites
+## After go-live — adding people from inside the app — **BUILT 2026-09-10**
 
-**Decided 2026-09-10: build this once the real thing is running, not before.**
+**Decided 2026-09-10: build this once the real thing is running, not before.** Built the same day,
+because the alternative was a colleague added from the Supabase dashboard.
 
-Adding a teammate currently means opening the Supabase dashboard. That is tolerable for the
-second person and steadily less so from the third onward, so it is a real gap rather than a
-preference — but it is also a new secret-holding surface, and a cutover is the wrong week to
-introduce one.
+Adding a teammate meant opening the Supabase dashboard. That was tolerable for the second person
+and steadily less so from the third onward — a real gap rather than a preference, but also a new
+secret-holding surface, which is why it waited until after the cutover rather than during it.
 
 Creating an account needs the `service_role` key, which bypasses every access rule; a static
-export cannot hold it, because anything the browser has, its user has. So this needs a Supabase
-Edge Function:
+export cannot hold it, because anything the browser has, its user has. So it is a Supabase Edge
+Function, `supabase/functions/create-user/index.ts`:
 
 1. verify the caller's JWT and load their profile;
 2. refuse unless they hold `members.manage`;
 3. refuse if the role being assigned outranks the caller's own — Rule 3, applied before the
    account exists rather than after;
-4. `auth.admin.inviteUserByEmail`, then set the new profile's role.
+4. `auth.admin.createUser` with `email_confirm`, then set the new profile's role and name.
 
-**Invite, not create-with-password.** The new person sets their own password, so nobody handles
-somebody else's credential and there is nothing to transmit. It also sidesteps the "Auto Confirm
-User" trap: an accepted invite is confirmed by definition, and an unconfirmed account cannot sign
-in with no visible error.
+**Create-with-password, not invite — reversed 2026-09-10.** This section originally specified
+`inviteUserByEmail`, on the reasoning that the new person sets their own password so nobody
+handles anyone else's credential. Two things overruled it.
 
-Removal is the same function with a `delete` action. The last-holder trigger already refuses to
-let the final Owner or Admin be deleted out of the workspace.
+The first is a dependency the reasoning did not price: invitations go through Supabase's shared
+mail service, capped on the free tier at a handful of messages an hour. The access suite's very
+first run hit "email rate limit exceeded" — which meant the control could only assert that
+authorization had passed, not that a person had actually been added. A control that stops short
+of the thing it is testing is the weakest kind, and here the cap made it the only kind available.
 
-**The tests that matter are the negative ones**, and they must be driven against the deployed
-function rather than through the UI: a Member calling it directly, an Admin trying to invite an
-Owner, and a caller with no token at all. A function that trusts its caller because the interface
-only offers the button to admins is the same class of mistake as a UI-only permission check.
+The second is that the original reasoning conflated two different things. "Nobody should handle
+someone else's credential" is a sound rule about *me* — an assistant should not be typing
+passwords into somebody's account. It says nothing about whether an admin may set a colleague's
+first password in their own workspace, which is an ordinary administrative act that every
+identity system supports. Extending the first rule to forbid the second produced a worse feature
+for no security gain.
+
+The "Auto Confirm User" trap it claimed to sidestep is handled directly instead: the function
+passes `email_confirm: true`, and `tests/rls/create-user-function.test.ts` asserts the new account
+actually signs in — paired with a control proving a wrong password does not, so the assertion is
+about the password rather than the account's existence.
+
+Removal is the same shape of function with a `delete` action, and is still to build. The
+last-holder trigger already refuses to let the final Owner or Admin be deleted out of the
+workspace.
+
+**The tests that matter are the negative ones**, and they are driven against the deployed function
+rather than through the UI: a Member calling it directly, an Admin trying to create an Owner, and
+a caller with no token at all. A function that trusts its caller because the interface only offers
+the button to admins is the same class of mistake as a UI-only permission check.
+
+Nine access tests, green against the deployed dev function.
 
 ## Open items to decide, not discover
 
