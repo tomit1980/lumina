@@ -27,7 +27,66 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      # THE FLIP LIVES HERE. Today this builds the local-storage demo, which
+      # is what `NEXT_PUBLIC_BACKEND` unset means. To point the public site at
+      # production, uncomment the `env:` block below and add the two secrets
+      # under Settings -> Secrets and variables -> Actions:
+      #
+      #   PROD_SUPABASE_URL       https://eshstdmgceohizbevwll.supabase.co
+      #   PROD_SUPABASE_ANON_KEY  the publishable key from Settings -> API
+      #
+      # Both are public by design — the anon key ships inside the browser
+      # bundle and is useless without a session, because row-level security is
+      # what actually guards the data. The service-role key is a different
+      # thing entirely and must NEVER appear here; the check below enforces
+      # that mechanically rather than by memory.
       - run: npm run build
+        # env:
+        #   NEXT_PUBLIC_BACKEND: supabase
+        #   NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+        #   NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+
+      # One check, permanently. A service-role credential reaching `out/`
+      # would be published to a public URL and would bypass every access rule
+      # in the database — the worst outcome available here, and the kind
+      # discovered months later.
+      #
+      # It matches VALUES, not the literal prefixes: supabase-js ships its own
+      # key-format validator containing the string "sb_secret_", so a looser
+      # pattern flags every clean build and gets switched off within a week.
+      # A check that cries wolf is a check nobody keeps.
+      - name: Refuse to publish a build containing a service-role key
+        run: |
+          set -euo pipefail
+          # A real new-style secret key: prefix plus its body.
+          if grep -rlE 'sb_secret_[A-Za-z0-9_-]{16,}' out/ 2>/dev/null; then
+            echo "A service-role key appears in the build output. Refusing to deploy."
+            exit 1
+          fi
+          # A legacy service-role JWT: find every JWT-shaped token, decode the
+          # payload, and look at what the claim actually says. The anon key is
+          # a JWT too, so the shape alone proves nothing — the role does.
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const files = [];
+            (function walk(d){ for (const e of fs.readdirSync(d, {withFileTypes:true})) {
+              const f = path.join(d, e.name);
+              if (e.isDirectory()) walk(f); else files.push(f);
+            }})("out");
+            for (const f of files) {
+              const text = fs.readFileSync(f, "latin1");
+              for (const m of text.matchAll(/eyJ[A-Za-z0-9_-]{10,}\.([A-Za-z0-9_-]{10,})\./g)) {
+                let payload;
+                try { payload = Buffer.from(m[1], "base64url").toString("utf8"); } catch { continue; }
+                if (payload.includes("service_role")) {
+                  console.error("service_role JWT found in " + f);
+                  process.exit(1);
+                }
+              }
+            }
+            console.log("No service-role credential in out/.");
+          '
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
