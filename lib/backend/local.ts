@@ -322,16 +322,16 @@ export class LocalBackend implements Backend {
   // where they start doing work.
 
   /**
-   * The demo has no server to invite anyone to, and no email to send.
+   * The demo has no server to create an account on.
    *
-   * Rejecting rather than pretending: a demo that showed "invitation sent"
+   * Rejecting rather than pretending: a demo that showed "account created"
    * and did nothing would be the exact false-success this codebase keeps
    * removing. The Members screen only offers the button on the Supabase
    * backend, so this is the belt to that braces.
    */
-  inviteUser(): Promise<string> {
+  createUser(): Promise<string> {
     return Promise.reject(
-      new Error("Inviting people needs the real backend — this is the local demo.")
+      new Error("Adding people needs the real backend — this is the local demo.")
     );
   }
 

@@ -195,17 +195,22 @@ interface StoreValue {
   deleteRole: (roleId: string) => Promise<boolean>;
 
   /**
-   * Invite someone to the workspace by email.
+   * Add a teammate: create their account with a password you choose.
    *
-   * Deliberately NOT routed through `commit`: there is no optimistic state to
-   * apply. The invited person has no profile until they accept, so there is
-   * nothing to show on screen and nothing to roll back — inventing a
-   * placeholder member would be a claim the workspace cannot back up.
+   * Deliberately NOT routed through `commit`. There IS a new member, but the
+   * store does not know their profile row — the Edge Function writes it
+   * server-side — so inventing one optimistically would be a guess at data
+   * the workspace already holds. The next reload brings them in properly.
    *
-   * Resolves the error message on failure, `null` on success, so the dialog
-   * can show what the server actually said rather than a generic failure.
+   * Resolves the error message on failure and `null` on success, so the
+   * dialog can show what the server actually said.
    */
-  inviteUser: (email: string, roleId: string) => Promise<string | null>;
+  createUser: (input: {
+    email: string;
+    password: string;
+    roleId: string;
+    name?: string;
+  }) => Promise<string | null>;
 
   /**
    * The board's columns. Owner only — `workspace.statuses` is the one
@@ -1416,30 +1421,35 @@ export function StoreProvider({
       );
     };
 
-    const inviteUser: StoreValue["inviteUser"] = async (email, roleId) => {
+    const createUser: StoreValue["createUser"] = async (input) => {
       const s = stateRef.current;
-      if (!s || !guard("members.manage")) return "Your role can't invite people.";
+      if (!s || !guard("members.manage")) return "Your role can't add people.";
+
+      const email = input.email.trim();
+      if (!email.includes("@")) return "Give a valid email address.";
+      if (input.password.length < 8) return "Use a password of at least 8 characters.";
 
       // Mirrored from the Edge Function for a decent message; the function
-      // re-derives both from the caller's token, because a UI check is a
-      // suggestion and this one is trivially skippable.
-      const role = findRole(s, roleId);
+      // re-derives both from the caller's token, because a check the UI makes
+      // is a check anyone can skip.
+      const role = findRole(s, input.roleId);
       if (!role) return "That role doesn't exist.";
       if (rankOf(role) > rankOf(actorRole(s))) {
-        return `You can't invite someone as ${role.name}.`;
+        return `You can't add someone as ${role.name}.`;
       }
 
       try {
-        await backend.inviteUser(email, roleId);
-        // No optimistic patch: they are not a member until they accept. The
-        // activity line is the honest record of what happened.
+        await backend.createUser({ ...input, email });
+        // No optimistic member: the profile is written server-side and the
+        // store has not seen it. `stale` brings it in — and the activity line
+        // is the honest record in the meantime.
         updateLanded((st) => ({
           ...st,
-          activities: activity(st, "member", `invited ${email}`, WORKSPACE_WIDE),
+          activities: activity(st, "member", `added ${email} as ${role.name}`, WORKSPACE_WIDE),
         }));
         return null;
       } catch (error) {
-        return error instanceof Error ? error.message : "The invitation didn't go through.";
+        return error instanceof Error ? error.message : "The account wasn't created.";
       }
     };
 
@@ -2388,7 +2398,7 @@ export function StoreProvider({
       updateRole,
       setRolePermission,
       deleteRole,
-      inviteUser,
+      createUser,
       createStatus,
       updateStatus,
       deleteStatus,

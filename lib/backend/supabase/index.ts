@@ -203,12 +203,17 @@ export class SupabaseBackend implements Backend {
   /** Crosses to the Edge Function rather than a table. `functions.invoke`
    *  attaches the current session's bearer token itself, which is exactly
    *  what the function authorises against. */
-  async inviteUser(email: string, roleId: string): Promise<string> {
+  async createUser(input: {
+    email: string;
+    password: string;
+    roleId: string;
+    name?: string;
+  }): Promise<string> {
     const client = await this.client();
     const { data, error } = await client.functions.invoke<{
       userId?: string;
       error?: string;
-    }>("invite-user", { body: { email, roleId } });
+    }>("create-user", { body: input });
 
     // A non-2xx from a function arrives as a FunctionsHttpError whose body
     // holds our own message — surface that rather than "Edge Function
@@ -227,7 +232,7 @@ export class SupabaseBackend implements Backend {
       throw new Error(message);
     }
     if (data?.error) throw new Error(data.error);
-    if (!data?.userId) throw new Error("The invitation did not go through.");
+    if (!data?.userId) throw new Error("The account was not created.");
     return data.userId;
   }
 

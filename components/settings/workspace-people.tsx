@@ -36,7 +36,7 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RoleBadge } from "@/components/role-badge";
-import { InviteDialog } from "@/components/invite-dialog";
+import { AddMemberDialog } from "@/components/add-member-dialog";
 import { RoleDialog } from "@/components/role-dialog";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth, type TwoFactorStatus } from "@/lib/auth";
@@ -232,7 +232,7 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
   const roles = state.roles;
 
   const [roleDialogOpen, setRoleDialogOpen] = React.useState(false);
-  const [inviteOpen, setInviteOpen] = React.useState(false);
+  const [addMemberOpen, setAddMemberOpen] = React.useState(false);
   const [editingRole, setEditingRole] = React.useState<RoleDef | undefined>();
 
   const memberCount = (roleId: string) =>
@@ -265,28 +265,27 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
     <>
       {section === "members" && (
         <>
-        {/* Invitations go through an Edge Function, because creating an
-            account needs the service-role key and a browser cannot hold one.
-            Offered only on the real backend: the demo has no server to invite
-            anyone to, and `LocalBackend.inviteUser` rejects rather than
-            pretending. */}
+        {/* Creating an account goes through an Edge Function, because it
+            needs the service-role key and a browser cannot hold one. Offered
+            only on the real backend: the demo has no server to create anyone
+            on, and `LocalBackend.createUser` rejects rather than pretending. */}
         {manageRoles && backendKind === "supabase" && (
           <div className="mb-4 flex items-center justify-between">
             <p className="text-[12px] text-muted-foreground">
-              Invited people set their own password from the email.
+              You choose their first password; they can change it once they&apos;re in.
             </p>
             <Button
               size="sm"
               variant="outline"
               className="h-7 text-xs"
-              onClick={() => setInviteOpen(true)}
+              onClick={() => setAddMemberOpen(true)}
             >
               <Plus className="size-3.5" />
-              Invite
+              Add teammate
             </Button>
           </div>
         )}
-        <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+        <AddMemberDialog open={addMemberOpen} onOpenChange={setAddMemberOpen} />
         <div className="overflow-hidden rounded-xl border">
           {state.users.map((user, i) => {
             const isMe = user.id === currentUser.id;

@@ -294,8 +294,8 @@ export class FailingBackend extends EventBackend {
     return this.run("reset", createSeed());
   }
 
-  override inviteUser(): Promise<string> {
-    return this.run("inviteUser", "u_invited");
+  override createUser(): Promise<string> {
+    return this.run("createUser", "u_added");
   }
 
   override createStatus(status: StatusDef): Promise<StatusDef> {
@@ -539,7 +539,7 @@ export type FailingOp =
   // five findings, and the reason `resetDemo` shipped with no rejection
   // handler.
   | "reset"
-  | "inviteUser"
+  | "createUser"
   // The board's columns (Owner only).
   | "createStatus"
   | "updateStatus"
