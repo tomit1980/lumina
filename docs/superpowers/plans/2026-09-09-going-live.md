@@ -78,7 +78,31 @@ discovered.
 
 ## Tasks
 
-### Task 1 — apply the schema to production, and prove it there
+### Task 1 — apply the schema to production, and prove it there — **DONE 2026-09-10**
+
+**What happened.** Production was confirmed empty first (`migration list` showed every migration
+with an empty `remote`). All 21 applied cleanly in order — the `--include-all` ordering trouble
+this task warned about did not recur. Types regenerated against production are **byte-identical**
+to the development-generated version (`md5 c9ab2f1fd1fc39ea1d16e31094f4d320`), so tables, columns
+and function signatures match exactly.
+
+**What was NOT proven, and this task overstated it.** Byte-identical generated types say nothing
+about RLS: `gen types` does not emit policies. So "the schema matches" is a weaker claim than this
+task assumed, and production's policy *behaviour* remains inferred from the migrations having
+applied without error rather than observed.
+
+**The probe run against production was skipped.** It needs production's service-role key on disk,
+and the decision was that the same migration files applying cleanly to both databases — plus 256
+access tests passing against development — is enough for now. `supabase db diff` would have proved
+it read-only, but it needs Docker for a shadow database, which is not available here. The gap
+closes at Task 4's walkthrough with the two real accounts, and that is now the first place
+production's rules are exercised rather than assumed.
+
+**The CLI was re-linked to development afterwards.** Leaving it on production inverts the guard
+this project has relied on all along: `supabase/.temp/project-ref` reading development is what
+makes an accidental `db push` harmless.
+
+
 
 The rehearsal and the application are one act, performed while production is empty.
 

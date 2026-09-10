@@ -1,0 +1,101 @@
+# Weekly backup of the production database.
+#
+# The free tier has no backups. Without this, a mistake — a bad migration, a
+# delete that took more than intended — is unrecoverable, and the workspace is
+# where a real team keeps its work.
+#
+# THE SECRET THIS NEEDS, and it is worth stating plainly rather than burying
+# in a settings page. `PROD_DB_URL` is a full Postgres connection string for
+# production, which grants far more than the anonymous key already shipped in
+# the browser bundle: it bypasses row-level security entirely. It belongs in
+# repository secrets and nowhere else — never in an env file that a build
+# reads, never echoed to a log. The dump job below never prints it, and
+# `pg_dump` takes it via the environment rather than the command line so it
+# does not appear in a process listing.
+#
+# A DUMP THAT HAS NEVER BEEN RESTORED IS A BELIEF, NOT A BACKUP. The go-live
+# plan gates retiring the demo on restoring one of these into the development
+# project and comparing table lists and row counts against production. That
+# restore is a human step and is deliberately not automated here: a restore
+# that runs unattended into the wrong database is the failure this file exists
+# to prevent.
+name: Weekly backup
+
+on:
+  schedule:
+    # 03:00 UTC on Sundays. Quiet, and far from a working day in any timezone
+    # this team is in.
+    - cron: "0 3 * * 0"
+  # So the first one can be taken and restored without waiting a week.
+  workflow_dispatch:
+
+# The dump is the only thing this workflow does; it needs nothing from the
+# repository beyond the checkout.
+permissions:
+  contents: read
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to run without the connection string
+        env:
+          PROD_DB_URL: ${{ secrets.PROD_DB_URL }}
+        run: |
+          if [ -z "$PROD_DB_URL" ]; then
+            echo "PROD_DB_URL is not set. Add it under Settings -> Secrets and variables -> Actions."
+            echo "Failing rather than uploading an empty artifact that would look like a backup."
+            exit 1
+          fi
+
+      - name: Install a matching pg_dump
+        run: |
+          # Production is Postgres 17. Ubuntu's default client is older, and
+          # an older pg_dump refuses a newer server outright rather than
+          # producing a partial dump — which is the right behaviour, and the
+          # reason this step is explicit instead of hoping.
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          sudo sed -i 's|deb |deb [signed-by=/usr/share/keyrings/pgdg.gpg] |' /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
+      - name: Dump
+        env:
+          PROD_DB_URL: ${{ secrets.PROD_DB_URL }}
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y-%m-%d)"
+          # Via the environment, not the command line: an argument is visible
+          # in a process listing.
+          pg_dump "$PROD_DB_URL" \
+            --format=custom \
+            --no-owner \
+            --no-privileges \
+            --file="lumina-${stamp}.dump"
+          ls -lh "lumina-${stamp}.dump"
+
+      - name: Refuse to keep a dump that is suspiciously small
+        run: |
+          set -euo pipefail
+          file="$(ls lumina-*.dump)"
+          size="$(stat -c%s "$file")"
+          # A dump of a schema with no rows is still tens of kilobytes. A few
+          # hundred bytes means the connection succeeded and produced almost
+          # nothing — which would upload cleanly and look exactly like a
+          # backup until the day it was needed.
+          if [ "$size" -lt 20000 ]; then
+            echo "Dump is only ${size} bytes — refusing to store it as a backup."
+            exit 1
+          fi
+          echo "Dump is ${size} bytes."
+
+      - name: Keep it
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumina-backup
+          path: lumina-*.dump
+          # Long enough that a problem noticed a month later is still
+          # recoverable; short enough that this stays free.
+          retention-days: 90
