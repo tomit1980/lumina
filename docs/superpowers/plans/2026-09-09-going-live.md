@@ -28,6 +28,23 @@ is one environment variable.
 **Precondition:** live updates and presence merged and reviewed. A cutover that ships a
 half-finished feature is how a good migration earns a bad reputation.
 
+## Updated 2026-09-10, before execution
+
+Three figures in this plan went stale between writing it and running it, and are corrected in
+place: fifteen migrations became **21** (storage, the second-factor assurance fix, statuses, the
+Owner role and its correction), and three system roles became **four**.
+
+The substantive change is Task 2. An Owner role now sits above Admin, enforced by four database
+triggers rather than by convention, so "promote the first account to admin" is no longer the right
+bootstrap — see that task.
+
+**A note on the first attempt at Task 1.** The CLI link was run with `npx --prefix`, which changes
+where npx finds the package and NOT the working directory, so it reported success while this repo
+stayed linked to development. The following `migration list` then returned development's 21
+applied migrations — which reads exactly like "production is already migrated". Nothing was
+applied. This is why the task's first step is *confirm production is genuinely empty* rather than
+*apply the migrations*: the check is not ceremony, and the failure it caught looked like success.
+
 ## What this review changed about the first draft
 
 Four things in the draft did not survive scrutiny, and they are the reason this plan is shorter
@@ -66,7 +83,7 @@ discovered.
 The rehearsal and the application are one act, performed while production is empty.
 
 - Confirm production is genuinely empty before touching it.
-- Apply all fifteen migrations in order. **Expect trouble:** migration order is already known to be
+- Apply all **21** migrations in order. **Expect trouble:** migration order is already known to be
   fragile — one file sorts before an earlier-applied one and needed the CLI's `--include-all`
   remedy. Finding the next such problem here is the point.
 - Regenerate `lib/database.types.ts` against production and confirm it is **byte-identical** to the
@@ -83,9 +100,14 @@ remembered.
 - **Turn off public sign-ups first.** Until that is done, anyone reaching the Supabase URL can
   create themselves an account and the trigger will hand them a real member profile.
 - Create both accounts with **Auto Confirm User** ticked — an unconfirmed account cannot sign in.
-- Promote the first to admin with the bootstrap SQL.
-- Verify the three system roles and the `general` channel exist, and that **no seeded content
-  does**. Structure only was the choice; fictional colleagues in a real workspace would be worse
+- Promote the first account to **owner**, not admin, and the second to admin. Owner did not
+  exist when this plan was written. Promoting to owner from the start is what makes the rank
+  rules real in production rather than retrofitted: the admin then genuinely cannot grant
+  themselves `workspace.statuses`, edit the owner role, or promote anyone to owner — which is
+  what tests/rls/rank.test.ts verifies and what nobody would find out otherwise until it
+  mattered.
+- Verify the **four** system roles — owner, admin, member, guest — and the `general` channel
+  exist, and that **no seeded content does**. Structure only was the choice; fictional colleagues in a real workspace would be worse
   than useless.
 
 ### Task 3 — weekly backup
