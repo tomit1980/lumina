@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RoleBadge } from "@/components/role-badge";
+import { InviteDialog } from "@/components/invite-dialog";
 import { RoleDialog } from "@/components/role-dialog";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth, type TwoFactorStatus } from "@/lib/auth";
@@ -231,6 +232,7 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
   const roles = state.roles;
 
   const [roleDialogOpen, setRoleDialogOpen] = React.useState(false);
+  const [inviteOpen, setInviteOpen] = React.useState(false);
   const [editingRole, setEditingRole] = React.useState<RoleDef | undefined>();
 
   const memberCount = (roleId: string) =>
@@ -263,16 +265,28 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
     <>
       {section === "members" && (
         <>
-        {/* Accounts are created in the Supabase dashboard, not here: creating
-            or deleting one needs the service-role key, which cannot ship to a
-            browser in a static export. Saying so is better than offering a
-            button that could never work. */}
+        {/* Invitations go through an Edge Function, because creating an
+            account needs the service-role key and a browser cannot hold one.
+            Offered only on the real backend: the demo has no server to invite
+            anyone to, and `LocalBackend.inviteUser` rejects rather than
+            pretending. */}
         {manageRoles && backendKind === "supabase" && (
-          <p className="mb-4 rounded-lg border border-dashed px-3 py-2 text-[12px] text-muted-foreground">
-            New accounts are created in the Supabase dashboard and arrive here as
-            Members. You can change anyone&apos;s role and two-factor settings below.
-          </p>
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-[12px] text-muted-foreground">
+              Invited people set their own password from the email.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => setInviteOpen(true)}
+            >
+              <Plus className="size-3.5" />
+              Invite
+            </Button>
+          </div>
         )}
+        <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
         <div className="overflow-hidden rounded-xl border">
           {state.users.map((user, i) => {
             const isMe = user.id === currentUser.id;

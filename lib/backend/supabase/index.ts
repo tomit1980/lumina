@@ -200,6 +200,37 @@ export class SupabaseBackend implements Backend {
     return roles.deleteRole(await this.client(), roleId);
   }
 
+  /** Crosses to the Edge Function rather than a table. `functions.invoke`
+   *  attaches the current session's bearer token itself, which is exactly
+   *  what the function authorises against. */
+  async inviteUser(email: string, roleId: string): Promise<string> {
+    const client = await this.client();
+    const { data, error } = await client.functions.invoke<{
+      userId?: string;
+      error?: string;
+    }>("invite-user", { body: { email, roleId } });
+
+    // A non-2xx from a function arrives as a FunctionsHttpError whose body
+    // holds our own message — surface that rather than "Edge Function
+    // returned a non-2xx status code", which tells the user nothing.
+    if (error) {
+      let message = error.message;
+      const response = (error as { context?: { json?: () => Promise<unknown> } }).context;
+      if (response?.json) {
+        try {
+          const body = (await response.json()) as { error?: string };
+          if (body?.error) message = body.error;
+        } catch {
+          // Keep the transport error; the body was not JSON.
+        }
+      }
+      throw new Error(message);
+    }
+    if (data?.error) throw new Error(data.error);
+    if (!data?.userId) throw new Error("The invitation did not go through.");
+    return data.userId;
+  }
+
   async createStatus(status: StatusDef): Promise<StatusDef> {
     return statuses.createStatus(await this.client(), status);
   }

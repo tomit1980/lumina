@@ -195,6 +195,19 @@ interface StoreValue {
   deleteRole: (roleId: string) => Promise<boolean>;
 
   /**
+   * Invite someone to the workspace by email.
+   *
+   * Deliberately NOT routed through `commit`: there is no optimistic state to
+   * apply. The invited person has no profile until they accept, so there is
+   * nothing to show on screen and nothing to roll back — inventing a
+   * placeholder member would be a claim the workspace cannot back up.
+   *
+   * Resolves the error message on failure, `null` on success, so the dialog
+   * can show what the server actually said rather than a generic failure.
+   */
+  inviteUser: (email: string, roleId: string) => Promise<string | null>;
+
+  /**
    * The board's columns. Owner only — `workspace.statuses` is the one
    * permission that separates Owner from Admin.
    *
@@ -1403,6 +1416,33 @@ export function StoreProvider({
       );
     };
 
+    const inviteUser: StoreValue["inviteUser"] = async (email, roleId) => {
+      const s = stateRef.current;
+      if (!s || !guard("members.manage")) return "Your role can't invite people.";
+
+      // Mirrored from the Edge Function for a decent message; the function
+      // re-derives both from the caller's token, because a UI check is a
+      // suggestion and this one is trivially skippable.
+      const role = findRole(s, roleId);
+      if (!role) return "That role doesn't exist.";
+      if (rankOf(role) > rankOf(actorRole(s))) {
+        return `You can't invite someone as ${role.name}.`;
+      }
+
+      try {
+        await backend.inviteUser(email, roleId);
+        // No optimistic patch: they are not a member until they accept. The
+        // activity line is the honest record of what happened.
+        updateLanded((st) => ({
+          ...st,
+          activities: activity(st, "member", `invited ${email}`, WORKSPACE_WIDE),
+        }));
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : "The invitation didn't go through.";
+      }
+    };
+
     // ------------------------------------------------------------------
     // The board's columns. Owner only.
     // ------------------------------------------------------------------
@@ -2348,6 +2388,7 @@ export function StoreProvider({
       updateRole,
       setRolePermission,
       deleteRole,
+      inviteUser,
       createStatus,
       updateStatus,
       deleteStatus,

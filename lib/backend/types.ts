@@ -194,6 +194,19 @@ export interface Backend {
   ): Promise<void>;
   deleteRole(roleId: string): Promise<void>;
 
+  /**
+   * Invite someone to the workspace.
+   *
+   * Not a table write: creating an account needs the service-role key, which
+   * cannot ship to a browser, so this crosses to a Supabase Edge Function
+   * (`supabase/functions/invite-user`). The function re-derives every rule
+   * from the caller's own token — it does not trust that the UI only offered
+   * the button to an admin.
+   *
+   * Resolves the invited user's id. Rejects with a message fit to show.
+   */
+  inviteUser(email: string, roleId: string): Promise<string>;
+
   // The board's columns, workspace-wide. Gated on `workspace.statuses`, which
   // only the Owner role holds — see 20260910006000_owner_role.sql.
   createStatus(status: StatusDef): Promise<StatusDef>;

@@ -30,5 +30,8 @@
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  // `supabase/functions` is Deno, not Next: it imports from `jsr:` and uses
+  // the `Deno` global, neither of which this compiler knows about. Supabase
+  // typechecks and bundles it at deploy time.
+  "exclude": ["node_modules", "supabase/functions"]
 }

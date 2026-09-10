@@ -321,6 +321,20 @@ export class LocalBackend implements Backend {
   // contract's parameters are named and documented. `SupabaseBackend` is
   // where they start doing work.
 
+  /**
+   * The demo has no server to invite anyone to, and no email to send.
+   *
+   * Rejecting rather than pretending: a demo that showed "invitation sent"
+   * and did nothing would be the exact false-success this codebase keeps
+   * removing. The Members screen only offers the button on the Supabase
+   * backend, so this is the belt to that braces.
+   */
+  inviteUser(): Promise<string> {
+    return Promise.reject(
+      new Error("Inviting people needs the real backend — this is the local demo.")
+    );
+  }
+
   /** The board's columns, like everything else here: already in the
    *  `AppState` that `persist` writes as one blob. */
   createStatus(status: StatusDef): Promise<StatusDef> {
