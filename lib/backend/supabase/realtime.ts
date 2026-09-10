@@ -110,6 +110,7 @@ import {
 } from "@supabase/supabase-js";
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
+import { sessionIsAssured } from "./assurance.ts";
 import type { LuminaClient } from "./client";
 import type { Database } from "../../database.types";
 import type { Message } from "../../types";
@@ -179,12 +180,22 @@ function onlineUserIds(channel: RealtimeChannel): string[] {
   return [...ids];
 }
 
-/** Whose session this client currently holds, or null when signed out. */
+/**
+ * Whose session this client currently holds AND may act on, or null.
+ *
+ * "May act on" is the QA-104 half: a password-only (`aal1`) session on an
+ * account with a verified second factor is a real session with a real token,
+ * and it is NOBODY as far as this socket is concerned — see
+ * ./assurance.ts. Both callers below go through this one function so they
+ * cannot disagree: if `attachSession` treated a gated session as nobody while
+ * the blindness check still read the raw session id, every `SUBSCRIBED` would
+ * see `now !== uid` and re-join forever.
+ */
 async function sessionUserId(client: LuminaClient): Promise<string | null> {
   try {
     const { data, error } = await client.auth.getSession();
-    if (error) return null;
-    return data.session?.user.id ?? null;
+    if (error || !data.session) return null;
+    return (await sessionIsAssured(client)) ? data.session.user.id : null;
   } catch {
     return null;
   }
@@ -204,7 +215,14 @@ async function sessionUserId(client: LuminaClient): Promise<string | null> {
  */
 async function attachSession(client: LuminaClient): Promise<string | null> {
   const { data } = await client.auth.getSession().catch(() => ({ data: { session: null } }));
-  const session = data?.session ?? null;
+  const held = data?.session ?? null;
+  // A session behind an unanswered second factor is not one this socket may
+  // carry: joining with its token would authorize a channel — and, through
+  // the `online: true` transition, a whole-workspace hydrate — for someone
+  // who has not finished signing in. `setAuth(null)` rather than skipping the
+  // call, for the same reason the signed-out case does it: the socket must
+  // drop the token, not keep the last one it had.
+  const session = held && (await sessionIsAssured(client)) ? held : null;
   try {
     await client.realtime.setAuth(session?.access_token ?? null);
   } catch (error) {

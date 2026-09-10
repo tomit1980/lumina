@@ -584,6 +584,110 @@ export function StoreProvider({
   const livePresence = React.useRef<ReadonlySet<string> | null>(null);
 
   /**
+   * Every state change that is NOT a `commit` patch lands through one of
+   * these two, so it cannot forget Rule 2.
+   *
+   * `writeSeq` was bumped by hand at five sites and skipped at five others
+   * (QA-102/QA-114) — including, worst of all, inside `commit`'s own rollback,
+   * the function that implements the rule. Bumping is not an optimisation: a
+   * change that lands without it is INVISIBLE to a write already in flight,
+   * whose rollback then restores a snapshot taken before it and erases it with
+   * no error and no toast. Any landing an in-flight write's snapshot predates
+   * has to be counted, whether it came from the server, from a live event, or
+   * from this client adopting a server-assigned id.
+   *
+   * The only adopt that deliberately does NOT go through these is `commit`'s
+   * `adopt(snapshot)` restore, which puts back a state that was already
+   * counted when it was patched.
+   */
+  const adoptLanded = React.useCallback(
+    (next: AppState) => {
+      adopt(next);
+      writeSeq.current += 1;
+    },
+    [adopt]
+  );
+
+  const updateLanded = React.useCallback(
+    (fn: (s: AppState) => AppState) => {
+      update(fn);
+      writeSeq.current += 1;
+    },
+    [update]
+  );
+
+  /**
+   * Resolvers waiting for the last write in flight to settle — see
+   * `whenWritesSettle`. A list rather than a timer: the `stale` path polls on
+   * a 250 ms timer because it is answering an event that may never come
+   * again, but a rollback's reload is answering a promise this store is
+   * already holding, so it can be told exactly when to go.
+   */
+  const idleWaiters = React.useRef<Array<() => void>>([]);
+
+  /** Releases one write's hold on `writeInFlight`, waking anything that was
+   *  waiting for the last of them. Called in BOTH of `commit`'s branches. */
+  const releaseWrite = React.useCallback(() => {
+    writeInFlight.current -= 1;
+    if (writeInFlight.current > 0) return;
+    const waiting = idleWaiters.current;
+    idleWaiters.current = [];
+    for (const wake of waiting) wake();
+  }, []);
+
+  const whenWritesSettle = React.useCallback((): Promise<void> => {
+    if (writeInFlight.current === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      idleWaiters.current.push(resolve);
+    });
+  }, []);
+
+  /** The whole-state reload a failed write asked for, while it is pending;
+   *  null when none is. Shared by every write that fails while it is
+   *  outstanding, so a burst of refusals costs one reload rather than one
+   *  each — they would all be answering the same question. */
+  const pendingReload = React.useRef<Promise<boolean> | null>(null);
+
+  /**
+   * `commit`'s rollback re-hydrate: the fourth whole-state adopt, and the one
+   * that obeyed neither rule (QA-102).
+   *
+   * - **Never land over a write in flight**, exactly as the hydration effect
+   *   and the `stale` reload do. `commit` decrements `writeInFlight` before it
+   *   gets here, so this waits on the OTHER writes: reloading while one is
+   *   unconfirmed replaces its optimistic patch with a server state that does
+   *   not have it yet, and nothing puts it back when it succeeds. Waiting also
+   *   makes the answer better, because a write that lands in the meantime is
+   *   in the state this then fetches.
+   * - **Bump `writeSeq` on adopt** — `adoptLanded` does it.
+   *
+   * Resolves `true` when a fresh state was adopted, `false` when the reload
+   * itself failed and the screen is out of sync.
+   */
+  const reloadAfterFailedWrite = React.useCallback((): Promise<boolean> => {
+    const already = pendingReload.current;
+    if (already) return already;
+    const run = whenWritesSettle()
+      .then(() => backend.hydrate())
+      .then(
+        (fresh) => {
+          // Rows from the server, presence from the channel — the same reason
+          // as the other reload paths: a hydrate cannot know who has a tab
+          // open, so adopting its answer verbatim would blank every dot as a
+          // side effect of one write being refused.
+          adoptLanded(withLivePresence(fresh, livePresence.current));
+          return true;
+        },
+        () => false
+      )
+      .finally(() => {
+        pendingReload.current = null;
+      });
+    pendingReload.current = run;
+    return run;
+  }, [backend, adoptLanded, whenWritesSettle]);
+
+  /**
    * Hydration: the loading screen below shows until the FIRST of these
    * resolves. Re-runs whenever `hydrateAttempt` moves — the retry button, a
    * sign-in, and a reconnect all recover by bumping it.
@@ -623,8 +727,8 @@ export function StoreProvider({
         (next) => {
           if (cancelled) return;
           setHydrateFailed(false);
-          adopt(withLivePresence(next, livePresence.current));
-          writeSeq.current += 1; // Rule 2 — see the block comment above.
+          // Rule 2 — see the block comment above — is `adoptLanded`'s job.
+          adoptLanded(withLivePresence(next, livePresence.current));
         },
         (error: unknown) => {
           if (cancelled) return;
@@ -639,7 +743,7 @@ export function StoreProvider({
       cancelled = true;
       if (waiting !== null) clearTimeout(waiting);
     };
-  }, [backend, adopt, hydrateAttempt]);
+  }, [backend, adoptLanded, hydrateAttempt]);
 
   /**
    * The apply core: everything the server pushes enters `AppState` here, and
@@ -676,13 +780,12 @@ export function StoreProvider({
           // Only `messages` is touched, so the activity feed's 60-entry cap
           // (MAX_ACTIVITIES) cannot be breached from here; the `stale` path
           // below re-reads a capped feed from the backend.
-          update((s) => ({ ...s, messages: [...s.messages, message] }));
-          // Rule 2, and the whole reason this counter is not named
+          // `updateLanded`, and the whole reason this counter is not named
           // `optimisticSeq`. A write already in flight took its number before
-          // this landed; bumping here is what tells its rollback that the
-          // state it snapshotted is no longer the state on screen, so it
-          // re-hydrates instead of rewinding this message away.
-          writeSeq.current += 1;
+          // this landed; the bump is what tells its rollback that the state it
+          // snapshotted is no longer the state on screen, so it re-hydrates
+          // instead of rewinding this message away.
+          updateLanded((s) => ({ ...s, messages: [...s.messages, message] }));
           return;
         }
         case "stale": {
@@ -708,8 +811,8 @@ export function StoreProvider({
                 // Rows from the server, presence from the channel — see
                 // `withLivePresence`. Without it this reload, which most
                 // workspace changes end in, blanks every dot.
-                adopt(withLivePresence(fresh, livePresence.current));
-                writeSeq.current += 1; // Rule 2, for a whole-state landing.
+                // Rule 2, for a whole-state landing: `adoptLanded`.
+                adoptLanded(withLivePresence(fresh, livePresence.current));
               },
               (error: unknown) => {
                 // Nothing is undone and nothing is claimed: the screen keeps
@@ -737,17 +840,16 @@ export function StoreProvider({
           // workspace did — at sign-in this event lands on the signed-out
           // shell, whose user list contains nobody it names.
           livePresence.current = online;
-          update((s) => ({
+          // `updateLanded`, same reason as `message-insert`: a write in flight
+          // when this lands must re-hydrate on failure rather than have its
+          // rollback silently restore a snapshot with stale presence in it.
+          updateLanded((s) => ({
             ...s,
             users: s.users.map((u) => ({
               ...u,
               presence: online.has(u.id) ? "online" : "offline",
             })),
           }));
-          // Rule 2, same reason as `message-insert`: a write in flight when
-          // this lands must re-hydrate on failure rather than have its
-          // rollback silently restore a snapshot with stale presence in it.
-          writeSeq.current += 1;
           return;
         }
         case "connection": {
@@ -787,7 +889,7 @@ export function StoreProvider({
           return;
       }
     },
-    [backend, adopt, update]
+    [backend, adoptLanded, updateLanded]
   );
 
   React.useEffect(() => {
@@ -873,7 +975,10 @@ export function StoreProvider({
       ).then((refused) => {
         const drop = new Set(refused.filter((id): id is string => id !== null));
         if (drop.size === 0) return;
-        update((s) => ({
+        // `updateLanded`: the server refused these lines, so a rollback that
+        // restored a snapshot taken before this correction would put them
+        // back on screen — the one thing this function exists to prevent.
+        updateLanded((s) => ({
           ...s,
           activities: s.activities.filter((a) => !drop.has(a.id)),
         }));
@@ -902,10 +1007,12 @@ export function StoreProvider({
      *    it cannot change the action's result, and it cannot fail the write.
      *
      * Rollback rule: if no later optimistic write landed while `op` was in
-     * flight (`writeSeq` still holds this write's number), the snapshot is
-     * restored exactly. If one did, restoring would silently discard it — so
-     * the whole `AppState` is re-hydrated from the backend instead of
-     * guessing at an inverse patch.
+     * flight (`writeSeq` still holds this write's number) and no other failed
+     * write has already asked for a reload, the snapshot is restored exactly.
+     * Otherwise restoring would silently discard what landed — so the whole
+     * `AppState` is re-hydrated from the backend (`reloadAfterFailedWrite`,
+     * which obeys the same two rules every other whole-state landing does)
+     * instead of guessing at an inverse patch.
      */
     function commit<R, T>(
       patch: (s: AppState) => AppState,
@@ -946,38 +1053,36 @@ export function StoreProvider({
       writeInFlight.current += 1;
       return op().then(
         (result) => {
-          writeInFlight.current -= 1;
+          releaseWrite();
           const value = outcome.ok(result);
           if (logged.length === 0) return value;
           return logActivities(logged).then(() => value);
         },
         () => {
-          writeInFlight.current -= 1;
+          releaseWrite();
           toast.error("Couldn't save", {
             description: `We couldn't ${outcome.describe}. ${
               outcome.undone ?? "Your change has been undone."
             }`,
           });
+          // Unchanged, and it stays exactly right BECAUSE the re-hydrate
+          // below now bumps `writeSeq` (QA-102): a restore can no longer land
+          // on top of a reload, since any write still in flight when one
+          // lands finds its number moved and takes the branch below instead.
+          // Restoring is also still the honest answer when this is the only
+          // thing that happened — including when the reload itself fails.
           if (writeSeq.current === seq) {
             adopt(snapshot);
             return outcome.failed;
           }
-          return backend.hydrate().then(
-            (fresh) => {
-              // Rows from the server, presence from the channel — the same
-              // reason as the reload paths: a hydrate cannot know who has a
-              // tab open, so adopting its answer verbatim would blank every
-              // dot as a side effect of one write being refused.
-              adopt(withLivePresence(fresh, livePresence.current));
-              return outcome.failed;
-            },
-            () => {
+          return reloadAfterFailedWrite().then((reloaded) => {
+            if (!reloaded) {
               toast.error("Out of sync", {
                 description: "Reload the page to see the current workspace.",
               });
-              return outcome.failed;
             }
-          );
+            return outcome.failed;
+          });
         }
       );
     }
@@ -1175,7 +1280,10 @@ export function StoreProvider({
 
     const resetDemo: StoreValue["resetDemo"] = () =>
       backend.reset().then((fresh) => {
-        adopt(fresh);
+        // A whole-state landing like any other (QA-114): a write in flight
+        // when the demo is reset must, on failure, re-hydrate rather than
+        // restore its pre-reset snapshot over the fresh workspace.
+        adoptLanded(fresh);
       });
 
     /** Builds the activity line for a message that carries files. */
@@ -1271,7 +1379,10 @@ export function StoreProvider({
      */
     const adoptDmId = (optimisticId: string, row: DM) => {
       if (row.id === optimisticId) return;
-      update((st) => {
+      // `updateLanded`: this renames a conversation everywhere it was
+      // written, so a concurrent write's rollback restoring a snapshot taken
+      // before it would resurrect the optimistic id the server never had.
+      updateLanded((st) => {
         const oldKey = `${st.currentUserId}:${optimisticId}`;
         const { [oldKey]: readAt, ...lastRead } = st.lastRead;
         return {
@@ -1773,7 +1884,9 @@ export function StoreProvider({
             // show. Matched by id, so a task deleted while the write was in
             // flight is simply not found.
             if (created.order !== task.order) {
-              update((s) => ({
+              // `updateLanded`: the server's position, not a guess — a
+              // concurrent write's rollback must not put the guess back.
+              updateLanded((s) => ({
                 ...s,
                 tasks: s.tasks.map((t) =>
                   t.id === created.id ? { ...t, order: created.order } : t
@@ -1975,7 +2088,7 @@ export function StoreProvider({
       moveTask,
       deleteTask,
     };
-  }, [update, adopt, backend]);
+  }, [update, adopt, updateLanded, adoptLanded, releaseWrite, reloadAfterFailedWrite, backend]);
 
   if (!state) {
     // Failure, not a slow load: say so, and give the user something to press.

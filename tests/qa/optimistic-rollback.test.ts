@@ -18,7 +18,7 @@
 // The doubles live in ./_support: `FailingBackend` rejects one named
 // operation and behaves like `LocalBackend` for the rest.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup } from "@testing-library/react";
+import { act, cleanup, waitFor } from "@testing-library/react";
 
 const { toastMock } = vi.hoisted(() => ({
   toastMock: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
@@ -26,6 +26,7 @@ const { toastMock } = vi.hoisted(() => ({
 vi.mock("sonner", () => ({ toast: toastMock }));
 
 import {
+  EventBackend,
   FailingBackend,
   addProject,
   asUser,
@@ -36,7 +37,7 @@ import {
   type FailingOp,
   type Store,
 } from "./_support";
-import type { AppState } from "@/lib/types";
+import type { AppState, Message, Task } from "@/lib/types";
 
 afterEach(() => {
   cleanup();
@@ -333,6 +334,256 @@ describe("a rejection with a later write already landed re-hydrates instead of r
   });
 });
 
+// ---------------------------------------------------------------------
+// QA-102 — TWO WRITES IN FLIGHT AT ONCE.
+//
+// Everything above drives one write at a time (the `serverTruth` pair drives
+// two, but only one of them fails), and one write can never show this: the
+// rollback rule's failure mode needs a SECOND write that took its number
+// after something landed and settles after the first one has already asked
+// for a reload. `commit`'s re-hydrate obeyed neither rule the other three
+// whole-state adopts obey — it did not bump `writeSeq` and it did not wait
+// for the writes still in flight — so:
+//
+//  - the second failure saw its own number unchanged, concluded nothing had
+//    landed, and restored a snapshot taken BEFORE the reload, silently
+//    discarding everything the reload recovered;
+//  - and while it was in flight, the un-gated reload landed on top of it, so
+//    a second write that SUCCEEDED had its optimistic patch wiped with
+//    nothing to put it back.
+//
+// One test for each half. Both need the writes held open by hand, which is
+// what `TwoInFlightBackend` is for.
+// ---------------------------------------------------------------------
+describe("two writes in flight at once", () => {
+  /** The project only a reload can produce — it is in no snapshot any write
+   *  could have taken, so "re-hydrated" cannot be confused with "restored". */
+  const SERVER_ONLY = "p_only_the_server_knows";
+
+  /** A colleague's message, delivered while W1 is in flight. This is the
+   *  bump: it lands between the two writes taking their numbers, which is the
+   *  only ordering that makes the second one believe nothing has landed. */
+  const LIVE: Message = {
+    id: "m_from_a_colleague",
+    channelId: CHANNEL,
+    authorId: "u_maya",
+    content: "landed between the two writes",
+    createdAt: Date.now(),
+    reactions: [],
+    attachments: [],
+  };
+
+  /**
+   * A backend that holds `sendMessage` and `createTask` open until the test
+   * settles each by hand — the only way to have two writes genuinely in
+   * flight at the same time — and whose `hydrate()` answers with what the
+   * SERVER knows rather than what the screen shows:
+   *
+   *  - a marker project from the second call on, so a reload is visible;
+   *  - plus every task it actually ACCEPTED. That last part is what makes the
+   *    successful-neighbour test honest: a real reload returns the write that
+   *    landed while it was waiting, and returns nothing for a write it
+   *    refused, so the assertion is about the store's ordering rather than
+   *    about a double that always answers the same thing.
+   */
+  class TwoInFlightBackend extends EventBackend {
+    private readonly gates = new Map<
+      string,
+      { resolve: () => void; reject: (error: Error) => void }
+    >();
+    private readonly accepted: Task[] = [];
+    /** Reload answers this backend is sitting on — see `holdReloads`. */
+    private readonly heldReloads: Array<(state: AppState) => void> = [];
+
+    /** While true, every reload (`hydrate()` from the second call on) is held
+     *  open until `releaseReload()`. That window — the reload issued, not yet
+     *  landed — is the only place a write can take a `writeSeq` number that
+     *  the reload will invalidate. */
+    holdReloads = false;
+
+    constructor(private readonly server: AppState) {
+      super();
+    }
+
+    /** What the server would answer: the workspace, the marker project, and
+     *  every task this backend actually accepted. */
+    private truth(): AppState {
+      const base = clone(this.server);
+      return addProject({ ...base, tasks: [...base.tasks, ...clone(this.accepted)] }, {
+        id: SERVER_ONLY,
+        name: "From the server",
+        createdBy: "u_vlad",
+      });
+    }
+
+    releaseReload(): void {
+      const waiting = this.heldReloads.shift();
+      if (!waiting) throw new Error("no reload is in flight");
+      waiting(this.truth());
+    }
+
+    private gate(name: string): Promise<void> {
+      return new Promise<void>((resolve, reject) => {
+        this.gates.set(name, { resolve, reject });
+      });
+    }
+
+    /** Lets one held write finish. Throws rather than no-opping if the write
+     *  is not actually in flight — a test that settles nothing would
+     *  otherwise assert against a store where nothing ever happened. */
+    settle(name: "sendMessage" | "createTask", ok: boolean): void {
+      const gate = this.gates.get(name);
+      if (!gate) throw new Error(`${name} is not in flight`);
+      this.gates.delete(name);
+      if (ok) gate.resolve();
+      else gate.reject(new Error(`${name} refused`));
+    }
+
+    override hydrate(): Promise<AppState> {
+      this.hydrateCalls += 1;
+      if (this.hydrateCalls === 1) return Promise.resolve(clone(this.server));
+      if (!this.holdReloads) return Promise.resolve(this.truth());
+      return new Promise<AppState>((resolve) => {
+        this.heldReloads.push(resolve);
+      });
+    }
+
+    override sendMessage(message: Message): Promise<Message> {
+      return this.gate("sendMessage").then(() => message);
+    }
+
+    override createTask(task: Task): Promise<Task> {
+      return this.gate("createTask").then(() => {
+        this.accepted.push(task);
+        return task;
+      });
+    }
+  }
+
+  /** Starts W1, lands a live event on top of it, then starts W2 — so W2's
+   *  `writeSeq` number is taken AFTER the bump and W1's is from before it. */
+  async function twoInFlight() {
+    const backend = new TwoInFlightBackend(adminState());
+    const { result } = await mount(adminState(), backend);
+    expect(backend.hydrateCalls).toBe(1);
+
+    let w1!: Promise<boolean>;
+    act(() => {
+      w1 = result.current.sendMessage(CHANNEL, "w1");
+    });
+
+    backend.emit({ kind: "message-insert", message: LIVE });
+    await waitFor(() => {
+      expect(result.current.state.messages.some((m) => m.id === LIVE.id)).toBe(true);
+    });
+
+    let w2!: Promise<Task | null>;
+    act(() => {
+      w2 = result.current.createTask(taskInput("w2"));
+    });
+
+    return { backend, result, w1, w2 };
+  }
+
+  it("the second failure does not discard what the first one's reload recovered", async () => {
+    const { backend, result, w1, w2 } = await twoInFlight();
+
+    // W1 fails first. Its snapshot predates the live message, so it must
+    // re-hydrate rather than restore — and that reload has to wait, because
+    // W2 is still in flight.
+    await act(async () => {
+      backend.settle("sendMessage", false);
+    });
+
+    // W2 fails second, reading a `writeSeq` its own write set and nothing has
+    // touched since. Restoring here is the bug: its snapshot predates the
+    // reload W1 has already committed to.
+    await act(async () => {
+      backend.settle("createTask", false);
+      await Promise.all([w1, w2]);
+    });
+
+    expect(await w1).toBe(false);
+    expect(await w2).toBeNull();
+    expect(lastErrorToast()?.[0]).toBe("Couldn't save");
+    // One reload answered both failures...
+    expect(backend.hydrateCalls).toBe(2);
+    // ...and the second rollback did not throw it away.
+    expect(result.current.state.projects.some((p) => p.id === SERVER_ONLY)).toBe(true);
+    // Neither failed write is still claiming to have been saved.
+    expect(result.current.state.messages.some((m) => m.content === "w1")).toBe(false);
+    expect(result.current.state.tasks.some((t) => t.title === "w2")).toBe(false);
+  });
+
+  it("the reload does not land on top of the write still in flight beside it", async () => {
+    const { backend, result, w1, w2 } = await twoInFlight();
+
+    await act(async () => {
+      backend.settle("sendMessage", false);
+    });
+
+    // This one SUCCEEDS. A reload issued while it was in flight would have
+    // replaced its optimistic card with a server state that did not have it
+    // yet, and nothing would put it back — the card vanishes moments after
+    // the user is told it was created.
+    await act(async () => {
+      backend.settle("createTask", true);
+      await Promise.all([w1, w2]);
+    });
+
+    expect(await w2).not.toBeNull();
+    expect(backend.hydrateCalls).toBe(2);
+    expect(result.current.state.projects.some((p) => p.id === SERVER_ONLY)).toBe(true);
+    expect(result.current.state.tasks.some((t) => t.title === "w2")).toBe(true);
+  });
+
+  it("a write that began while the reload was in flight cannot restore over it", async () => {
+    // This is the half the `writeSeq` bump answers, and the only window in
+    // which it can be seen: the reload has been ISSUED — so it is past the
+    // wait for the writes in flight — but has not LANDED. A write that starts
+    // here takes a number the reload is about to invalidate. If the reload
+    // adopts without bumping, that write's failure sees its own number
+    // unchanged, concludes nothing landed, and rewinds the whole workspace to
+    // a snapshot from before the reload.
+    const { backend, result, w1, w2 } = await twoInFlight();
+    backend.holdReloads = true;
+
+    await act(async () => {
+      backend.settle("sendMessage", false);
+    });
+    await act(async () => {
+      backend.settle("createTask", false);
+    });
+    // Issued, and sitting unanswered.
+    expect(backend.hydrateCalls).toBe(2);
+    expect(result.current.state.projects.some((p) => p.id === SERVER_ONLY)).toBe(false);
+
+    let w3!: Promise<boolean>;
+    act(() => {
+      w3 = result.current.sendMessage(CHANNEL, "w3");
+    });
+
+    backend.holdReloads = false;
+    await act(async () => {
+      backend.releaseReload();
+      await Promise.all([w1, w2]);
+    });
+    expect(result.current.state.projects.some((p) => p.id === SERVER_ONLY)).toBe(true);
+
+    await act(async () => {
+      backend.settle("sendMessage", false);
+      await w3;
+    });
+
+    expect(await w3).toBe(false);
+    // It asked the backend what is true rather than rewinding to its own
+    // snapshot...
+    expect(backend.hydrateCalls).toBe(3);
+    // ...so what the reload recovered is still there.
+    expect(result.current.state.projects.some((p) => p.id === SERVER_ONLY)).toBe(true);
+    expect(result.current.state.messages.some((m) => m.content === "w3")).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------
 // Deleting must not claim success for a write the backend refused.

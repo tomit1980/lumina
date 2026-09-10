@@ -46,6 +46,12 @@ function fakeClient(opts: {
    *  then filtered away by roles_write" — which a single per-table fixture
    *  cannot express. */
   emptyAfterFirst?: string[];
+  /** What `auth.mfa.getAuthenticatorAssuranceLevel()` answers. Omitted, the
+   *  double has no `mfa` at all — which is how every test above it ran before
+   *  QA-104, and which must keep reading as "assured" (see
+   *  lib/backend/supabase/assurance.ts: this predicate may never be the thing
+   *  that locks a working client out). */
+  assurance?: { currentLevel: string | null; nextLevel: string | null };
 } = {}) {
   const issued: string[] = [];
   /** Every write this client was handed, so a test can assert what a backend
@@ -187,6 +193,16 @@ function fakeClient(opts: {
             : { data: { session: { user: { id: opts.userId ?? ME } } }, error: null }
         );
       },
+      ...(opts.assurance
+        ? {
+            mfa: {
+              getAuthenticatorAssuranceLevel: () => {
+                issued.push("auth.mfa");
+                return Promise.resolve({ data: opts.assurance, error: null });
+              },
+            },
+          }
+        : {}),
     },
     rpcArgs,
     rpc: (name: string, args?: unknown) => {
@@ -257,10 +273,17 @@ describe("hydrateWorkspace — the query plan", () => {
   it("issues every select before awaiting any of them", async () => {
     const fake = fakeClient();
     const pending = hydrateWorkspace(asClient(fake));
-    // Synchronous check, before the first await resolves: a sequential
+    // Nothing yet: QA-104 put one local check in front of the plan (is this
+    // session past its second factor?), and it has to answer BEFORE anything
+    // is read rather than after.
+    expect(fake.issued).toHaveLength(0);
+    // Microtasks only — no timers, and bounded, so this cannot become a
+    // sleep. The check is local (it reads the session, not the network).
+    for (let i = 0; i < 10 && fake.issued.length === 0; i++) await Promise.resolve();
+    // And then the whole plan goes out in one go: a sequential
     // implementation would have issued exactly one request by now. This is
-    // the whole point — sign-in latency to a distant region is one round
-    // trip, not nineteen.
+    // the point — sign-in latency to a distant region is one round trip, not
+    // nineteen.
     expect(fake.issued).toHaveLength(TABLES.length + 1);
     await pending;
   });
@@ -362,6 +385,47 @@ describe("hydrateWorkspace — failure", () => {
     const state = await hydrateWorkspace(asClient(fakeClient()));
     expect(state.currentUserId).toBe(ME);
     expect(state.users).toEqual([]);
+  });
+
+  // QA-104. `signInWithPassword` resolves BEFORE the TOTP step, so the client
+  // holds a real, PostgREST-accepted token while the login screen is still
+  // up. This used to fetch the entire workspace with it — 19 selects — the
+  // moment the realtime socket reported itself connected.
+  it("reads NOTHING for a password-only session on an account with a verified factor", async () => {
+    const fake = fakeClient({ assurance: { currentLevel: "aal1", nextLevel: "aal2" } });
+
+    const state = await hydrateWorkspace(asClient(fake));
+
+    // Not one select was issued — asked BEFORE the queries, not after. A
+    // check that discarded the answer afterwards would have leaked the rows
+    // into the tab's heap and its network log anyway.
+    expect(fake.issued).toEqual(["auth.mfa"]);
+    expect(state.currentUserId).toBe("");
+    expect(state.messages).toEqual([]);
+    expect(state.projects).toEqual([]);
+  });
+
+  it("POSITIVE CONTROL: an aal1 session with no second factor to answer reads everything", async () => {
+    // The half that must not go wrong — almost every account, including every
+    // one the RLS suite signs in as, is `aal1` forever because it has no
+    // verified factor. supabase-js reports that as current === next.
+    const fake = fakeClient({ assurance: { currentLevel: "aal1", nextLevel: "aal1" } });
+
+    const state = await hydrateWorkspace(asClient(fake));
+
+    expect(state.currentUserId).toBe(ME);
+    expect(fake.issued).toContain("messages");
+    expect(fake.issued).toContain("projects");
+    expect(fake.issued).toContain("auth.getUser");
+  });
+
+  it("POSITIVE CONTROL: an aal2 session reads everything", async () => {
+    const fake = fakeClient({ assurance: { currentLevel: "aal2", nextLevel: "aal2" } });
+
+    const state = await hydrateWorkspace(asClient(fake));
+
+    expect(state.currentUserId).toBe(ME);
+    expect(fake.issued).toContain("messages");
   });
 });
 

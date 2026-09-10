@@ -9,6 +9,13 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // `lib/backend/supabase/realtime.ts` is imported and run directly by
+    // tests/probes/realtime_auth_probe.mjs, under Node's own type stripping,
+    // which does no extension guessing. Every other relative import in that
+    // file is `import type` and erased before Node sees it; `./assurance.ts`
+    // is the first one that survives to runtime, so it has to carry the
+    // extension the probe's loader needs. Next compiles it either way.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",

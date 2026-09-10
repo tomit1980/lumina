@@ -20,6 +20,7 @@
 import { toAppState, type HydrateRows,
   signedOutState,
 } from "./mapping";
+import { sessionIsAssured } from "./assurance.ts";
 import type { LuminaClient } from "./client";
 import type { AppState } from "../../types";
 
@@ -53,6 +54,16 @@ function unwrap<T>(label: string, result: { data: T[] | null; error: { message: 
  * colleagues in front of a real user; `StoreProvider` shows a retry instead.
  */
 export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> {
+  // QA-104, and BEFORE the selects rather than after them, which is the whole
+  // point: a password-only session on an account with a verified second
+  // factor holds a token PostgREST accepts, so asking first and discarding
+  // the answer later would still have fetched the workspace. A session behind
+  // an unanswered factor gets exactly what a signed-out visitor gets — the
+  // empty shell — and `AuthGate` is already showing them the login screen.
+  // See ./assurance.ts; the policy that refuses the same session server-side
+  // is supabase/migrations/20260910004000_require_assurance.sql.
+  if (!(await sessionIsAssured(client))) return signedOutState();
+
   const [
     auth,
     profiles,
