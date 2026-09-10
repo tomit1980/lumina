@@ -38,6 +38,47 @@ export function useTaskDnd(tasks: Task[]) {
     return map;
   }, [tasks]);
 
+  /**
+   * Moves issued by this drag, in order, with repeats dropped (QA-118).
+   *
+   * `onDragOver` fires on every transition into a different column and used
+   * to call `void moveTask(...)` there and then: no ordering, no
+   * cancellation, no coalescing. Dragging a card across three columns issued
+   * three `move_task` RPCs as independent HTTP requests, so they could arrive
+   * out of order and the last to ARRIVE won — leaving the board showing a
+   * column the user merely passed through rather than the one they dropped
+   * on, once the next reload landed. That is the shape people report as "it
+   * jumped back on its own". `commit`'s `writeSeq` orders the store's
+   * snapshots; it does not order the network.
+   *
+   * Each RPC also publishes a `tasks` change to every connected client, so
+   * one drag cost every other browser several coalesced whole-workspace
+   * reloads.
+   *
+   * Chaining is what fixes the ordering — the next call is not issued until
+   * the previous one settles, so the server sees them in the order the user
+   * made them — and `lastSent` is what stops a hesitation over a boundary
+   * from re-issuing the move it just made. A failure does not break the
+   * chain: the store has already toasted and rolled back, and the rest of
+   * the drag should still be delivered.
+   */
+  const queue = React.useRef<Promise<unknown>>(Promise.resolve());
+  const lastSent = React.useRef<{ id: string; status: TaskStatus; index: number } | null>(
+    null
+  );
+
+  const enqueueMove = (id: string, status: TaskStatus, index: number) => {
+    const previous = lastSent.current;
+    if (previous && previous.id === id && previous.status === status && previous.index === index) {
+      return;
+    }
+    lastSent.current = { id, status, index };
+    queue.current = queue.current.then(
+      () => moveTask(id, status, index),
+      () => moveTask(id, status, index)
+    );
+  };
+
   const findStatus = (id: string): TaskStatus | null => {
     if (id.startsWith(COLUMN_PREFIX)) {
       return id.slice(COLUMN_PREFIX.length) as TaskStatus;
@@ -46,6 +87,8 @@ export function useTaskDnd(tasks: Task[]) {
   };
 
   const onDragStart = (event: DragStartEvent) => {
+    // A new drag makes no claim about what the last one sent.
+    lastSent.current = null;
     setActiveTask(tasks.find((t) => t.id === event.active.id) ?? null);
   };
 
@@ -66,7 +109,7 @@ export function useTaskDnd(tasks: Task[]) {
     const overIndex = overId.startsWith(COLUMN_PREFIX)
       ? overColumn.length
       : overColumn.findIndex((t) => t.id === overId);
-    void moveTask(activeId, overStatus, overIndex < 0 ? overColumn.length : overIndex);
+    enqueueMove(activeId, overStatus, overIndex < 0 ? overColumn.length : overIndex);
   };
 
   const onDragEnd = (event: DragEndEvent) => {
@@ -84,10 +127,13 @@ export function useTaskDnd(tasks: Task[]) {
     // Reorder within the same status.
     const column = byStatus[overStatus];
     const overIndex = column.findIndex((t) => t.id === overId);
-    if (overIndex >= 0) void moveTask(activeId, overStatus, overIndex);
+    if (overIndex >= 0) enqueueMove(activeId, overStatus, overIndex);
   };
 
-  const onDragCancel = () => setActiveTask(null);
+  const onDragCancel = () => {
+    lastSent.current = null;
+    setActiveTask(null);
+  };
 
   return {
     sensors,

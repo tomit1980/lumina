@@ -21,7 +21,7 @@ import type { MessageAttachment } from "@/lib/types";
  * body. Nothing else about the rendering changed.
  */
 function MessageAttachmentItem({ att }: { att: MessageAttachment }) {
-  const { state } = useStore();
+  const { state, canSeeProject } = useStore();
   const file = resolveMessageAttachment(state, att);
   const src = useAttachmentUrl(file?.dataUrl ?? "").url;
   const download = useAttachmentUrl(file?.dataUrl ?? "", file?.name);
@@ -29,14 +29,38 @@ function MessageAttachmentItem({ att }: { att: MessageAttachment }) {
   const project = att.sourceProjectId
     ? state.projects.find((p) => p.id === att.sourceProjectId)
     : undefined;
-  const source = project && (
-    <Link
-      href={projectHref(project.id)}
-      className="text-[11px] text-muted-foreground hover:underline"
-    >
-      from {project.emoji} {project.name}
-    </Link>
-  );
+  /**
+   * Whether THIS reader can follow a link to that project (QA-121).
+   *
+   * Sharing a file out of a restricted project into a channel is a supported
+   * flow and is meant to work — lib/attachments.ts says so explicitly — but
+   * both links here were built from `sourceProjectId` with no check for the
+   * reader. Following one landed them on "This project is restricted — ask an
+   * admin to invite you if you need access", about a file that was sitting
+   * right there in the message and that they were entirely allowed to have.
+   * The app telling someone they may not see something they may see is worse
+   * than offering no link at all.
+   *
+   * The file itself stays exactly as available as it was: only the navigation
+   * to a place they cannot go is withheld.
+   */
+  const canFollow = project !== undefined && canSeeProject(project);
+  const source =
+    project &&
+    (canFollow ? (
+      <Link
+        href={projectHref(project.id)}
+        className="text-[11px] text-muted-foreground hover:underline"
+      >
+        from {project.emoji} {project.name}
+      </Link>
+    ) : (
+      // Named, not linked: the provenance is still useful, and it is the
+      // truth. It is the destination that is closed to them.
+      <span className="text-[11px] text-muted-foreground">
+        from {project.emoji} {project.name}
+      </span>
+    ));
 
   if (!file) {
     return (
@@ -80,7 +104,9 @@ function MessageAttachmentItem({ att }: { att: MessageAttachment }) {
   const kind = documentKind(file);
   // Files that live on a project open in Lumina's editor/viewer.
   const openHref =
-    att.sourceProjectId && canOpen(kind) ? fileHref(att.sourceProjectId, file.id) : null;
+    att.sourceProjectId && canOpen(kind) && canFollow
+      ? fileHref(att.sourceProjectId, file.id)
+      : null;
   const body = (
     <>
       <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">

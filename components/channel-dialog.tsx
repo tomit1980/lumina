@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+
+import { useSubmitOnce } from "@/components/use-submit-once";
 import { useRouter } from "next/navigation";
 import { Hash, Lock } from "lucide-react";
 import { toast } from "sonner";
@@ -44,7 +46,7 @@ export function ChannelDialog() {
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-_]/g, "");
 
-  const create = async () => {
+  const createOnce = async () => {
     if (!slug) {
       toast.error("Give the channel a name first.");
       return;
@@ -64,6 +66,7 @@ export function ChannelDialog() {
     router.push(chatHref(channel.id));
   };
 
+  const [create, createPending] = useSubmitOnce(createOnce);
   return (
     <Dialog open={channelDialogOpen} onOpenChange={setChannelDialogOpen}>
       <DialogContent className="sm:max-w-md">
@@ -128,7 +131,7 @@ export function ChannelDialog() {
           <Button variant="outline" size="sm" onClick={() => setChannelDialogOpen(false)}>
             Cancel
           </Button>
-          <Button size="sm" onClick={create}>
+          <Button size="sm" onClick={create} disabled={createPending}>
             Create channel
           </Button>
         </DialogFooter>

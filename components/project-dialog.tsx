@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+
+import { useSubmitOnce } from "@/components/use-submit-once";
 import { useRouter } from "next/navigation";
 import { Flag } from "lucide-react";
 import { toast } from "sonner";
@@ -74,7 +76,7 @@ export function ProjectDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectDialog.open, projectDialog.editId]);
 
-  const save = async () => {
+  const saveOnce = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       toast.error("Give the project a name first.");
@@ -109,6 +111,7 @@ export function ProjectDialog() {
     router.push(projectHref(project.id));
   };
 
+  const [save, savePending] = useSubmitOnce(saveOnce);
   return (
     <Dialog open={projectDialog.open} onOpenChange={(o) => !o && closeProjectDialog()}>
       <DialogContent className="sm:max-w-md">
@@ -200,7 +203,7 @@ export function ProjectDialog() {
           <Button variant="outline" size="sm" onClick={closeProjectDialog}>
             Cancel
           </Button>
-          <Button size="sm" onClick={save}>
+          <Button size="sm" onClick={save} disabled={savePending}>
             {editing ? "Save changes" : "Create project"}
           </Button>
         </DialogFooter>

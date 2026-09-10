@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+
+import { useSubmitOnce } from "@/components/use-submit-once";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -62,7 +64,7 @@ export function RoleDialog({
       perms.includes(p) ? perms.filter((x) => x !== p) : [...perms, p]
     );
 
-  const save = async () => {
+  const saveOnce = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       toast.error("Give the role a name first.");
@@ -99,6 +101,7 @@ export function RoleDialog({
     onOpenChange(false);
   };
 
+  const [save, savePending] = useSubmitOnce(saveOnce);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -188,7 +191,7 @@ export function RoleDialog({
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button size="sm" onClick={save}>
+          <Button size="sm" onClick={save} disabled={savePending}>
             {editRole ? "Save changes" : "Create role"}
           </Button>
         </DialogFooter>

@@ -116,6 +116,19 @@ export function SelfEnrollDialog() {
   const [code, setCode] = React.useState("");
   const [error, setError] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  /**
+   * Enrolment could not be started (QA-120).
+   *
+   * `startEnrollment` swallows every error and resolves `null`, and this
+   * dialog rendered `draft && (...)` — so a failure produced a title, a
+   * description, a Cancel button and a permanently disabled "Enable", with no
+   * QR, no secret, no field, no error and no way to retry. The comment above
+   * said "the dialog shows its skeleton until it does"; there is no skeleton
+   * in this component, and there was no terminal failure state either. A
+   * pending enrolment and a dead one looked identical and one of them lasted
+   * forever.
+   */
+  const [failed, setFailed] = React.useState(false);
 
   // Enrolling is a server round-trip now (`auth.mfa.enroll`), so the draft
   // arrives asynchronously and the dialog shows its skeleton until it does.
@@ -125,8 +138,12 @@ export function SelfEnrollDialog() {
     setDraft(null);
     setCode("");
     setError(false);
+    setFailed(false);
     void beginSelfEnrollment(currentUser.id).then((next) => {
-      if (!cancelled) setDraft(next);
+      if (cancelled) return;
+      setDraft(next);
+      // `null` is the only signal there is: the action swallows the reason.
+      setFailed(next === null);
     });
     return () => {
       cancelled = true;
@@ -169,6 +186,18 @@ export function SelfEnrollDialog() {
             <p className="text-center text-[13px] text-muted-foreground">
               An admin can reset or disable it for you from the People page.
             </p>
+          </div>
+        ) : failed ? (
+          <div className="flex flex-col items-center gap-2 py-4">
+            <p className="text-sm font-medium">Couldn&apos;t start setup</p>
+            <p className="text-center text-[13px] text-muted-foreground">
+              Two-factor authentication couldn&apos;t be set up just now. Close this and
+              try again in a moment.
+            </p>
+          </div>
+        ) : !draft ? (
+          <div className="flex flex-col items-center gap-2 py-6">
+            <p className="text-[13px] text-muted-foreground">Setting up…</p>
           </div>
         ) : (
           draft && (

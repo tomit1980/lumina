@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+
+import { useSubmitOnce } from "@/components/use-submit-once";
 import { format } from "date-fns";
 import { CalendarPlus, Download, Flag, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
@@ -191,6 +193,13 @@ export function TaskDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskDialog.open, taskDialog.taskId, taskDialog.projectId, taskDialog.status]);
 
+  // Before the early return below: hooks must run in the same order on every
+  // render, and `form` is null until this dialog is opened for a target.
+  // The indirection through a ref is what lets the hook be declared up here
+  // while `saveOnce` — which closes over `form` — is defined after the guard.
+  const saveOnceRef = React.useRef<() => Promise<void>>(async () => {});
+  const [save, savePending] = useSubmitOnce(() => saveOnceRef.current());
+
   if (!form) return null;
 
   const isEditing = mode === "edit";
@@ -279,7 +288,7 @@ export function TaskDialog() {
     );
   };
 
-  const save = async () => {
+  const saveOnce = async () => {
     if (readOnly) return;
     const title = form.title.trim();
     if (!title) {
@@ -352,6 +361,7 @@ export function TaskDialog() {
     closeTaskDialog();
   };
 
+  saveOnceRef.current = saveOnce;
   return (
     <Dialog open={taskDialog.open} onOpenChange={(o) => !o && closeTaskDialog()}>
       <DialogContent className="sm:max-w-lg">
@@ -716,7 +726,7 @@ export function TaskDialog() {
               {readOnly ? "Close" : "Cancel"}
             </Button>
             {!readOnly && (
-              <Button size="sm" onClick={save}>
+              <Button size="sm" onClick={save} disabled={savePending}>
                 {isEditing ? "Save changes" : "Create task"}
               </Button>
             )}
