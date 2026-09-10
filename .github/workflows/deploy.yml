@@ -40,6 +40,44 @@ jobs:
       # what actually guards the data. The service-role key is a different
       # thing entirely and must NEVER appear here; the check below enforces
       # that mechanically rather than by memory.
+      #
+      # BEFORE the build, not after: a missing secret is an empty string, not
+      # an error. The first run after the flip proved it — the workflow went
+      # green, Pages published, and the public URL served a page that could
+      # only say "we couldn't load your workspace", because the bundle had
+      # been told to use Supabase and given nowhere to reach it. Nothing in
+      # the run said so. This is the same fault as everything else fixed this
+      # week: a step reporting success for work it never actually did.
+      - name: Refuse to build against a backend with no address
+        env:
+          URL: ${{ secrets.PROD_SUPABASE_URL }}
+          ANON: ${{ secrets.PROD_SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "$URL" ]  || missing="$missing PROD_SUPABASE_URL"
+          [ -n "$ANON" ] || missing="$missing PROD_SUPABASE_ANON_KEY"
+          if [ -n "$missing" ]; then
+            echo "This workflow builds with NEXT_PUBLIC_BACKEND=supabase, but these"
+            echo "repository secrets are missing or empty:$missing"
+            echo
+            echo "Add them under Settings -> Secrets and variables -> Actions, then"
+            echo "re-run this job. Publishing without them would replace the site"
+            echo "with a page that cannot load anything."
+            exit 1
+          fi
+          # Not just non-empty: the right shape. A pasted placeholder or a
+          # truncated key is as broken as an absent one and looks fine here.
+          case "$URL" in
+            https://*.supabase.co) ;;
+            *) echo "PROD_SUPABASE_URL is not a https://<ref>.supabase.co address."; exit 1 ;;
+          esac
+          if [ "${#ANON}" -lt 20 ]; then
+            echo "PROD_SUPABASE_ANON_KEY is too short to be a real key."
+            exit 1
+          fi
+          echo "Both secrets are present and well-formed."
+
       - run: npm run build
         env:
           NEXT_PUBLIC_BACKEND: supabase
