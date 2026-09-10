@@ -194,6 +194,38 @@ Then, and only then:
 Doing any of this earlier removes the safety net while it is still needed. The deletion is the one
 step in this plan with no natural undo — every other step is a revert or a re-run.
 
+## After go-live — in-app user invites
+
+**Decided 2026-09-10: build this once the real thing is running, not before.**
+
+Adding a teammate currently means opening the Supabase dashboard. That is tolerable for the
+second person and steadily less so from the third onward, so it is a real gap rather than a
+preference — but it is also a new secret-holding surface, and a cutover is the wrong week to
+introduce one.
+
+Creating an account needs the `service_role` key, which bypasses every access rule; a static
+export cannot hold it, because anything the browser has, its user has. So this needs a Supabase
+Edge Function:
+
+1. verify the caller's JWT and load their profile;
+2. refuse unless they hold `members.manage`;
+3. refuse if the role being assigned outranks the caller's own — Rule 3, applied before the
+   account exists rather than after;
+4. `auth.admin.inviteUserByEmail`, then set the new profile's role.
+
+**Invite, not create-with-password.** The new person sets their own password, so nobody handles
+somebody else's credential and there is nothing to transmit. It also sidesteps the "Auto Confirm
+User" trap: an accepted invite is confirmed by definition, and an unconfirmed account cannot sign
+in with no visible error.
+
+Removal is the same function with a `delete` action. The last-holder trigger already refuses to
+let the final Owner or Admin be deleted out of the workspace.
+
+**The tests that matter are the negative ones**, and they must be driven against the deployed
+function rather than through the UI: a Member calling it directly, an Admin trying to invite an
+Owner, and a caller with no token at all. A function that trusts its caller because the interface
+only offers the button to admins is the same class of mistake as a UI-only permission check.
+
 ## Open items to decide, not discover
 
 - **The project pauses after seven days idle** and needs waking by hand. With two people that is an
