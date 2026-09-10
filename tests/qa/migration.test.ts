@@ -390,3 +390,76 @@ describe("the seeded admin's rename reaches an existing workspace", () => {
     expect(maya.handle).toBe("vlad");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A workspace written by a NEWER build than this one.
+//
+// `readPersisted` only migrates forward, so a stored `version` above
+// SEED_VERSION falls back to a fresh seed — correct, because this build cannot
+// know what changed. What was not correct is what happened next: the seed was
+// persisted straight over the newer workspace, destroying it permanently, with
+// nothing shown to the user.
+//
+// Confirmed in a browser against the static build before it was fixed, with a
+// control: a plain reload kept a marker message (29 messages); a reload with
+// the stored version one ahead lost it (28 messages, marker gone, and the
+// stored blob rewritten to this build's version). Reachable on the public site
+// by a stale cached bundle, a tab held across a deploy, or a rollback.
+//
+// The fix is not to read the unreadable state — it is to refuse to WRITE over
+// it, so the loss becomes a wait rather than a deletion.
+// ---------------------------------------------------------------------------
+describe("a workspace stored by a newer build is shown as a seed, but never overwritten", () => {
+  it("leaves the stored bytes exactly as they were", async () => {
+    // `legacyBlob` returns `unknown` on purpose — these suites craft raw
+    // payloads — so this narrows it to the one shape this test edits.
+    const future = legacyBlob(SEED_VERSION) as { version: number; messages: unknown[] };
+    future.version = SEED_VERSION + 1;
+    future.messages = [
+      ...future.messages,
+      {
+        id: "m_from_the_future",
+        channelId: "c_legacy",
+        authorId: "u_legacy",
+        content: "written by a build this one does not know",
+        createdAt: Date.now(),
+        reactions: [],
+        attachments: [],
+      },
+    ];
+    const before = JSON.stringify(future);
+    localStorage.setItem(STORAGE_KEY, before);
+
+    const { result } = await mountFromExistingStorage();
+
+    // The seed is what is shown — this build cannot read the other one.
+    expect(result.current.state.version).toBe(SEED_VERSION);
+    expect(
+      result.current.state.messages.some((m) => m.id === "m_from_the_future")
+    ).toBe(false);
+
+    // A real change, of the kind that persists on every keystroke.
+    await act(async () => {
+      await result.current.sendMessage("c_general", "a change made in the seed");
+    });
+
+    // THE ASSERTION. Without the guard the seed has been written over the
+    // newer workspace by now and this fails: the stored bytes are the seed's.
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(before);
+  });
+
+  it("CONTROL: an ordinary current-version workspace still saves", async () => {
+    const current = legacyBlob(SEED_VERSION);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+    const { result } = await mountFromExistingStorage();
+
+    await act(async () => {
+      await result.current.sendMessage("c_legacy", "an ordinary change");
+    });
+
+    // Without this, a `persist` that refused everything would satisfy the
+    // test above while breaking the demo completely.
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as AppState;
+    expect(stored.messages.some((m) => m.content === "an ordinary change")).toBe(true);
+  });
+});

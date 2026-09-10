@@ -108,6 +108,50 @@ so the correct rule is the one that applies. The update rule already says exactl
 
 ---
 
+## QA-131 — Medium — a workspace made by a newer build is silently destroyed  
+**FIXED** in the same pass — see the commit that adds this section.
+
+**Where:** `readPersisted` and `persist` in `lib/backend/local.ts`. **The path the public
+site ships**, and the one area no browser had driven until this pass closed it.
+
+**What happens.** `readPersisted` accepts a stored `version` between 1 and `SEED_VERSION`
+and migrates it forward. A version *above* `SEED_VERSION` — a workspace written by a newer
+build — matches nothing, so it falls through to `createSeed()`. That much is right: this
+build genuinely cannot know what changed.
+
+What was not right is what came next. The seed was then **persisted straight over the newer
+workspace** by the next change, destroying it permanently. The user was told nothing, and
+the app looked completely normal.
+
+**Verified in a browser against the static build, with a control.** A marker message was
+posted through the app, then the page reloaded:
+
+| | stored version | messages | marker |
+|---|---|---|---|
+| control — plain reload | 13 | 29 | present |
+| stored version bumped to 14 | **13** | **28** | **gone** |
+
+The stored version coming back as 13 is the damage: the newer blob had already been
+overwritten, so even loading the correct build afterwards would not bring it back.
+
+**How it is reached** — not by anything exotic: a stale cached bundle, a tab held open
+across a deploy, or a rollback of the site. On a static export served from a CDN, a browser
+running older JavaScript than the data in its own localStorage is an ordinary Tuesday.
+
+**The fix is not to read the unreadable state** — this build has no way to. It is to refuse
+to *write over* it, which turns permanent loss into a wait: the bytes stay on disk for the
+build that understands them, and the user is told, once, the first time a change of theirs
+is not kept.
+
+**A note on the first attempt, because it is the pass's own recurring bug class.** The
+message was first raised from `hydrate()`. The data half worked and the message appeared
+nowhere — `hydrate()` resolves before anything has rendered, so the toast was dropped. It
+had to be driven in a browser to see that; the test only covered the bytes. It now fires
+from `persist`, edge-triggered like the quota message beside it, which is also the moment
+it actually matters to the user.
+
+---
+
 ## What this pass covered, and what it did not
 
 **Covered here:** sign-in and the second factor, chat, the document editors, file storage
@@ -121,13 +165,9 @@ settled against the running database, and it now records those results.
 
 **Still not covered by either pass, and worth saying plainly rather than leaving implied:**
 
-- **The local demo path under a browser.** The public site ships `NEXT_PUBLIC_BACKEND=local`,
-  and this pass read that code (`lib/backend/local.ts` is honest about quota failure and
-  falls back to a fresh seed on corrupt storage) without driving it. One thing reading
-  surfaced and nobody has decided: `readPersisted` silently replaces the whole workspace
-  with a fresh seed when the stored blob's `version` is *higher* than `SEED_VERSION` — an
-  old tab against a newer deploy — with no message. Narrow, but it is silent data loss on
-  the path the public site uses.
+- **The local demo path is now covered** — it was the last gap, and driving it found and
+  fixed QA-131 above. What reading had surfaced as a maybe turned out to be real, and worse
+  than reading suggested: not merely a silent reset, but a permanent overwrite.
 - **Concurrent editing of the same document.** QA-108 describes it from the code; nobody
   has had two browsers on one spreadsheet.
 - **The attachment cap on the local path is not a finding.** A 3 MB file base64s to roughly

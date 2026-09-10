@@ -165,25 +165,33 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
 }
 
 /** Reads and migrates the persisted workspace, falling back to a fresh seed.
- *  This is the body of the store's old hydrate effect, verbatim. */
-function readPersisted(): AppState {
+ *
+ *  `fromFuture` says the stored workspace was written by a **newer** build
+ *  than this one, which is the one case where falling back to a seed is not
+ *  the end of the story — see `LocalBackend.persist`. */
+function readPersisted(): { state: AppState; fromFuture: boolean } {
   let next: AppState | null = null;
+  let fromFuture = false;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as LegacyState;
-      if (
-        typeof parsed?.version === "number" &&
-        parsed.version >= 1 &&
-        parsed.version <= SEED_VERSION
-      ) {
-        next = migrate(parsed, parsed.version);
+      if (typeof parsed?.version === "number" && parsed.version >= 1) {
+        if (parsed.version <= SEED_VERSION) {
+          next = migrate(parsed, parsed.version);
+        } else {
+          // Written by a build newer than this one: a stale cached bundle, a
+          // tab open across a deploy, or a rollback. `migrate` only knows how
+          // to move forward, so this state cannot be read safely — but it is
+          // still the user's only copy of their work.
+          fromFuture = true;
+        }
       }
     }
   } catch {
     // Corrupt storage → fall through to a fresh seed.
   }
-  return next ?? createSeed();
+  return { state: next ?? createSeed(), fromFuture };
 }
 
 export class LocalBackend implements Backend {
@@ -193,14 +201,41 @@ export class LocalBackend implements Backend {
    *  that per-mount lifetime exactly. */
   private lastPersistOk = true;
 
+  /**
+   * The stored workspace was written by a newer build than this one, so this
+   * build must not write over it.
+   *
+   * Until this existed, a stored `version` above `SEED_VERSION` silently
+   * produced a fresh seed — and the very next change persisted that seed on
+   * top of the newer workspace, destroying it for good. Confirmed in a
+   * browser against the static build, with a control: a plain reload kept a
+   * marker message (29 messages), and a reload with the stored version one
+   * ahead lost it (28 messages, marker gone, stored version rewritten to
+   * this build's) with nothing shown to the user.
+   *
+   * Refusing to write is what turns that from permanent loss into a wait: the
+   * bytes stay on disk, and the build that understands them gets them back.
+   */
+  private storedIsNewer = false;
+
   hydrate(): Promise<AppState> {
-    return Promise.resolve(readPersisted());
+    const read = readPersisted();
+    this.storedIsNewer = read.fromFuture;
+    // Deliberately NOT toasting here. `hydrate()` resolves before anything has
+    // rendered, and a toast raised at that point is dropped on the floor — I
+    // shipped that version first and watched it appear nowhere. The message
+    // belongs where the refusal actually bites, in `persist` below, which is
+    // also the moment it matters to the user.
+    return Promise.resolve(read.state);
   }
 
   reset(): Promise<AppState> {
     try {
       window.localStorage.removeItem(STORAGE_KEY);
     } catch {}
+    // The user asked for this one, so there is nothing left to protect and
+    // saving is safe again.
+    this.storedIsNewer = false;
     return Promise.resolve(createSeed());
   }
 
@@ -218,6 +253,21 @@ export class LocalBackend implements Backend {
   }
 
   persist(state: AppState): void {
+    // Never over a workspace this build cannot read: see `storedIsNewer`.
+    // Edge-triggered like the quota message below, so the user is told the
+    // first time a change of theirs is not being kept and not on every
+    // keystroke afterwards.
+    if (this.storedIsNewer) {
+      if (this.lastPersistOk) {
+        toast.error("Your changes aren't being saved", {
+          description:
+            "This browser holds a workspace made by a newer version of Lumina, and this version can't read it. It has been left untouched — reload once you have the latest version to get it back.",
+          duration: 12_000,
+        });
+      }
+      this.lastPersistOk = false;
+      return;
+    }
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       this.lastPersistOk = true;
