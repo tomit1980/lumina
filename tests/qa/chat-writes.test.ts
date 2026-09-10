@@ -408,3 +408,59 @@ describe("a server-assigned DM id is adopted, not ignored", () => {
     ).toBe(dm!.id);
   });
 });
+
+// ---------------------------------------------------------------------------
+// QA-122 — three write actions that told the caller nothing.
+//
+// `editMessage`, `deleteMessage` and `moveTask` were declared `Promise<void>`,
+// alone among the store's write actions, so their callers had no way to check
+// before announcing what had happened. The store still refused and `commit`
+// still rolled back and toasted, so the user saw "Message deleted" — or
+// "marked as done" — followed by "Couldn't save … Your change has been undone"
+// and the thing reappearing.
+//
+// The value has to be reachable through the seam, not just present: that is
+// what the callers use.
+// ---------------------------------------------------------------------------
+describe("the three widened write actions report refusal (QA-122)", () => {
+  it("editMessage resolves false when the write fails, true when it lands", async () => {
+    const backend = new FailingBackend("editMessage");
+    const { result } = await mount(adminState(), backend);
+    const id = await postInto(result.current, () => result.current.state, "original");
+
+    expect(await run(() => result.current.editMessage(id, "never saved"))).toBe(false);
+
+    // CONTROL: the same call on a backend that accepts it. Without this, an
+    // action hard-wired to `false` would pass the assertion above.
+    const ok = new LocalBackend();
+    const second = await mount(adminState(), ok);
+    const id2 = await postInto(second.result.current, () => second.result.current.state, "original");
+    expect(await run(() => second.result.current.editMessage(id2, "saved"))).toBe(true);
+  });
+
+  it("deleteMessage resolves false when the write fails, true when it lands", async () => {
+    const backend = new FailingBackend("deleteMessage");
+    const { result } = await mount(adminState(), backend);
+    const id = await postInto(result.current, () => result.current.state, "survives");
+
+    expect(await run(() => result.current.deleteMessage(id))).toBe(false);
+
+    const ok = new LocalBackend();
+    const second = await mount(adminState(), ok);
+    const id2 = await postInto(second.result.current, () => second.result.current.state, "goes");
+    expect(await run(() => second.result.current.deleteMessage(id2))).toBe(true);
+  });
+
+  it("moveTask resolves false when the write fails, true when it lands", async () => {
+    const backend = new FailingBackend("moveTask");
+    const { result } = await mount(adminState(), backend);
+    const task = result.current.state.tasks[0];
+
+    expect(await run(() => result.current.moveTask(task.id, "done", 0))).toBe(false);
+
+    const ok = new LocalBackend();
+    const second = await mount(adminState(), ok);
+    const task2 = second.result.current.state.tasks[0];
+    expect(await run(() => second.result.current.moveTask(task2.id, "done", 0))).toBe(true);
+  });
+});

@@ -97,14 +97,24 @@ export interface AuthValue {
   cancelSwitch: () => void;
 
   twoFactorStatus: (userId: string) => TwoFactorStatus;
-  /** Admin: require 2FA (user enrolls at next login). */
-  requireTwoFactor: (userId: string) => void;
+  /**
+   * The four admin two-factor actions, and they all resolve `false` when the
+   * write did not land.
+   *
+   * They used to return `void` and run their update in a detached async IIFE,
+   * so `app/people/page.tsx` toasted "Two-factor required for Dana" the
+   * instant the switch was flipped and a refused write answered a moment
+   * later with a red contradiction — QA-119. Every other admin control on
+   * that page already checks a return value before claiming anything; these
+   * four were the exception, and now they are not.
+   */
+  requireTwoFactor: (userId: string) => Promise<boolean>;
   /** Admin: cancel a pending requirement. */
-  clearTwoFactorRequirement: (userId: string) => void;
+  clearTwoFactorRequirement: (userId: string) => Promise<boolean>;
   /** Admin: turn 2FA off entirely. */
-  disableTwoFactor: (userId: string) => void;
+  disableTwoFactor: (userId: string) => Promise<boolean>;
   /** Admin: force re-enrollment (keeps it required, drops the factor). */
-  resetTwoFactor: (userId: string) => void;
+  resetTwoFactor: (userId: string) => Promise<boolean>;
 
   /** Self-service enrollment (from the account menu). Resolves null when the
    *  backend can't start one — always, on the local path. */
@@ -355,11 +365,25 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
       cancelSwitch: () => setPendingSwitch(null),
 
       twoFactorStatus: (userId) => factors[userId]?.status ?? "off",
-      requireTwoFactor: (userId) => setStatus(userId, { status: "pending" }),
-      clearTwoFactorRequirement: (userId) => setStatus(userId, null),
-      disableTwoFactor: (userId) => setStatus(userId, null),
+      // The demo path writes to memory, so these cannot fail; they resolve
+      // `true` to satisfy the seam the Supabase path needs.
+      requireTwoFactor: async (userId) => {
+        setStatus(userId, { status: "pending" });
+        return true;
+      },
+      clearTwoFactorRequirement: async (userId) => {
+        setStatus(userId, null);
+        return true;
+      },
+      disableTwoFactor: async (userId) => {
+        setStatus(userId, null);
+        return true;
+      },
       // Still required, factor dropped: they enroll again at next login.
-      resetTwoFactor: (userId) => setStatus(userId, { status: "pending" }),
+      resetTwoFactor: async (userId) => {
+        setStatus(userId, { status: "pending" });
+        return true;
+      },
       beginSelfEnrollment: async (userId) => draftFor(userId),
       confirmSelfEnrollment: async (draft, code) => {
         if (!(await verifyTotp(draft.secret, code))) return false;
@@ -725,21 +749,20 @@ function SupabaseAuthProvider({
       if (client) void signOutQuietly(client);
     };
 
-    const setRequirement = (userId: string, required: boolean) => {
-      if (!client) return;
-      void (async () => {
-        const { error } = await client
-          .from("profiles")
-          .update({ mfa_required: required })
-          .eq("id", userId);
-        if (error) {
-          toast.error("Couldn't change the two-factor requirement", {
-            description: error.message,
-          });
-          return;
-        }
-        setMfaRequired((m) => ({ ...m, [userId]: required }));
-      })();
+    const setRequirement = async (userId: string, required: boolean): Promise<boolean> => {
+      if (!client) return false;
+      const { error } = await client
+        .from("profiles")
+        .update({ mfa_required: required })
+        .eq("id", userId);
+      if (error) {
+        toast.error("Couldn't change the two-factor requirement", {
+          description: error.message,
+        });
+        return false;
+      }
+      setMfaRequired((m) => ({ ...m, [userId]: required }));
+      return true;
     };
 
     /** Only ever the signed-in user's own factor — see `unenrollOwnFactors`. */
@@ -781,13 +804,19 @@ function SupabaseAuthProvider({
       },
       requireTwoFactor: (userId) => setRequirement(userId, true),
       clearTwoFactorRequirement: (userId) => setRequirement(userId, false),
-      disableTwoFactor: (userId) => {
-        setRequirement(userId, false);
+      // The requirement write is the one that can be refused and the one the
+      // caller is told about; dropping the factor is a no-op unless this is
+      // the signed-in user's own (see `dropOwnFactor`), and an admin cannot
+      // remove somebody else's from the client — a recorded limitation.
+      disableTwoFactor: async (userId) => {
+        const ok = await setRequirement(userId, false);
         dropOwnFactor(userId);
+        return ok;
       },
-      resetTwoFactor: (userId) => {
-        setRequirement(userId, true);
+      resetTwoFactor: async (userId) => {
+        const ok = await setRequirement(userId, true);
         dropOwnFactor(userId);
+        return ok;
       },
 
       beginSelfEnrollment: async (userId) => {

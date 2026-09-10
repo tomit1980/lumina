@@ -264,11 +264,15 @@ export function ListView({
 
   // Quick "close" from a row: complete it (or reopen a done task), appending
   // to the destination status. Only reachable when canMove, matching drag.
-  const closeTask = (taskId: string) => {
+  const closeTask = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
     const toStatus: TaskStatus = task.status === "done" ? "todo" : "done";
-    void moveTask(taskId, toStatus, Number.MAX_SAFE_INTEGER);
+    // QA-122: `moveTask` now reports whether the write survived, so this
+    // stops announcing a move the store refused or rolled back. The refusal
+    // already has its own toast; a second, contradictory one is the failure
+    // this seam exists to remove.
+    if (!(await moveTask(taskId, toStatus, Number.MAX_SAFE_INTEGER))) return;
     toast(
       toStatus === "done"
         ? `“${task.title}” marked as done`

@@ -82,8 +82,22 @@ export function MessageItem({
   const saveEdit = () => {
     const content = draft.trim();
     if (!content) return;
-    void editMessage(message.id, content);
+    // QA-123: the edit box used to close immediately and unconditionally. If
+    // the write was refused, `commit` restored the original text and toasted
+    // "Couldn't save" — and the rewrite the user had just typed was gone,
+    // with no way to get it back except from memory.
+    //
+    // This is the pattern the composer one file over already uses
+    // (components/chat/conversation.tsx): let the box close optimistically,
+    // and put the words back if the write does not survive. The `d ? d : ...`
+    // guard is the same one for the same reason — if the user has started
+    // typing again in the meantime, theirs wins.
     setEditing(false);
+    void editMessage(message.id, content).then((ok) => {
+      if (ok) return;
+      setDraft((d) => (d.trim() ? d : content));
+      setEditing(true);
+    });
   };
 
   return (
@@ -261,8 +275,12 @@ export function MessageItem({
               size="icon"
               className="size-7 rounded-lg text-destructive hover:text-destructive"
               aria-label="Delete message"
-              onClick={() => {
-                void deleteMessage(message.id);
+              onClick={async () => {
+                // QA-122: don't say it was deleted until it was. `commit`
+                // rolls the message back and toasts its own failure, so
+                // "Message deleted" appearing beside it was the app
+                // contradicting itself about something the user was watching.
+                if (!(await deleteMessage(message.id))) return;
                 toast("Message deleted");
               }}
             >

@@ -333,24 +333,32 @@ export default function PeoplePage() {
                   <TwoFactorControl
                     userName={user.name.split(" ")[0]}
                     status={twoFactorStatus(user.id)}
-                    onRequire={() => {
-                      requireTwoFactor(user.id);
+                    // QA-119: each of these awaits its write before saying it
+                    // happened. They used to fire the green toast the instant
+                    // the switch moved, so a refused write produced
+                    // "Two-factor required for Dana" followed by a red
+                    // contradiction — while every other control on this page
+                    // already checked its return value first. The action
+                    // shows its own error toast, so a failure here is silent
+                    // rather than doubled.
+                    onRequire={async () => {
+                      if (!(await requireTwoFactor(user.id))) return;
                       toast.success(`Two-factor required for ${user.name}`, {
                         description: "They'll set it up at their next sign-in.",
                       });
                     }}
-                    onClearRequirement={() => {
-                      clearTwoFactorRequirement(user.id);
+                    onClearRequirement={async () => {
+                      if (!(await clearTwoFactorRequirement(user.id))) return;
                       toast(`Two-factor requirement cleared for ${user.name}`);
                     }}
-                    onReset={() => {
-                      resetTwoFactor(user.id);
+                    onReset={async () => {
+                      if (!(await resetTwoFactor(user.id))) return;
                       toast.success(`Two-factor reset for ${user.name}`, {
                         description: "They'll re-enroll at their next sign-in.",
                       });
                     }}
-                    onDisable={() => {
-                      disableTwoFactor(user.id);
+                    onDisable={async () => {
+                      if (!(await disableTwoFactor(user.id))) return;
                       toast(`Two-factor disabled for ${user.name}`);
                     }}
                   />

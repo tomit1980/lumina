@@ -200,8 +200,17 @@ interface StoreValue {
     content: string,
     attachments?: MessageAttachment[]
   ) => Promise<DM | null>;
-  editMessage: (messageId: string, content: string) => Promise<void>;
-  deleteMessage: (messageId: string) => Promise<void>;
+  /** Resolves `false` when the edit was refused or rolled back, so the caller
+   *  can give the user back what they typed — see `deleteMessage`. */
+  editMessage: (messageId: string, content: string) => Promise<boolean>;
+  /**
+   * Resolves `false` when the delete was refused or rolled back.
+   *
+   * It used to be `Promise<void>` — the only two write actions that handed
+   * the caller nothing to check — so `components/chat/message-item.tsx` had
+   * no way to avoid announcing a delete the store then undid (QA-122).
+   */
+  deleteMessage: (messageId: string) => Promise<boolean>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   markChannelRead: (conversationId: string) => Promise<void>;
   createChannel: (input: {
@@ -250,11 +259,14 @@ interface StoreValue {
   /** Resolves false when denied (no permission, view-only project, or a
    *  collaborator in the resulting list can't see the project). */
   updateTask: (taskId: string, patch: TaskPatch) => Promise<boolean>;
+  /** Resolves `false` when the move was refused (no `task.move`, a view-only
+   *  project) or rolled back — see `deleteMessage` for why these two grew a
+   *  return value. */
   moveTask: (
     taskId: string,
     toStatus: TaskStatus,
     toIndex: number
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   deleteTask: (taskId: string) => Promise<boolean>;
 }
 
@@ -1457,11 +1469,11 @@ export function StoreProvider({
 
     const editMessage: StoreValue["editMessage"] = (messageId, content) => {
       const s = stateRef.current;
-      if (!s) return Promise.resolve();
+      if (!s) return Promise.resolve(false);
       const message = s.messages.find((m) => m.id === messageId);
       if (!message || message.authorId !== s.currentUserId) {
         deny("You can only edit your own messages.");
-        return Promise.resolve();
+        return Promise.resolve(false);
       }
       const editedAt = Date.now();
       return commit(
@@ -1472,17 +1484,17 @@ export function StoreProvider({
           ),
         }),
         () => backend.editMessage(messageId, content, editedAt),
-        { ok: () => undefined, failed: undefined, describe: "edit that message" }
+        { ok: () => true, failed: false, describe: "edit that message" }
       );
     };
 
     const deleteMessage: StoreValue["deleteMessage"] = (messageId) => {
       const s = stateRef.current;
-      if (!s) return Promise.resolve();
+      if (!s) return Promise.resolve(false);
       const message = s.messages.find((m) => m.id === messageId);
-      if (!message) return Promise.resolve();
+      if (!message) return Promise.resolve(false);
       if (message.authorId !== s.currentUserId && !guard("message.deleteAny")) {
-        return Promise.resolve();
+        return Promise.resolve(false);
       }
       return commit(
         (st) => ({
@@ -1490,7 +1502,7 @@ export function StoreProvider({
           messages: st.messages.filter((m) => m.id !== messageId),
         }),
         () => backend.deleteMessage(messageId),
-        { ok: () => undefined, failed: undefined, describe: "delete that message" }
+        { ok: () => true, failed: false, describe: "delete that message" }
       );
     };
 
@@ -1996,15 +2008,15 @@ export function StoreProvider({
     };
 
     const moveTask: StoreValue["moveTask"] = (taskId, toStatus, toIndex) => {
-      if (!guard("task.move")) return Promise.resolve();
+      if (!guard("task.move")) return Promise.resolve(false);
       const s0 = stateRef.current;
       const task0 = s0?.tasks.find((t) => t.id === taskId);
       const project0 = task0 && s0?.projects.find((p) => p.id === task0.projectId);
       if (s0 && project0 && projectIsViewerOnly(s0, project0)) {
         deny("You have view-only access to this project.");
-        return Promise.resolve();
+        return Promise.resolve(false);
       }
-      if (!s0 || !task0) return Promise.resolve();
+      if (!s0 || !task0) return Promise.resolve(false);
       return commit(
         (s) => {
         const task = s.tasks.find((t) => t.id === taskId);
@@ -2046,7 +2058,7 @@ export function StoreProvider({
         };
         },
         () => backend.moveTask(taskId, toStatus, toIndex),
-        { ok: () => undefined, failed: undefined, describe: `move “${task0.title}”` }
+        { ok: () => true, failed: false, describe: `move “${task0.title}”` }
       );
     };
 
