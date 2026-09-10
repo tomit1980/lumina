@@ -120,6 +120,17 @@ function fakeClient(opts: {
         const error = opts.errors?.[`storage.${bucket}`];
         return Promise.resolve(error ? { data: null, error } : { data: { path }, error: null });
       },
+      // `update` is a PUT, and it is a DIFFERENT statement from `upload`
+      // with upsert: Postgres evaluates storage.objects' UPDATE policy for
+      // one and its INSERT policy for the other. QA-103 was that difference
+      // (only the uploader could save a shared document), so the double has
+      // to be able to tell them apart.
+      update: (path: string) => {
+        issued.push(`storage.${bucket}`);
+        storageOps.push({ bucket, op: "update", path });
+        const error = opts.errors?.[`storage.${bucket}`];
+        return Promise.resolve(error ? { data: null, error } : { data: { path }, error: null });
+      },
       remove: (paths: string[]) => {
         issued.push(`storage.${bucket}`);
         for (const path of paths) storageOps.push({ bucket, op: "remove", path });
@@ -555,6 +566,10 @@ describe("SupabaseBackend — a write RLS filtered away is not a success", () =>
     // A correctness rule, not tidiness: both delete predicates are answered
     // from the `attachments` row, so removing the row first would strand the
     // object in the bucket with nobody able to reach it ever again.
+    //
+    // The removal is NAMED (`removedAttachmentIds`) rather than inferred from
+    // `attachments` being short — see QA-101 and the concurrency suite in
+    // tests/qa/attachment-concurrency.test.ts.
     const client = fakeClient({
       rows: {
         projects: [{ id: "p1" }],
@@ -563,7 +578,7 @@ describe("SupabaseBackend — a write RLS filtered away is not a success", () =>
       },
     });
     const editor = new SupabaseBackend(asClient(client));
-    await editor.updateProject("p1", { attachments: [] });
+    await editor.updateProject("p1", { attachments: [], removedAttachmentIds: ["a_old"] });
     expect(client.storageOps).toEqual([
       { bucket: "project-files", op: "remove", path: "a_old" },
     ]);
@@ -586,9 +601,9 @@ describe("SupabaseBackend — a write RLS filtered away is not a success", () =>
       errors: { "storage.project-files.empty": { message: "filtered" } },
     });
     const editor = new SupabaseBackend(asClient(client));
-    await expect(editor.updateProject("p1", { attachments: [] })).rejects.toThrow(
-      /only the person who uploaded it/i
-    );
+    await expect(
+      editor.updateProject("p1", { attachments: [], removedAttachmentIds: ["a_old"] })
+    ).rejects.toThrow(/only the person who uploaded it/i);
   });
 
   it("updateProject writes nothing at all for a patch with no persistable field", async () => {
@@ -892,6 +907,100 @@ describe("SupabaseBackend — deleteTask", () => {
   it("resolves when the row really went — the positive control", async () => {
     const backend = new SupabaseBackend(asClient(fakeClient({ rows: { tasks: [{ id: "t1" }] } })));
     await expect(backend.deleteTask("t1")).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QA-103 (browser pass) and QA-105 (code pass) — saving a document.
+// ---------------------------------------------------------------------------
+describe("SupabaseBackend — saveAttachment", () => {
+  const doc = {
+    id: "a_doc",
+    name: "shared.md",
+    type: "text/markdown",
+    dataUrl: "project-files/a_doc",
+  } as never;
+
+  const withRow = () =>
+    fakeClient({
+      rows: {
+        attachments: [{ id: "a_doc", size: 5, edited_by: null, edited_at: null }],
+      },
+    });
+
+  it("overwrites through UPDATE, not an upsert-insert, so a teammate can save", async () => {
+    // The whole of QA-103. `upload(..., { upsert: true })` is an INSERT with
+    // a conflict clause, so storage.objects evaluates
+    // `attachment_objects_insert` — `is_attachment_uploader` — and a document
+    // could only ever be saved by whoever uploaded it (and, once they left
+    // and `uploaded_by` was nulled, by nobody at all). A PUT takes
+    // `attachment_objects_update`, which is the rule written for this
+    // operation. Verified in a browser as well: see the fix report.
+    const client = withRow();
+    const backend = new SupabaseBackend(asClient(client));
+    await backend.saveAttachment(doc, new Blob(["new bytes"]), "u_other", 1000);
+
+    expect(client.storageOps).toEqual([
+      { bucket: "project-files", op: "update", path: "a_doc" },
+    ]);
+    expect(client.storageOps.some((op) => op.op === "overwrite" || op.op === "upload")).toBe(
+      false
+    );
+  });
+
+  it("writes the ROW before the bytes, so a refusal never destroys the old file", async () => {
+    // QA-105's half. The row UPDATE is the permission-bearing statement
+    // (`attachments_update` names the same `project.create` the object policy
+    // does). Running it first means a refused save is discovered while the
+    // previous contents are still in the bucket; the old order replaced the
+    // bytes and only then found out it was not allowed to, with no version
+    // history to recover from.
+    const client = withRow();
+    const backend = new SupabaseBackend(asClient(client));
+    await backend.saveAttachment(doc, new Blob(["new bytes"]), "u_other", 1000);
+
+    const rowUpdate = client.payloads.findIndex(
+      (entry) => entry.table === "attachments" && entry.op === "update"
+    );
+    expect(rowUpdate).toBeGreaterThanOrEqual(0);
+    expect(client.issued.indexOf("attachments")).toBeLessThan(
+      client.issued.indexOf("storage.project-files")
+    );
+  });
+
+  it("refuses without touching the bytes when the row update is filtered away", async () => {
+    // The row is readable (`attachments_read` is `can_see_attachment`) but the
+    // UPDATE returns nothing, which is how RLS reports a refusal. Nothing may
+    // reach Storage.
+    const client = fakeClient({
+      rows: { attachments: [{ id: "a_doc", size: 5, edited_by: null, edited_at: null }] },
+      emptyAfterFirst: ["attachments"],
+    });
+    const backend = new SupabaseBackend(asClient(client));
+    await expect(
+      backend.saveAttachment(doc, new Blob(["new bytes"]), "u_other", 1000)
+    ).rejects.toThrow(/permission/i);
+    expect(client.storageOps).toEqual([]);
+  });
+
+  it("puts the row's stamp back when the bytes are refused", async () => {
+    // The file is unchanged, so the row must not claim a new size and editor
+    // for it — that is the "lie about what the file contains" the old
+    // bytes-first ordering traded away destruction for.
+    const client = fakeClient({
+      rows: { attachments: [{ id: "a_doc", size: 5, edited_by: "u_first", edited_at: "T0" }] },
+      errors: { "storage.project-files": { message: "denied" } },
+    });
+    const backend = new SupabaseBackend(asClient(client));
+    await expect(
+      backend.saveAttachment(doc, new Blob(["new bytes"]), "u_other", 1000)
+    ).rejects.toThrow(/denied/);
+
+    const rowWrites = client.payloads.filter(
+      (entry) => entry.table === "attachments" && entry.op === "update"
+    );
+    expect(rowWrites).toHaveLength(2);
+    expect(rowWrites[1].value).toEqual({ size: 5, edited_by: "u_first", edited_at: "T0" });
   });
 });
 

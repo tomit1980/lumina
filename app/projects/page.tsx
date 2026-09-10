@@ -403,6 +403,11 @@ function ProjectPageInner() {
               onRemove={(id) =>
                 void updateProject(project.id, {
                   attachments: project.attachments.filter((a) => a.id !== id),
+                  // Naming it is what makes it a deletion. `attachments` here
+                  // is this render's closure over the project, which a
+                  // colleague's upload can already have made stale — see
+                  // AttachmentRemovals in lib/backend/types.ts.
+                  removedAttachmentIds: [id],
                 })
               }
             />

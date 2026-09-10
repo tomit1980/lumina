@@ -281,13 +281,18 @@ export async function updateTask(
   // order means the file links are never evaluated against a half-written
   // task row. `task_attachments_*` all name `task.edit`, which is exactly
   // what the store guards `updateTask` on — no mismatch here.
-  if (patch.attachments !== undefined) {
+  if (patch.attachments !== undefined || patch.removedAttachmentIds?.length) {
     await syncAttachmentLinks(
       client,
       "task",
       taskId,
-      patch.attachments,
-      "saving that task's files"
+      patch.attachments ?? [],
+      "saving that task's files",
+      // Only what the dialog itself removed. The form's `attachments` is the
+      // snapshot it took when it opened, so anything a colleague attached
+      // since is missing from it — and QA-101 was that absence being read as
+      // a deletion.
+      patch.removedAttachmentIds
     );
   }
 }

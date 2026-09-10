@@ -15,7 +15,12 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DocumentViewer } from "@/components/documents/viewer";
 import { useUI } from "@/components/ui-context";
 import { useAttachmentUrl } from "@/components/attachment-url";
-import { attachmentBytes, formatBytes, saveAttachmentBytes } from "@/lib/attachments";
+import {
+  attachmentBytes,
+  formatBytes,
+  isStorageRef,
+  saveAttachmentBytes,
+} from "@/lib/attachments";
 import { documentKind, isEditable, KIND_META } from "@/lib/documents";
 import { projectHref } from "@/lib/routes";
 import { useStore } from "@/lib/store";
@@ -124,19 +129,37 @@ export function DocumentPage({
         toast.error("Couldn't save", { description: stored.error });
         return;
       }
-      const ok = await updateProject(project.id, {
-        attachments: project.attachments.map((a) =>
-          a.id === file.id
-            ? {
-                ...a,
-                dataUrl: stored.dataUrl,
-                size: stored.size,
-                editedBy: currentUser.id,
-                editedAt,
-              }
-            : a
-        ),
-      });
+      // WHAT IS ALREADY IRREVERSIBLE BY THIS POINT, and it decides what the
+      // next failure is allowed to say. When the bytes live outside the
+      // workspace blob (a Storage reference rather than a `data:` URL), the
+      // call above has ALREADY replaced the file's previous contents in
+      // place, and there is no version history to get them back from. The
+      // store's default rollback toast — "Your change has been undone" — is
+      // then the exact opposite of the truth, which is QA-105. On the local
+      // backend nothing is written until the project is persisted below, so
+      // the default is accurate there and is left alone.
+      const replaced = isStorageRef(stored.dataUrl);
+      const ok = await updateProject(
+        project.id,
+        {
+          attachments: project.attachments.map((a) =>
+            a.id === file.id
+              ? {
+                  ...a,
+                  dataUrl: stored.dataUrl,
+                  size: stored.size,
+                  editedBy: currentUser.id,
+                  editedAt,
+                }
+              : a
+          ),
+        },
+        replaced
+          ? {
+              undone: `${file.name} itself was saved — only the project's record of its size and editor is out of date. Reload to refresh it.`,
+            }
+          : undefined
+      );
       // The store may deny the write (e.g. access was revoked mid-edit) —
       // in that case it already shows the reason via toast, so don't also
       // claim success and don't clear `dirty` on an edit that was never
@@ -144,6 +167,12 @@ export function DocumentPage({
       if (ok) {
         setDirty(false);
         toast.success(`Saved ${file.name}`);
+      } else if (replaced) {
+        // The editor's contents ARE what the server now holds, so leaving
+        // "Unsaved changes" up would be the same lie in the other direction:
+        // it would invite the user to press Save again over a file that
+        // already matches, and warn them about losing edits that landed.
+        setDirty(false);
       }
     } catch (err) {
       toast.error("Couldn't save", { description: String(err) });

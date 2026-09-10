@@ -40,13 +40,33 @@ export interface RolePatch {
   permissions?: Permission[];
 }
 
+/**
+ * Files a patch takes AWAY, named one by one.
+ *
+ * `attachments` is a list the caller believes in, not an assertion about the
+ * server: every producer of one is a snapshot (a dialog's form state, a
+ * render's closure) that a colleague's upload can invalidate at any moment.
+ * A backend must therefore never read "absent from this array" as "delete
+ * this file" — that is QA-101, where saving a task dialog to change its title
+ * permanently destroyed a file somebody else had attached while it was open.
+ *
+ * So a removal has to be *said*. Only the UI that ran the remove knows one
+ * happened, and only these ids are ever deleted.
+ */
+export interface AttachmentRemovals {
+  /** Ids the user removed in this edit. Absent means "this patch removes
+   *  nothing", which is what every caller that only adds or edits wants. */
+  removedAttachmentIds?: string[];
+}
+
 /** The editable fields of a project, as `updateProject` receives them. */
 export type ProjectPatch = Partial<
   Pick<Project, "name" | "description" | "emoji" | "color" | "priority" | "attachments">
->;
+> &
+  AttachmentRemovals;
 
 /** The editable fields of a task, as `updateTask` receives them. */
-export type TaskPatch = Partial<Omit<Task, "id" | "projectId">>;
+export type TaskPatch = Partial<Omit<Task, "id" | "projectId">> & AttachmentRemovals;
 
 export interface ChannelAccessPatch {
   isPrivate: boolean;

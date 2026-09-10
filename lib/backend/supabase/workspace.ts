@@ -306,8 +306,10 @@ export async function createProject(
  * already in Storage before this runs — `readFileAsAttachment` put them there
  * from the file picker's own handler — and a save from an in-app editor has
  * already overwritten them through `saveAttachment`. What is left is the
- * project's *list*: link what arrived, and delete what left, bytes and row
- * together (see `syncAttachmentLinks`).
+ * project's *list*: link what arrived, and delete the files the patch says
+ * were REMOVED — `removedAttachmentIds`, never "missing from `attachments`".
+ * See `syncAttachmentLinks` for why that distinction is the whole fix to
+ * QA-101.
  *
  * ORDER. The scalar UPDATE goes first and the attachment sync second, which
  * is the safe direction under Task 6's rule: none of `name`/`description`/
@@ -349,13 +351,14 @@ export async function updateProject(
     );
   }
 
-  if (patch.attachments !== undefined) {
+  if (patch.attachments !== undefined || patch.removedAttachmentIds?.length) {
     await syncAttachmentLinks(
       client,
       "project",
       projectId,
-      patch.attachments,
-      "saving that project's files"
+      patch.attachments ?? [],
+      "saving that project's files",
+      patch.removedAttachmentIds
     );
   }
 }

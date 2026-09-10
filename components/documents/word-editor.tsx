@@ -34,7 +34,27 @@ import type { DocumentEditorHandle, DocumentEditorProps } from "./types";
 export const WordEditor = React.forwardRef<DocumentEditorHandle, DocumentEditorProps>(
   function WordEditor({ attachment, readOnly, onDirty }, ref) {
     const [warnings, setWarnings] = React.useState<string[]>([]);
-    const [loaded, setLoaded] = React.useState(false);
+    /**
+     * Three states, and the third one is the fix to QA-103.
+     *
+     * This used to be a boolean set in a `finally`, so a .docx mammoth could
+     * not parse — corrupt, truncated, or not really a .docx — was marked
+     * loaded anyway and rendered as an EMPTY, EDITABLE document. The only
+     * signal was the amber toolbar link, which describes a total failure as a
+     * partial one ("Some content couldn't be imported"). The natural response
+     * to a blank page is to type in it, and one keystroke enabled Save, which
+     * serialised that emptiness over the real file in place. The whole reason
+     * document-page.tsx distinguishes "still loading" from "failed" is that an
+     * error must never be mistaken for an empty document and saved over the
+     * file; the guard covered the DOWNLOAD and stopped at the PARSE.
+     *
+     * So a document that could not be read is never editable and says so
+     * plainly, and `getDataUrl` refuses rather than handing back an empty
+     * document that a caller would write.
+     */
+    const [status, setStatus] = React.useState<
+      { kind: "loading" } | { kind: "ready" } | { kind: "failed"; error: string }
+    >({ kind: "loading" });
     const [showWarnings, setShowWarnings] = React.useState(false);
 
     const editor = useEditor({
@@ -59,6 +79,7 @@ export const WordEditor = React.forwardRef<DocumentEditorHandle, DocumentEditorP
     React.useEffect(() => {
       if (!editor) return;
       let cancelled = false;
+      setStatus({ kind: "loading" });
       (async () => {
         try {
           const arrayBuffer = dataUrlToArrayBuffer(attachment.dataUrl);
@@ -66,10 +87,16 @@ export const WordEditor = React.forwardRef<DocumentEditorHandle, DocumentEditorP
           if (cancelled) return;
           editor.commands.setContent(result.value, { emitUpdate: false });
           setWarnings(Array.from(new Set(result.messages.map((m) => m.message))));
+          setStatus({ kind: "ready" });
         } catch (err) {
-          if (!cancelled) setWarnings([`Couldn't read this document: ${String(err)}`]);
-        } finally {
-          if (!cancelled) setLoaded(true);
+          if (cancelled) return;
+          // NOT a warning: warnings mean "most of it came through". Nothing
+          // came through, and the editor must not open.
+          setWarnings([]);
+          setStatus({
+            kind: "failed",
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       })();
       return () => {
@@ -79,9 +106,22 @@ export const WordEditor = React.forwardRef<DocumentEditorHandle, DocumentEditorP
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [editor, attachment.id]);
 
+    // Belt and braces with the render branch below: even if something ever
+    // rendered this editor for a failed load, TipTap itself refuses input.
+    React.useEffect(() => {
+      // `emitUpdate: false` — TipTap fires onUpdate on setEditable by default,
+      // which would mark a freshly opened document dirty.
+      editor?.setEditable(!readOnly && status.kind === "ready", false);
+    }, [editor, readOnly, status.kind]);
+
     React.useImperativeHandle(ref, () => ({
       async getDataUrl() {
-        if (!editor) throw new Error("Editor not ready");
+        if (status.kind === "failed") {
+          throw new Error(
+            "This document couldn't be read, so there is nothing to save over the original."
+          );
+        }
+        if (!editor || status.kind !== "ready") throw new Error("Editor not ready");
         const buf = await tiptapJsonToDocx(editor.getJSON() as unknown as PMNode);
         return arrayBufferToDataUrl(buf, MIME.docx);
       },
@@ -104,7 +144,7 @@ export const WordEditor = React.forwardRef<DocumentEditorHandle, DocumentEditorP
             variant="ghost"
             aria-label={label}
             aria-pressed={active}
-            disabled={disabled || readOnly}
+            disabled={disabled || readOnly || status.kind !== "ready"}
             className={cn("size-7", active && "bg-secondary text-secondary-foreground")}
             onMouseDown={(e) => e.preventDefault()}
             onClick={run}
@@ -165,10 +205,20 @@ export const WordEditor = React.forwardRef<DocumentEditorHandle, DocumentEditorP
         )}
         <div className="min-h-0 flex-1 overflow-y-auto bg-muted/30">
           <div className="mx-auto my-6 min-h-[60vh] max-w-3xl rounded-lg border bg-background shadow-sm">
-            {loaded ? (
+            {status.kind === "ready" ? (
               <EditorContent editor={editor} />
-            ) : (
+            ) : status.kind === "loading" ? (
               <p className="p-8 text-sm text-muted-foreground">Opening document…</p>
+            ) : (
+              <div className="flex flex-col items-center gap-2 p-8 text-center">
+                <h2 className="text-base font-semibold">Couldn&apos;t read this document</h2>
+                <p className="max-w-md text-sm text-muted-foreground">
+                  {attachment.name} could not be opened, so it can&apos;t be edited here —
+                  editing it would replace the original with an empty document. Download it
+                  and open it in Word instead.
+                </p>
+                <p className="max-w-md text-[11px] text-muted-foreground">{status.error}</p>
+              </div>
             )}
           </div>
         </div>

@@ -113,12 +113,30 @@ export async function uploadAttachment(
  * permission of its own: `attachments_update` and the Storage UPDATE policy
  * both require `project.create`, which is what `updateProject` guards on.
  *
- * Bytes first, then the row: nothing being written here is an input to
- * `can_see_attachment`, so neither order can make the caller lose sight of
- * the row mid-write. Bytes first means a rejected row update leaves the new
- * content saved under a stale size rather than a stale file under a fresh
- * size — the first is visibly out of date on the next reload, the second is
- * a lie about what the file contains.
+ * **`update`, not `upload({ upsert: true })`.** They put the same bytes at the
+ * same path, and Postgres treats them completely differently: an upsert is an
+ * INSERT with a conflict clause, so storage.objects evaluates
+ * `attachment_objects_insert` — `is_attachment_uploader` — and never reaches
+ * `attachment_objects_update`. The result was that only the person who
+ * uploaded a file could ever save it, and a file whose uploader had left the
+ * workspace (`uploaded_by` nulled) became permanently unsaveable by anybody.
+ * A PUT takes the UPDATE policy, which is the rule that was written for this
+ * operation: visible to you, and you hold `project.create`.
+ *
+ * **The row first, the bytes second — the reverse of what this used to do.**
+ * The row UPDATE is the permission-bearing statement (`attachments_update`
+ * names the same `project.create` the object policy does), so doing it first
+ * means a refusal is discovered while the previous contents are still there.
+ * The old order destroyed the file and *then* found out the save was not
+ * allowed, with no version history to recover from — the one irreversible
+ * step ran before anything was known to have succeeded. Neither column being
+ * written is an input to `can_see_attachment`, so this order cannot make the
+ * caller lose sight of the row mid-write.
+ *
+ * If the bytes are refused after the row landed, the stamp is put back. That
+ * leaves the file exactly as it was, which is the honest answer to a save
+ * that did not happen; the alternative — a fresh size and editor over the old
+ * contents — is a lie about what the file contains.
  */
 export async function overwriteAttachment(
   client: LuminaClient,
@@ -131,12 +149,17 @@ export async function overwriteAttachment(
   const parsed = parseRef(ref);
   if (!parsed) throw new Error(`saving ${attachment.name} failed: unknown storage location`);
 
-  const put = await client.storage.from(parsed.bucket).upload(parsed.path, file, {
-    contentType: attachment.type || "application/octet-stream",
-    upsert: true,
-  });
-  if (put.error) {
-    throw new Error(`saving ${attachment.name} failed: ${put.error.message}`);
+  // The stamp this save replaces, so it can be put back if the bytes are
+  // refused. A row the caller cannot see reads as absent, which is a refusal
+  // rather than an empty result.
+  const before = await client
+    .from("attachments")
+    .select("size,edited_by,edited_at")
+    .eq("id", attachment.id)
+    .maybeSingle();
+  if (before.error) fail(`saving ${attachment.name}`, before.error);
+  if (!before.data) {
+    throw new Error(`saving ${attachment.name} failed: that file is no longer available`);
   }
 
   const row = await client
@@ -151,6 +174,22 @@ export async function overwriteAttachment(
   if (row.error) fail(`saving ${attachment.name}`, row.error);
   if (!row.data || row.data.length === 0) {
     throw new Error(`saving ${attachment.name} failed: you don't have permission to edit this file`);
+  }
+
+  const put = await client.storage.from(parsed.bucket).update(parsed.path, file, {
+    contentType: attachment.type || "application/octet-stream",
+  });
+  if (put.error) {
+    // Best-effort: the save failed, so the row must not claim otherwise.
+    await client
+      .from("attachments")
+      .update({
+        size: before.data.size,
+        edited_by: before.data.edited_by,
+        edited_at: before.data.edited_at,
+      })
+      .eq("id", attachment.id);
+    throw new Error(`saving ${attachment.name} failed: ${put.error.message}`);
   }
 }
 
@@ -264,21 +303,41 @@ function blobToDataUrl(blob: Blob, mime: string): Promise<string> {
 }
 
 /**
- * Links already-uploaded bytes to the row that owns them, and unlinks the
- * ones that left. Shared by projects and tasks, whose join tables differ only
- * in their two column names.
+ * Links already-uploaded bytes to the row that owns them, and deletes the ones
+ * the caller explicitly dropped. Shared by projects and tasks, whose join
+ * tables differ only in their two column names.
  *
  * A removed file is deleted outright (bytes and row), not merely unlinked: an
  * unlinked row falls back to `can_see_attachment`'s uploader branch, so
  * "removed from the project" would quietly mean "still readable by whoever
  * put it there". The link row goes with it via `on delete cascade`.
+ *
+ * **`removedIds` is the ONLY thing that can delete a file, and that is the
+ * whole point of this signature.** Until QA-101 this function took `next` as
+ * the complete, current attachment set and destroyed anything linked on the
+ * server but missing from it. No caller has a current set: a task dialog holds
+ * the snapshot it took when it opened, and the projects page holds the one its
+ * render closed over. So a colleague attaching a file to a task while somebody
+ * had that task's dialog open lost it — bytes and row, irrecoverably — the
+ * moment the dialog was saved, even to change only the title. Two people on
+ * one project is the normal case, not a corner.
+ *
+ * `next` is therefore read as "these are linked", never as "only these are
+ * linked": it can add links and can say nothing at all about removal. A file
+ * missing from a stale array is simply a file this caller did not know about,
+ * which is the truth, and the next hydrate brings it back onto their screen.
+ * Deleting bytes because they were absent from an array is not a thing this
+ * function can do any more.
  */
 export async function syncAttachmentLinks(
   client: LuminaClient,
   kind: "project" | "task",
   ownerId: string,
   next: Attachment[],
-  what: string
+  what: string,
+  /** The files this caller deliberately removed, named by the UI that removed
+   *  them. Defaults to none: a caller that says nothing removes nothing. */
+  removedIds: string[] = []
 ): Promise<void> {
   // Written out per table rather than parameterised: PostgREST's generated
   // Insert types are per-table, and a computed column name erases exactly the
@@ -290,10 +349,12 @@ export async function syncAttachmentLinks(
   if (current.error) fail(what, current.error);
 
   const before = new Set((current.data ?? []).map((r) => r.attachment_id));
-  const after = new Set(next.map((a) => a.id));
 
   const added = next.filter((a) => !before.has(a.id));
-  const removedIds = [...before].filter((id) => !after.has(id));
+  // Intersected with what is actually linked, so a removal that already landed
+  // (the same file dropped from two tabs) is not a second delete of bytes that
+  // have already gone.
+  const removedIdsToDelete = removedIds.filter((id) => before.has(id));
 
   if (added.length > 0) {
     const links =
@@ -307,13 +368,13 @@ export async function syncAttachmentLinks(
     if (links.error) fail(what, links.error);
   }
 
-  if (removedIds.length > 0) {
+  if (removedIdsToDelete.length > 0) {
     // The rows carry the storage reference; the patch no longer does, since
     // the whole point is that these are the files it dropped.
     const rows = await client
       .from("attachments")
       .select("id,name,storage_path")
-      .in("id", removedIds);
+      .in("id", removedIdsToDelete);
     if (rows.error) fail(what, rows.error);
     await deleteAttachments(
       client,

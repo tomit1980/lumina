@@ -63,6 +63,16 @@ interface FormState {
   reminder: string;
   labels: string[];
   attachments: Attachment[];
+  /**
+   * Files the user took OFF this task since the dialog opened.
+   *
+   * `attachments` above is the snapshot taken at open, and it goes stale the
+   * moment a colleague attaches something to the same task. Until QA-101 the
+   * backend read that staleness as a deletion and destroyed their file — bytes
+   * and row — on a save that changed only the title. A removal is now
+   * something this dialog has to say out loud, and this is where it says it.
+   */
+  removedAttachmentIds: string[];
 }
 
 const DURATION_OPTIONS = [
@@ -156,6 +166,7 @@ export function TaskDialog() {
           editing.reminderMinutes == null ? "none" : String(editing.reminderMinutes),
         labels: editing.labels,
         attachments: editing.attachments,
+        removedAttachmentIds: [],
       });
     } else {
       setMode("create");
@@ -173,6 +184,7 @@ export function TaskDialog() {
         reminder: "none",
         labels: [],
         attachments: [],
+        removedAttachmentIds: [],
       });
     }
     // Re-initialize whenever the dialog is (re)opened for a different target.
@@ -310,7 +322,13 @@ export function TaskDialog() {
       // reason via its own deny toast, so don't also claim success, and
       // don't close the dialog and discard what the user typed on an edit
       // that was never persisted.
-      const ok = await updateTask(editing.id, payload);
+      // `removedAttachmentIds` is on the UPDATE only: a task being created has
+      // nothing to remove, and `createTask` builds a `Task` out of what it is
+      // handed, so an instruction-to-the-backend key does not belong in it.
+      const ok = await updateTask(editing.id, {
+        ...payload,
+        removedAttachmentIds: form.removedAttachmentIds,
+      });
       if (!ok) return;
       toast.success("Task updated");
     } else {
@@ -670,9 +688,14 @@ export function TaskDialog() {
               disabled={readOnly}
               onAdd={(added) => set("attachments", [...form.attachments, ...added])}
               onRemove={(id) =>
-                set(
-                  "attachments",
-                  form.attachments.filter((a) => a.id !== id)
+                setForm((f) =>
+                  f && !readOnly
+                    ? {
+                        ...f,
+                        attachments: f.attachments.filter((a) => a.id !== id),
+                        removedAttachmentIds: [...f.removedAttachmentIds, id],
+                      }
+                    : f
                 )
               }
             />

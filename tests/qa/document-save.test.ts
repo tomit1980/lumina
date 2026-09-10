@@ -64,12 +64,30 @@ const { toastMock } = vi.hoisted(() => ({
 }));
 vi.mock("sonner", () => ({ toast: toastMock }));
 
+// QA-105 needs the ONE thing the local backend cannot do: a save that has
+// already replaced the file's bytes somewhere outside the workspace blob. On
+// `LocalBackend` the reference IS the bytes and nothing is written until the
+// project is persisted, so `saveAttachmentBytes` is stood in for — and only
+// for the test that says so; every other test in this file gets the real one.
+const { saveOverride } = vi.hoisted(() => ({
+  saveOverride: { fn: null as null | (() => Promise<unknown>) },
+}));
+vi.mock("@/lib/attachments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/attachments")>();
+  return {
+    ...actual,
+    saveAttachmentBytes: (...args: Parameters<typeof actual.saveAttachmentBytes>) =>
+      saveOverride.fn ? saveOverride.fn() : actual.saveAttachmentBytes(...args),
+  };
+});
+
 import { StoreProvider } from "@/lib/store";
 import { UIProvider } from "@/components/ui-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DocumentPage } from "@/components/documents/document-page";
 import { textToDataUrl } from "@/lib/documents";
-import { STORAGE_KEY, addProject, baseState } from "./_support";
+import { FailingBackend, STORAGE_KEY, addProject, baseState } from "./_support";
+import type { Backend } from "@/lib/backend/types";
 import type { Attachment } from "@/lib/types";
 
 afterEach(() => {
@@ -77,6 +95,7 @@ afterEach(() => {
   toastMock.mockClear();
   toastMock.success.mockClear();
   toastMock.error.mockClear();
+  saveOverride.fn = null;
 });
 
 function seedProjectWithDoc() {
@@ -101,11 +120,14 @@ function seedProjectWithDoc() {
   return { state, project };
 }
 
-async function renderDocumentPage(project: ReturnType<typeof seedProjectWithDoc>["project"]) {
+async function renderDocumentPage(
+  project: ReturnType<typeof seedProjectWithDoc>["project"],
+  backend?: Backend
+) {
   render(
     React.createElement(
       StoreProvider,
-      null,
+      { backend },
       React.createElement(
         TooltipProvider,
         null,
@@ -215,5 +237,72 @@ describe("document-page.tsx — save() honesty (QA-003b)", () => {
       .find((p: { id: string }) => p.id === "p_doc")
       .attachments.find((a: { id: string }) => a.id === "a_doc");
     expect(savedAttachment.editedAt).toBeUndefined();
+  });
+});
+
+// QA-105 (High) — "Your change has been undone" after the file's bytes have
+// already been replaced.
+//
+// `save()` is two writes: `saveAttachmentBytes` overwrites the object in
+// Storage IN PLACE, and `updateProject` records the new size and edit stamp.
+// When the second failed, the user got `commit`'s stock rollback toast —
+// "We couldn't save “Docs”. Your change has been undone." — while the
+// previous contents of the file were already gone and unrecoverable, and the
+// header kept saying "Unsaved changes" about edits that were, by then, the
+// only copy the server had. A UI claiming the opposite of what happened, on
+// the one operation where the previous state cannot be got back.
+describe("document-page.tsx — an honest failure after the bytes are gone (QA-105)", () => {
+  it("does not claim the change was undone, and does not keep warning about edits that landed", async () => {
+    const { project } = seedProjectWithDoc();
+    // The bytes went to Storage and the object was replaced in place, so the
+    // reference comes back unchanged and is NOT a `data:` URL — which is how
+    // save() knows the old contents are already gone.
+    saveOverride.fn = async () => ({
+      ok: true as const,
+      dataUrl: "project-files/a_doc",
+      size: 13,
+    });
+
+    const textarea = await renderDocumentPage(project, new FailingBackend("updateProject"));
+    fireEvent.change(textarea, { target: { value: "hello, edited" } });
+    expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
+
+    ctrlS();
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled());
+    const description = toastMock.error.mock.calls
+      .map((call) => String((call[1] as { description?: string } | undefined)?.description ?? ""))
+      .join(" | ");
+
+    // The lie.
+    expect(description).not.toMatch(/undone/i);
+    // The truth: the file was saved; only the project's record of it was not.
+    expect(description).toMatch(/notes\.md itself was saved/i);
+    expect(toastMock.success).not.toHaveBeenCalled();
+
+    // And the same lie in the other direction — "Unsaved changes" over an
+    // edit that is now the only version on the server.
+    await waitFor(() =>
+      expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument()
+    );
+  });
+
+  it("still says the change was undone when nothing had been written yet — the control", async () => {
+    // On the local backend the bytes never leave the workspace blob, so a
+    // refused `updateProject` really does undo everything, and the stock
+    // message is the accurate one. Without this, the test above would pass
+    // against a build that had simply deleted the sentence.
+    const { project } = seedProjectWithDoc();
+    const textarea = await renderDocumentPage(project, new FailingBackend("updateProject"));
+    fireEvent.change(textarea, { target: { value: "hello, edited" } });
+
+    ctrlS();
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled());
+    const description = toastMock.error.mock.calls
+      .map((call) => String((call[1] as { description?: string } | undefined)?.description ?? ""))
+      .join(" | ");
+    expect(description).toMatch(/undone/i);
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
   });
 });

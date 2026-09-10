@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { backendKind, createBackend } from "./backend";
 import type {
+  AttachmentRemovals,
   Backend,
   ChannelAccessPatch,
   ProjectAccessPatch,
@@ -35,6 +36,22 @@ import type {
 } from "./types";
 
 const MAX_ACTIVITIES = 60;
+
+/**
+ * A patch with its `removedAttachmentIds` taken off.
+ *
+ * That key tells the backend which files the user deliberately removed (see
+ * `AttachmentRemovals` in lib/backend/types.ts). It is an instruction, not a
+ * field of a Project or a Task, so it goes to the backend and never into
+ * `AppState`.
+ */
+function withoutRemovals<T extends AttachmentRemovals>(
+  patch: T
+): Omit<T, "removedAttachmentIds"> {
+  const fields = { ...patch };
+  delete fields.removedAttachmentIds;
+  return fields;
+}
 
 /** How long a `stale` event waits for company before it costs a reload. One
  *  upstream change often produces several published rows (a task and its
@@ -212,7 +229,15 @@ interface StoreValue {
     color: string;
     priority: Priority;
   }) => Promise<Project | null>;
-  updateProject: (projectId: string, patch: ProjectPatch) => Promise<boolean>;
+  updateProject: (
+    projectId: string,
+    patch: ProjectPatch,
+    /** Replaces "Your change has been undone." in the failure toast. The
+     *  document editors pass one because by the time they call this the
+     *  file's bytes have already been replaced in Storage, and a rollback
+     *  cannot put the old ones back — see `commit`. */
+    opts?: { undone?: string }
+  ) => Promise<boolean>;
   deleteProject: (projectId: string) => Promise<boolean>;
   /** Sets restriction + the per-member access list in one go. The project's
    *  creator is always kept as an editor so they can't lock themselves out. */
@@ -893,6 +918,19 @@ export function StoreProvider({
         failed: T;
         /** Verb phrase for the failure toast: "We couldn't ${describe}." */
         describe: string;
+        /**
+         * What the failure toast says after that, replacing the default
+         * "Your change has been undone."
+         *
+         * The default is true of every write whose only trace is rows: the
+         * snapshot goes back and the screen is as it was. It is NOT true of a
+         * write that follows something irreversible — a document save has
+         * already replaced the file's bytes in Storage, and there is no
+         * version history to restore them from. Telling that user their
+         * change was undone is the opposite of what happened, which is the
+         * failure class this whole seam exists to remove.
+         */
+        undone?: string;
       }
     ): Promise<T> {
       const snapshot = stateRef.current;
@@ -916,7 +954,9 @@ export function StoreProvider({
         () => {
           writeInFlight.current -= 1;
           toast.error("Couldn't save", {
-            description: `We couldn't ${outcome.describe}. Your change has been undone.`,
+            description: `We couldn't ${outcome.describe}. ${
+              outcome.undone ?? "Your change has been undone."
+            }`,
           });
           if (writeSeq.current === seq) {
             adopt(snapshot);
@@ -1535,7 +1575,7 @@ export function StoreProvider({
       );
     };
 
-    const updateProject: StoreValue["updateProject"] = (projectId, patch) => {
+    const updateProject: StoreValue["updateProject"] = (projectId, patch, opts) => {
       // Editing a project is part of the "manage projects" capability.
       if (!guard("project.create")) return Promise.resolve(false);
       // Every patch (not just attachments) is subject to the same
@@ -1568,7 +1608,9 @@ export function StoreProvider({
         return {
           ...s,
           projects: s.projects.map((p) =>
-            p.id === projectId ? { ...p, ...patch } : p
+            // `withoutRemovals`: the removal list is an instruction to the
+            // backend, not a column, and must not be spread into state.
+            p.id === projectId ? { ...p, ...withoutRemovals(patch) } : p
           ),
           activities: renamed
             ? activity(
@@ -1587,6 +1629,7 @@ export function StoreProvider({
           ok: () => true,
           failed: false,
           describe: `save ${target ? `“${target.name}”` : "this project"}`,
+          undone: opts?.undone,
         }
       );
     };
@@ -1804,7 +1847,9 @@ export function StoreProvider({
           const prev = s.tasks.find((t) => t.id === taskId);
           if (!prev) return s;
           const completed = patch.status === "done" && prev.status !== "done";
-          const next: Task = { ...prev, ...resolved };
+          // Same as `updateProject`: the removal list is an instruction to
+          // the backend, not a field of the Task.
+          const next: Task = { ...prev, ...withoutRemovals(resolved) };
           const assignmentTexts = assignmentActivityTexts(s, prev, next);
           let activities = completed
             ? activity(s, "task", `completed “${prev.title}”`, { projectId: next.projectId })

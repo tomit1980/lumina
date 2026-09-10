@@ -240,6 +240,67 @@ describe("nobody can put bytes behind a row they do not own", () => {
     expect(await still.data!.text()).toBe("hello");
   });
 
+  it("someone who did NOT upload the file can still save it (QA-103)", async () => {
+    // The finding, against the real database. Saving used to overwrite through
+    // `upload(..., { upsert: true })`, which Postgres treats as an INSERT with
+    // a conflict clause: storage.objects evaluated `attachment_objects_insert`
+    // — `is_attachment_uploader` — and never reached the UPDATE policy that
+    // was written for exactly this operation. So a document could only ever be
+    // saved by whoever uploaded it, and once that person left the workspace
+    // (`uploaded_by` is `on delete set null`) by nobody at all. "A team tool
+    // whose documents only their creator can edit is not a team tool."
+    //
+    // The identity split is the whole test: `mate` uploads the bytes, and
+    // `own` — an admin who holds project.create and can see the project, but
+    // is NOT the uploader — saves over them. The existing positive control
+    // below cannot see this, because there the uploader and the saver are the
+    // same person.
+    const id = `att_st_mates_${stamp}`;
+    createdAttachments.add(id);
+    const row = await serviceClient.from("attachments").insert({
+      id,
+      storage_path: `project-files/${id}`,
+      name: "shared.txt",
+      size: 5,
+      mime: "text/plain",
+      uploaded_by: ids.mate,
+      uploaded_at: new Date().toISOString(),
+    });
+    expect(row.error).toBeNull();
+    const link = await serviceClient
+      .from("project_attachments")
+      .insert({ project_id: projects.secret, attachment_id: id });
+    expect(link.error).toBeNull();
+
+    const mate = await clientFor(emails.mate);
+    const put = await mate.storage
+      .from("project-files")
+      .upload(id, new Blob(["mine!"], { type: "text/plain" }));
+    expect(put.error).toBeNull();
+
+    const admin = await backendFor(emails.own);
+    await expect(
+      admin.saveAttachment(
+        {
+          id,
+          name: "shared.txt",
+          size: 5,
+          type: "text/plain",
+          dataUrl: `project-files/${id}`,
+          uploadedBy: ids.mate,
+          uploadedAt: Date.now(),
+        },
+        new Blob(["theirs"], { type: "text/plain" }),
+        ids.own,
+        Date.now()
+      )
+    ).resolves.toBe(`project-files/${id}`);
+
+    // Not merely "no error": the bytes really are the new ones.
+    const now = await mate.storage.from("project-files").download(id);
+    expect(await now.data!.text()).toBe("theirs");
+  });
+
   it("POSITIVE CONTROL: an admin (project.create) can overwrite the same object", async () => {
     const admin = await backendFor(emails.own);
     const target = file(`att_st_secret_${stamp}`);
