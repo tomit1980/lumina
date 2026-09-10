@@ -187,3 +187,65 @@ describe("a renamed done column, through the store", () => {
     ).toBe("Shipped");
   });
 });
+
+// ---------------------------------------------------------------------------
+// And on the screen, which is the claim that actually matters. The store
+// holding the right name proves nothing if the board still renders the old
+// one — and the board is the whole reason a team would rename a column.
+//
+// A render test rather than a browser pass: the preview pane could not focus
+// the rename field reliably, and a test that depends on synthetic clicks
+// landing is a test that will fail for reasons unrelated to the code.
+// ---------------------------------------------------------------------------
+describe("a renamed column on the board itself", () => {
+  it("shows the new name as the column header", async () => {
+    const React = await import("react");
+    const { screen } = await import("@testing-library/react");
+    const { Board } = await import("@/components/kanban/board");
+    const { StoreProvider } = await import("@/lib/store");
+    const { UIProvider } = await import("@/components/ui-context");
+    const { TooltipProvider } = await import("@/components/ui/tooltip");
+    const { STORAGE_KEY } = await import("@/lib/backend/local");
+    const { addProject, adminState, renderHydrated } = await import("./_support");
+
+    const state = addProject(adminState(), {
+      id: "p_board",
+      name: "Board",
+      createdBy: "u_vlad",
+      restricted: false,
+    });
+    const renamedState = {
+      ...state,
+      statuses: state.statuses.map((s) =>
+        s.id === "in-review" ? { ...s, name: "Checking" } : s
+      ),
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(renamedState));
+    const project = renamedState.projects.find((p) => p.id === "p_board")!;
+
+    await renderHydrated(
+      React.createElement(
+        StoreProvider,
+        null,
+        React.createElement(
+          TooltipProvider,
+          null,
+          React.createElement(
+            UIProvider,
+            null,
+            React.createElement(Board, { project, tasks: [] })
+          )
+        )
+      )
+    );
+
+    // The new name is on the board...
+    expect(await screen.findByText("Checking")).toBeTruthy();
+    // ...and the old one is not, which is the half that would have failed
+    // when every column header read from a hardcoded STATUS_META.
+    expect(screen.queryByText("In Review")).toBeNull();
+    // CONTROL: the columns nobody renamed are untouched, so this is not
+    // passing because the board stopped rendering headers.
+    expect(screen.getByText("Backlog")).toBeTruthy();
+  });
+});
