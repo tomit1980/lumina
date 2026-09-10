@@ -11,16 +11,12 @@
 // tests/rls/store-swap.test.ts asserts that channel is empty. Always run
 // `clean` before the access suite, or that test fails on a stale row from a
 // browser pass — which looks like a regression and is not one.
-import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-config({ path: ".env.test.local", quiet: true });
+// Loads the env file and decides dev-vs-production. See ./_target.mjs.
+import "./_target.mjs";
 
 const URL = process.env.SUPABASE_URL;
-if (URL.includes("eshstdmgceohizbevwll")) {
-  console.log("REFUSING: that is the production project.");
-  process.exit(1);
-}
 
 const c = createClient(URL, process.env.SUPABASE_ANON_KEY, {
   auth: { persistSession: false },

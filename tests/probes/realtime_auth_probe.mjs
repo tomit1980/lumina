@@ -53,7 +53,6 @@
 // holds. Every negative is bounded by a positive on another socket, so
 // "nothing arrived" is only ever asserted after the same write has been seen
 // arriving somewhere it was entitled to.
-import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
 // The module under test, imported for real — Node strips the types. This is
@@ -61,15 +60,12 @@ import { createClient } from "@supabase/supabase-js";
 // not a description of it.
 import { subscribeToWorkspace } from "../../lib/backend/supabase/realtime.ts";
 
-config({ path: ".env.test.local", quiet: true });
+// Loads the env file and decides dev-vs-production. See ./_target.mjs.
+import "./_target.mjs";
 const URL = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
 if (!URL || !anonKey || !process.env.SUPABASE_SECRET_KEY) {
   console.log("REFUSING: .env.test.local is missing SUPABASE_URL / _ANON_KEY / _SECRET_KEY.");
-  process.exit(1);
-}
-if (URL.includes("eshstdmgceohizbevwll")) {
-  console.log("REFUSING: that is the production project.");
   process.exit(1);
 }
 const svc = createClient(URL, process.env.SUPABASE_SECRET_KEY, {

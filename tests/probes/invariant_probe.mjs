@@ -2,10 +2,10 @@
 // Task 8 added a session_user='supabase_auth_admin' bypass to the last-admin
 // trigger so auth-user deletion can cascade. This checks that bypass is not
 // reachable from an ordinary signed-in session.
-import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-config({ path: ".env.test.local", quiet: true });
+// Loads the env file and decides dev-vs-production. See ./_target.mjs.
+import "./_target.mjs";
 const URL = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
 const svc = createClient(URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false } });

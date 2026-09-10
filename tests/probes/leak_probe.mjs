@@ -1,10 +1,10 @@
 // Independent verification that a private channel is genuinely unreadable by a
 // non-member at the API level — not merely hidden in the UI, and not relying on
 // the task's own test suite. Written by the controller, not the implementer.
-import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-config({ path: ".env.test.local", quiet: true });
+// Loads the env file and decides dev-vs-production. See ./_target.mjs.
+import "./_target.mjs";
 const URL = process.env.SUPABASE_URL;
 const svc = createClient(URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false } });
 const anonKey = process.env.SUPABASE_ANON_KEY;

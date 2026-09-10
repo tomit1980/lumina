@@ -1,9 +1,9 @@
 // Controller-written probe for the project/task policies. Attacks the live
 // database directly rather than trusting the task's own suite.
-import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-config({ path: ".env.test.local", quiet: true });
+// Loads the env file and decides dev-vs-production. See ./_target.mjs.
+import "./_target.mjs";
 const URL = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
 const svc = createClient(URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false } });

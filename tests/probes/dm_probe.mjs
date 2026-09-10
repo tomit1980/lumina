@@ -1,10 +1,10 @@
 // Controller-written probe for the holes the first probe did not cover:
 // DM gate-crashing, channel management by a non-manager, the reaction oracle,
 // and channel creation under someone else's identity.
-import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
-config({ path: ".env.test.local", quiet: true });
+// Loads the env file and decides dev-vs-production. See ./_target.mjs.
+import "./_target.mjs";
 const URL = process.env.SUPABASE_URL;
 const anonKey = process.env.SUPABASE_ANON_KEY;
 const svc = createClient(URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false } });

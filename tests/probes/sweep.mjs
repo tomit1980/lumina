@@ -1,6 +1,6 @@
-import { config } from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-config({ path: ".env.test.local", quiet: true });
+// Loads the env file and decides dev-vs-production. See ./_target.mjs.
+import "./_target.mjs";
 const svc = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY, { auth: { persistSession: false } });
 const { data } = await svc.auth.admin.listUsers({ perPage: 200 });
 // Only ever touch @lumina.test fixtures — never a real account.
