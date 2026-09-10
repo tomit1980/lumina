@@ -26,6 +26,18 @@ export function createSeed(): AppState {
   const now = Date.now();
 
   const users = [
+    // The Owner. Seeded so the top role can be signed into and seen on the
+    // demo path with no setup at all — on Supabase there is no equivalent,
+    // and the runbook covers promoting a real account instead.
+    {
+      id: "u_owner",
+      name: "Dana Levi",
+      handle: "owner",
+      title: "Founder",
+      roleId: "owner",
+      color: "#f43f5e",
+      presence: "online" as const,
+    },
     {
       id: "u_vlad",
       name: "Moshe Cohen",

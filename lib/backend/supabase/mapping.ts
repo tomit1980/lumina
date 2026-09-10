@@ -246,6 +246,7 @@ export function toRole(row: RoleRow): RoleDef {
     permissions: toPermissions(row.permissions),
     isSystem: row.is_system,
     locked: row.locked,
+    rank: row.rank,
   };
 }
 

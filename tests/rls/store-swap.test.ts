@@ -365,9 +365,17 @@ describe("structure-only seed", () => {
     await serviceClient.from("conversations").delete().eq("id", id);
   });
 
-  it("has the three system roles and no duplicates", async () => {
+  it("has the four system roles and no duplicates", async () => {
+    // Four since Owner joined them (20260910006000_owner_role.sql). The list
+    // is asserted exactly rather than by count: a seed that produced the
+    // right NUMBER of wrong roles is the failure this is here to catch.
     const { data } = await serviceClient.from("roles").select("id,is_system").eq("is_system", true);
-    expect((data ?? []).map((r) => r.id).sort()).toEqual(["admin", "guest", "member"]);
+    expect((data ?? []).map((r) => r.id).sort()).toEqual([
+      "admin",
+      "guest",
+      "member",
+      "owner",
+    ]);
   });
 
   it("seeded structure only — the general channel has no members and no messages", async () => {

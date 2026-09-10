@@ -599,6 +599,7 @@ export type Database = {
           locked: boolean
           name: string
           permissions: string[]
+          rank: number
         }
         Insert: {
           color?: string
@@ -608,6 +609,7 @@ export type Database = {
           locked?: boolean
           name: string
           permissions?: string[]
+          rank?: number
         }
         Update: {
           color?: string
@@ -617,6 +619,7 @@ export type Database = {
           locked?: boolean
           name?: string
           permissions?: string[]
+          rank?: number
         }
         Relationships: []
       }
@@ -792,6 +795,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      actor_rank: { Args: never; Returns: number }
       attachment_of_object: { Args: { object_name: string }; Returns: string }
       can_join_dm: { Args: { target_dm_id: string }; Returns: boolean }
       can_see_attachment: { Args: { att_id: string }; Returns: boolean }

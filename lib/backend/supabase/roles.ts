@@ -71,6 +71,7 @@
  * here, since this task owns no migration.
  */
 import { fail, requireRows } from "./result";
+import { DEFAULT_ROLE_RANK } from "../../permissions";
 import { toRole } from "./mapping";
 import type { LuminaClient } from "./client";
 import type { RolePatch } from "../types";
@@ -187,6 +188,11 @@ export async function createRole(client: LuminaClient, role: RoleDef): Promise<R
       permissions: role.permissions,
       is_system: false,
       locked: false,
+      // Forced, like the two flags above, and for the same reason: a
+      // caller-supplied rank is an escalation attempt. The trigger refuses
+      // anything at or above the creator's own rank anyway — this just means
+      // the refusal never has to fire on the app's own path.
+      rank: role.rank ?? DEFAULT_ROLE_RANK,
     })
     .select("*");
   if (error) fail(what, error);

@@ -15,7 +15,13 @@ import type {
   RolePatch,
   TaskPatch,
 } from "./backend/types";
-import { PERMISSION_META, resourceMemberLevel, roleHas } from "./permissions";
+import {
+  DEFAULT_ROLE_RANK,
+  PERMISSION_META,
+  rankOf,
+  resourceMemberLevel,
+  roleHas,
+} from "./permissions";
 import type {
   AccessLevel,
   Activity,
@@ -1162,11 +1168,15 @@ export function StoreProvider({
       const target = s.users.find((u) => u.id === userId);
       const role = findRole(s, roleId);
       if (!target || !role || target.roleId === roleId) return Promise.resolve(false);
+      if (refusesRank(s, rankOf(role), "assign")) return Promise.resolve(false);
       const targetRole = findRole(s, target.roleId);
       if (targetRole?.locked) {
-        const admins = s.users.filter((u) => findRole(s, u.roleId)?.locked);
-        if (admins.length <= 1) {
-          deny("A workspace needs at least one admin.");
+        // The last holder of a LOCKED role, not of `admin` specifically —
+        // the same generalisation the SQL trigger needed, so an Owner is
+        // protected exactly as an Admin is.
+        const peers = s.users.filter((u) => u.roleId === target.roleId);
+        if (peers.length <= 1) {
+          deny(`A workspace needs at least one ${targetRole.name}.`);
           return Promise.resolve(false);
         }
       }
@@ -1185,9 +1195,46 @@ export function StoreProvider({
       );
     };
 
+    /**
+     * The four rank rules, mirrored from SQL for a decent message.
+     *
+     * The database is the authority — these run first only so a refusal
+     * arrives as "you can't grant a permission you don't have" instead of a
+     * Postgres exception. Admin holds `members.manage`, so without these an
+     * admin could create a role carrying `workspace.statuses`, hand it to a
+     * colleague, and have them edit the workspace's columns: "Admin plus one
+     * permission" would not be above Admin at all.
+     */
+    const myRank = (st: AppState): number => rankOf(actorRole(st));
+
+    /** Rule 1: you may not put a permission on a role that you do not hold. */
+    const refusesEscalation = (st: AppState, permissions: Permission[]): boolean => {
+      const mine = actorRole(st);
+      const beyond = permissions.filter((p) => !roleHas(mine, p));
+      if (beyond.length === 0) return false;
+      deny(
+        `You can't grant “${PERMISSION_META[beyond[0]].label}” — your own role doesn't include it.`
+      );
+      return true;
+    };
+
+    /** Rules 2 and 4: you may not touch, or create, a role at or above you. */
+    const refusesRank = (st: AppState, rank: number, verb: string): boolean => {
+      // STRICTLY above, not "at or above". A peer-ranked role — including
+      // your own — grants nobody anything they could not already have, since
+      // an admin can assign the admin role itself and Rule 1 still stops them
+      // putting a permission on it that they do not hold. "At or above" also
+      // forbade an admin REDUCING their own role, which is a real flow that
+      // tests/rls/role-writes.test.ts documents.
+      if (rank <= myRank(st)) return false;
+      deny(`You can't ${verb} a role above your own.`);
+      return true;
+    };
+
     const createRole: StoreValue["createRole"] = (input) => {
       const s = stateRef.current;
       if (!s || !guard("members.manage")) return Promise.resolve(null);
+      if (refusesEscalation(s, input.permissions)) return Promise.resolve(null);
       const name = input.name.trim();
       if (s.roles.some((r) => r.name.toLowerCase() === name.toLowerCase())) {
         deny(`A role called “${name}” already exists.`);
@@ -1199,6 +1246,7 @@ export function StoreProvider({
         description: input.description,
         color: input.color,
         permissions: [...input.permissions],
+        rank: DEFAULT_ROLE_RANK,
       };
       return commit(
         (st) => ({
@@ -1221,7 +1269,11 @@ export function StoreProvider({
       const role = findRole(s, roleId);
       if (!role) return Promise.resolve(false);
       if (role.locked) {
-        deny("The admin role is locked.");
+        deny(`The ${role.name} role is locked.`);
+        return Promise.resolve(false);
+      }
+      if (refusesRank(s, rankOf(role), "edit")) return Promise.resolve(false);
+      if (patch.permissions && refusesEscalation(s, patch.permissions)) {
         return Promise.resolve(false);
       }
       const nextName = patch.name?.trim();
@@ -1268,7 +1320,12 @@ export function StoreProvider({
       const role = findRole(s, roleId);
       if (!role) return Promise.resolve(false);
       if (role.locked) {
-        deny("The admin role is locked at full access.");
+        deny(`The ${role.name} role is locked at full access.`);
+        return Promise.resolve(false);
+      }
+      if (refusesRank(s, rankOf(role), "edit")) return Promise.resolve(false);
+      // Only granting is an escalation; taking a permission away is not.
+      if (enabled && refusesEscalation(s, [permission])) {
         return Promise.resolve(false);
       }
       if (enabled === role.permissions.includes(permission)) return Promise.resolve(false);
@@ -1310,6 +1367,7 @@ export function StoreProvider({
         deny(`${role.name} is a built-in role and can't be deleted.`);
         return Promise.resolve(false);
       }
+      if (refusesRank(s, rankOf(role), "delete")) return Promise.resolve(false);
       if (s.users.some((u) => u.roleId === roleId)) {
         deny("Reassign its members to another role first.");
         return Promise.resolve(false);

@@ -1,4 +1,4 @@
-import { DEFAULT_ROLES } from "@/lib/permissions";
+import { DEFAULT_ROLE_RANK, DEFAULT_ROLES } from "@/lib/permissions";
 import { serviceClient } from "./supabase";
 
 export const TEST_ROLE_IDS = { admin: "admin", member: "member", guest: "guest" } as const;
@@ -14,6 +14,10 @@ export async function seedRoles(): Promise<void> {
       permissions: [...role.permissions],
       is_system: role.isSystem ?? false,
       locked: role.locked ?? false,
+      // Carried through so the database's rank rules and the client's read
+      // the same hierarchy, rather than the tests silently running against
+      // every role sitting at the default.
+      rank: role.rank ?? DEFAULT_ROLE_RANK,
     }))
   );
   if (error) throw new Error(`seedRoles failed: ${error.message}`);

@@ -92,6 +92,8 @@ function role(over: Partial<RoleRow> & Pick<RoleRow, "id">): RoleRow {
     permissions: [],
     is_system: false,
     locked: false,
+    // The default a role someone creates gets — below Admin, above Member.
+    rank: 50,
     ...over,
   };
 }

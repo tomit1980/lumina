@@ -13,7 +13,7 @@
  */
 import { toast } from "sonner";
 
-import { DEFAULT_ROLES } from "../permissions";
+import { DEFAULT_ROLE_RANK, DEFAULT_ROLES } from "../permissions";
 import { DEFAULT_STATUSES } from "../statuses";
 import { createSeed, SEED_VERSION } from "../seed";
 import type {
@@ -92,7 +92,14 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
   // existing task keeps resolving without being rewritten.
   const statuses: StatusDef[] =
     parsed.statuses ?? DEFAULT_STATUSES.map((s) => ({ ...s }));
-  const roles: RoleDef[] =
+  // Ranks and the Owner role arrived in SEED_VERSION 14. A workspace stored
+  // before then has roles without a `rank`, and no owner at all: backfill the
+  // rank from the seeded definition of the same id (so a renamed custom role
+  // keeps its own name and permissions but gains a sensible place in the
+  // hierarchy), and add any seeded role the stored set is missing.
+  const rankFor = (id: string): number | undefined =>
+    DEFAULT_ROLES.find((r) => r.id === id)?.rank;
+  const storedRoles: RoleDef[] =
     parsed.roles ??
     DEFAULT_ROLES.map((r) => ({
       ...r,
@@ -100,6 +107,20 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
         ? [...r.permissions]
         : [...(parsed.rolePermissions?.[r.id] ?? r.permissions)],
     }));
+  const withRanks = storedRoles.map((r) => ({
+    ...r,
+    rank: r.rank ?? rankFor(r.id) ?? DEFAULT_ROLE_RANK,
+  }));
+  // Any seeded role the stored workspace predates — Owner, today. Appended
+  // rather than merged over the stored ones, so a team's edits to Member and
+  // Guest survive.
+  const roles: RoleDef[] = [
+    ...withRanks,
+    ...DEFAULT_ROLES.filter((d) => !withRanks.some((r) => r.id === d.id)).map((r) => ({
+      ...r,
+      permissions: [...r.permissions],
+    })),
+  ];
   return {
     version: SEED_VERSION,
     currentUserId: parsed.currentUserId,

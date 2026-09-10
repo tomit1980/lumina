@@ -9,7 +9,10 @@ export type Permission =
   | "task.delete"
   | "message.send"
   | "message.deleteAny"
-  | "members.manage";
+  | "members.manage"
+  /** Edit the board's columns for the whole workspace — the Owner's one
+   *  power beyond Admin, and the line the rank rules defend. */
+  | "workspace.statuses";
 
 /** Fine-grained, per-resource access: "editor" is full read/write, "viewer" is read-only. */
 export type AccessLevel = "viewer" | "editor";
@@ -29,8 +32,20 @@ export interface RoleDef {
   permissions: Permission[];
   /** Seeded roles (admin/member/guest) can't be deleted. */
   isSystem?: boolean;
-  /** Locked roles (admin) always hold every permission and can't be edited. */
+  /** Locked roles (owner, admin) always hold every permission in their own
+   *  set and can't be edited. */
   locked?: boolean;
+  /**
+   * Where this role sits in the hierarchy. Higher outranks lower.
+   *
+   * Owner 100, Admin 80, Member 40, Guest 20; a role someone creates gets
+   * `DEFAULT_ROLE_RANK`. This is what "above" means for the four rules that
+   * make Owner a real boundary rather than a label — you cannot grant a
+   * permission you do not hold, nor edit, assign or create a role at or above
+   * your own rank. Optional so a workspace stored before ranks existed still
+   * parses; `migrate()` backfills it.
+   */
+  rank?: number;
 }
 
 export type Presence = "online" | "away" | "offline";
