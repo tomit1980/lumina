@@ -50,7 +50,7 @@ export function ShareFileDialog() {
   // Before the early return below, because it is a hook. `""` when there is no
   // file resolves to no URL and renders nothing, which is what a closed dialog
   // should show anyway.
-  const preview = useAttachmentUrl(file?.dataUrl ?? "");
+  const preview = useAttachmentUrl(file?.dataUrl ?? "").url;
 
   React.useEffect(() => {
     if (shareFileDialog?.open) {

@@ -6,6 +6,7 @@ import { Download, FileCode2, FileImage, FileSpreadsheet, FileText, Paperclip, S
 import { toast } from "sonner";
 
 import { useAttachmentUrl } from "@/components/attachment-url";
+import { DownloadLink } from "@/components/download-link";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user-avatar";
@@ -51,8 +52,8 @@ function AttachmentRow({
   // Two URLs, not one: the download link asks Storage for a
   // Content-Disposition, because an `<a download>` attribute is ignored
   // cross-origin and a signed URL is cross-origin. See useAttachmentUrl.
-  const src = useAttachmentUrl(attachment.dataUrl);
-  const downloadHref = useAttachmentUrl(attachment.dataUrl, attachment.name);
+  const src = useAttachmentUrl(attachment.dataUrl).url;
+  const download = useAttachmentUrl(attachment.dataUrl, attachment.name);
   const uploader = state.users.find((u) => u.id === attachment.uploadedBy);
   const isImage = attachment.type.startsWith("image/");
   const kind = documentKind(attachment);
@@ -97,23 +98,27 @@ function AttachmentRow({
           {meta}
         </button>
       ) : (
-        <a
-          href={downloadHref}
-          download={attachment.name}
+        <DownloadLink
+          state={download}
+          fileName={attachment.name}
           className="min-w-0 flex-1 hover:underline"
           title="Download"
         >
           <div className="truncate text-[13px] font-medium">{attachment.name}</div>
           {meta}
-        </a>
+        </DownloadLink>
       )}
       {openable && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button asChild variant="ghost" size="icon" className="size-7 shrink-0 text-muted-foreground">
-              <a href={downloadHref} download={attachment.name} aria-label={`Download ${attachment.name}`}>
+              <DownloadLink
+                state={download}
+                fileName={attachment.name}
+                aria-label={`Download ${attachment.name}`}
+              >
                 <Download className="size-3.5" />
-              </a>
+              </DownloadLink>
             </Button>
           </TooltipTrigger>
           <TooltipContent>Download</TooltipContent>

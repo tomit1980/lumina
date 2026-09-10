@@ -115,7 +115,7 @@ export function MessageList({
 /** The composer's thumbnail for a file that is uploaded but not yet sent.
  *  A component of its own only because resolving the reference is a hook. */
 function PendingThumb({ attachment }: { attachment: Attachment }) {
-  const src = useAttachmentUrl(attachment.dataUrl);
+  const src = useAttachmentUrl(attachment.dataUrl).url;
   if (!attachment.type.startsWith("image/")) {
     return <FileText className="size-3.5 shrink-0 text-muted-foreground" />;
   }

@@ -15,6 +15,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DocumentViewer } from "@/components/documents/viewer";
 import { useUI } from "@/components/ui-context";
 import { useAttachmentUrl } from "@/components/attachment-url";
+import { DownloadLink } from "@/components/download-link";
 import {
   attachmentBytes,
   formatBytes,
@@ -74,7 +75,7 @@ export function DocumentPage({
   const editor = file?.editedBy
     ? state.users.find((u) => u.id === file.editedBy)
     : undefined;
-  const downloadHref = useAttachmentUrl(file?.dataUrl ?? "", file?.name);
+  const download = useAttachmentUrl(file?.dataUrl ?? "", file?.name);
 
   // THE LOAD END. The three editors parse a data: URL and always have; what
   // changed in Task 10 is only where that URL comes from. Locally it is the
@@ -277,9 +278,9 @@ export function DocumentPage({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button asChild variant="ghost" size="icon" className="size-8">
-              <a href={downloadHref} download={file.name} aria-label="Download">
+              <DownloadLink state={download} fileName={file.name} aria-label="Download">
                 <Download className="size-4" />
-              </a>
+              </DownloadLink>
             </Button>
           </TooltipTrigger>
           <TooltipContent>Download</TooltipContent>

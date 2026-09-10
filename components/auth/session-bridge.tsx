@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { useAuth } from "@/lib/auth";
 import { backendKind } from "@/lib/backend";
+import { clearAttachmentUrlCache } from "@/components/attachment-url";
 import { useStore } from "@/lib/store";
 
 /** Keeps the app store's current user in sync with the auth session.
@@ -41,6 +42,13 @@ export function SessionBridge() {
     // screen doesn't wipe a workspace nobody has signed into yet.
     if (!wasSignedIn.current) return;
     wasSignedIn.current = false;
+    // QA-107: the signed-URL cache is module-level and outlived the session.
+    // A tab whose access had been revoked kept re-serving working links from
+    // memory for up to fifty minutes without asking the server again — not
+    // merely failing to invalidate a link somebody had saved, but handing
+    // fresh ones out. Clearing it here is the one place that knows a session
+    // has ended.
+    clearAttachmentUrlCache();
     if (backendKind === "supabase") void resetDemo();
   }, [session, currentUser.id, switchUser, resetDemo]);
 

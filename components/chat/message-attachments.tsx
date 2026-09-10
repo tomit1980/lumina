@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Download, FileX2 } from "lucide-react";
 
 import { useAttachmentUrl } from "@/components/attachment-url";
+import { DownloadLink } from "@/components/download-link";
 import { KindIcon } from "@/components/attachments";
 
 import { formatBytes, resolveMessageAttachment } from "@/lib/attachments";
@@ -22,8 +23,8 @@ import type { MessageAttachment } from "@/lib/types";
 function MessageAttachmentItem({ att }: { att: MessageAttachment }) {
   const { state } = useStore();
   const file = resolveMessageAttachment(state, att);
-  const src = useAttachmentUrl(file?.dataUrl ?? "");
-  const downloadHref = useAttachmentUrl(file?.dataUrl ?? "", file?.name);
+  const src = useAttachmentUrl(file?.dataUrl ?? "").url;
+  const download = useAttachmentUrl(file?.dataUrl ?? "", file?.name);
 
   const project = att.sourceProjectId
     ? state.projects.find((p) => p.id === att.sourceProjectId)
@@ -53,14 +54,14 @@ function MessageAttachmentItem({ att }: { att: MessageAttachment }) {
   if (file.type.startsWith("image/")) {
     return (
       <div className="grid max-w-sm gap-0.5">
-        <a href={downloadHref} download={file.name} title={`Download ${file.name}`}>
+        <DownloadLink state={download} fileName={file.name} title={`Download ${file.name}`}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={src}
             alt={file.name}
             className="max-h-64 rounded-lg border object-contain"
           />
-        </a>
+        </DownloadLink>
         <div className="flex items-center gap-2 px-0.5 text-[11px] text-muted-foreground">
           <span className="truncate">{file.name}</span>
           <span>·</span>
@@ -112,21 +113,21 @@ function MessageAttachmentItem({ att }: { att: MessageAttachment }) {
       >
         {body}
       </Link>
-      <a
-        href={downloadHref}
-        download={file.name}
+      <DownloadLink
+        state={download}
+        fileName={file.name}
         title="Download"
         aria-label={`Download ${file.name}`}
         className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
       >
         <Download className="size-3.5" />
-      </a>
+      </DownloadLink>
     </div>
   ) : (
-    <a href={downloadHref} download={file.name} title="Download" className={cardClass}>
+    <DownloadLink state={download} fileName={file.name} title="Download" className={cardClass}>
       {body}
       <Download className="size-3.5 shrink-0 text-muted-foreground" />
-    </a>
+    </DownloadLink>
   );
 }
 
