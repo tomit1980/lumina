@@ -14,6 +14,7 @@ import type {
   RealtimeEvent,
   RolePatch,
   StatusPatch,
+  ProfilePatch,
   TaskPatch,
   TaskSetItemPatch,
   TaskSetPatch,
@@ -189,6 +190,13 @@ interface StoreValue {
   // ---------------------------------------------------------------------
   switchUser: (userId: string) => Promise<void>;
   setUserRole: (userId: string, roleId: string) => Promise<boolean>;
+  /**
+   * Name, handle and title — your own, or anybody's with `members.manage`.
+   *
+   * Both halves are the database's rules (`profiles_update_self` and
+   * `profiles_admin_write`); the guard here is for the sentence.
+   */
+  updateProfile: (userId: string, patch: ProfilePatch) => Promise<boolean>;
   createRole: (input: RoleInput) => Promise<RoleDef | null>;
   updateRole: (roleId: string, patch: RolePatch) => Promise<boolean>;
   setRolePermission: (
@@ -1222,6 +1230,76 @@ export function StoreProvider({
         // Re-uses the retry counter rather than adding a second path.
         if (refetchesOnSignIn) setHydrateAttempt((n) => n + 1);
       });
+
+    /**
+     * Normalise a handle the way the trigger does: lowercase, letters and
+     * digits only, capped at 24. Typing "Jane Doe!" produces "janedoe" rather
+     * than a refusal about characters nobody chose deliberately.
+     */
+    const normaliseHandle = (raw: string) =>
+      raw.trim().toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 24);
+
+    const updateProfile: StoreValue["updateProfile"] = (userId, patch) => {
+      const s = stateRef.current;
+      if (!s) return Promise.resolve(false);
+
+      // Mirrors the two policies exactly. Refusing here turns a silently
+      // filtered UPDATE into a sentence.
+      const isSelf = userId === s.currentUserId;
+      if (!isSelf && !guard("members.manage")) return Promise.resolve(false);
+
+      const person = s.users.find((u) => u.id === userId);
+      if (!person) {
+        deny("That person isn't in the workspace.");
+        return Promise.resolve(false);
+      }
+
+      const applied: ProfilePatch = {};
+
+      if (patch.name !== undefined) {
+        const name = patch.name.trim();
+        if (!name) {
+          deny("A name can't be blank.");
+          return Promise.resolve(false);
+        }
+        applied.name = name;
+      }
+
+      if (patch.title !== undefined) applied.title = patch.title.trim();
+
+      if (patch.handle !== undefined) {
+        const handle = normaliseHandle(patch.handle);
+        if (!handle) {
+          deny("A handle needs at least one letter or number.");
+          return Promise.resolve(false);
+        }
+        // For the message only. `profiles.handle` is `not null unique`, and
+        // that index is what actually stops a race between two people claiming
+        // the same handle in the same second.
+        if (
+          s.users.some((u) => u.id !== userId && u.handle.toLowerCase() === handle)
+        ) {
+          deny(`@${handle} is already taken.`);
+          return Promise.resolve(false);
+        }
+        applied.handle = handle;
+      }
+
+      if (Object.keys(applied).length === 0) return Promise.resolve(true);
+
+      return commit(
+        (st) => ({
+          ...st,
+          users: st.users.map((u) => (u.id === userId ? { ...u, ...applied } : u)),
+        }),
+        () => backend.updateProfile(userId, applied),
+        {
+          ok: () => true,
+          failed: false,
+          describe: isSelf ? "save your details" : `save ${person.name}'s details`,
+        }
+      );
+    };
 
     const setUserRole: StoreValue["setUserRole"] = (userId, roleId) => {
       const s = stateRef.current;
@@ -2742,6 +2820,7 @@ export function StoreProvider({
     return {
       switchUser,
       setUserRole,
+      updateProfile,
       createRole,
       updateRole,
       setRolePermission,

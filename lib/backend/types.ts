@@ -80,6 +80,20 @@ export interface StatusPatch {
   isDone?: boolean;
 }
 
+/**
+ * A person's own details.
+ *
+ * `email` is absent on purpose: it is an auth credential, changing it needs
+ * `auth.updateUser` and a confirmation round trip, and `profiles.email` only
+ * mirrors it. `color` is absent because nothing sets it yet - every account
+ * takes the column default.
+ */
+export interface ProfilePatch {
+  name?: string;
+  handle?: string;
+  title?: string;
+}
+
 /** The editable fields of a task set. `items` are edited through their own
  *  methods, so a rename cannot silently rewrite the list. */
 export interface TaskSetPatch {
@@ -204,6 +218,9 @@ export interface Backend {
   // Members and roles.
   switchUser(userId: string): Promise<void>;
   setUserRole(userId: string, roleId: string): Promise<void>;
+  /** Name, handle and title. Allowed for your own row by
+   *  `profiles_update_self` and for anyone's by `profiles_admin_write`. */
+  updateProfile(userId: string, patch: ProfilePatch): Promise<void>;
   createRole(role: RoleDef): Promise<RoleDef>;
   updateRole(roleId: string, patch: RolePatch): Promise<void>;
   setRolePermission(

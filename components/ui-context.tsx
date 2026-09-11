@@ -31,6 +31,11 @@ interface UIValue {
   setSecurityDialogOpen: (open: boolean) => void;
   passwordDialogOpen: boolean;
   setPasswordDialogOpen: (open: boolean) => void;
+  /** Whose details are being edited. Carries a user id because the same
+   *  dialog serves your own account menu and an admin's Members row. */
+  profileDialog: { open: boolean; userId: string } | null;
+  openProfileDialog: (userId: string) => void;
+  closeProfileDialog: () => void;
   accessDialog: { open: boolean; kind: "channel" | "project"; id: string } | null;
   /** Open the "Manage access" dialog for a specific channel or project. */
   openAccessDialog: (kind: "channel" | "project", id: string) => void;
@@ -56,6 +61,7 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
   const [dmDialogOpen, setDmDialogOpen] = React.useState(false);
   const [securityDialogOpen, setSecurityDialogOpen] = React.useState(false);
   const [passwordDialogOpen, setPasswordDialogOpen] = React.useState(false);
+  const [profileDialog, setProfileDialog] = React.useState<UIValue["profileDialog"]>(null);
   const [accessDialog, setAccessDialog] = React.useState<UIValue["accessDialog"]>(null);
   const [shareFileDialog, setShareFileDialog] =
     React.useState<UIValue["shareFileDialog"]>(null);
@@ -78,6 +84,10 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
       setSecurityDialogOpen,
       passwordDialogOpen,
       setPasswordDialogOpen,
+      profileDialog,
+      openProfileDialog: (userId) => setProfileDialog({ open: true, userId }),
+      closeProfileDialog: () =>
+        setProfileDialog((d) => (d ? { ...d, open: false } : d)),
       accessDialog,
       openAccessDialog: (kind, id) => setAccessDialog({ open: true, kind, id }),
       closeAccessDialog: () => setAccessDialog((d) => (d ? { ...d, open: false } : d)),
@@ -95,6 +105,7 @@ export function UIProvider({ children }: { children: React.ReactNode }) {
       dmDialogOpen,
       securityDialogOpen,
       passwordDialogOpen,
+      profileDialog,
       accessDialog,
       shareFileDialog,
     ]

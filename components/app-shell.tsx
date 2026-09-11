@@ -25,6 +25,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  UserRound,
   Users,
   Volume2,
   VolumeX,
@@ -199,6 +200,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     openProjectDialog,
     setDmDialogOpen,
     setPasswordDialogOpen,
+    openProfileDialog,
     setSecurityDialogOpen,
     openAccessDialog,
   } = useUI();
@@ -634,6 +636,13 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                 <DropdownMenuSeparator />
               </>
             )}
+            {/* Your own details. Offered on both backends, unlike the
+                password item below: the demo has a real store behind it and a
+                rename works there exactly as it does on Supabase. */}
+            <DropdownMenuItem onSelect={() => openProfileDialog(currentUser.id)}>
+              <UserRound className="size-4" />
+              Edit your details
+            </DropdownMenuItem>
             {/* Your own password. Only on the real backend: the demo signs
                 everyone in with one shared password printed on the login
                 screen, so a change dialog there would be a control with

@@ -24,6 +24,7 @@ import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
 import { subscribeToWorkspace } from "./realtime";
+import * as profiles from "./profiles";
 import * as roles from "./roles";
 import * as statuses from "./statuses";
 import * as taskSets from "./task-sets";
@@ -39,6 +40,7 @@ import type {
   ProjectPatch,
   RealtimeEvent,
   RolePatch,
+  ProfilePatch,
   StatusPatch,
   TaskPatch,
   TaskSetItemPatch,
@@ -187,6 +189,10 @@ export class SupabaseBackend implements Backend {
   // -------------------------------------------------------------------------
   async setUserRole(userId: string, roleId: string): Promise<void> {
     return roles.setUserRole(await this.client(), userId, roleId);
+  }
+
+  async updateProfile(userId: string, patch: ProfilePatch): Promise<void> {
+    return profiles.updateProfile(await this.client(), userId, patch);
   }
   async createRole(role: RoleDef): Promise<RoleDef> {
     return roles.createRole(await this.client(), role);

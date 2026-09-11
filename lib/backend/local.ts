@@ -401,6 +401,12 @@ export class LocalBackend implements Backend {
     return Promise.resolve();
   }
 
+  // The demo persists AppState as one blob, so the store's own patch is the
+  // whole write.
+  updateProfile(): Promise<void> {
+    return Promise.resolve();
+  }
+
   createRole(role: RoleDef): Promise<RoleDef> {
     return Promise.resolve(role);
   }

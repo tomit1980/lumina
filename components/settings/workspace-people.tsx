@@ -48,6 +48,7 @@ import {
   roleHas,
 } from "@/lib/permissions";
 import { useStore } from "@/lib/store";
+import { useUI } from "@/components/ui-context";
 import type { Permission, RoleDef } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { dmHref } from "@/lib/routes";
@@ -227,6 +228,7 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
     resetTwoFactor,
     disableTwoFactor,
   } = useAuth();
+  const { openProfileDialog } = useUI();
 
   const manageRoles = can("members.manage");
   const roles = state.roles;
@@ -380,6 +382,26 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
                       toast(`Two-factor disabled for ${user.name}`);
                     }}
                   />
+                )}
+                {/* Edit their details. Offered for everyone including
+                    yourself — an admin correcting their own name should not
+                    have to go to a different screen for it. The store and the
+                    database both allow the self case anyway. */}
+                {manageRoles && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-7"
+                        aria-label={`Edit ${user.name}'s details`}
+                        onClick={() => openProfileDialog(user.id)}
+                      >
+                        <Pencil className="size-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Edit {user.name}&apos;s details</TooltipContent>
+                  </Tooltip>
                 )}
                 {manageRoles && !isMe ? (
                   <Select

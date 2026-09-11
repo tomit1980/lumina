@@ -286,7 +286,17 @@ export class FailingBackend extends EventBackend {
     super();
   }
 
+  /**
+   * Every op this backend was ASKED to perform, in order.
+   *
+   * Lets a test assert that a store guard refused before the network rather
+   * than after it — a claim no message can make, since a store that called
+   * anyway and then reported the error would produce the same sentence.
+   */
+  readonly attempted: FailingOp[] = [];
+
   private run<T>(op: FailingOp, value: T): Promise<T> {
+    this.attempted.push(op);
     return op === this.failing
       ? Promise.reject(new Error(`${op} failed`))
       : Promise.resolve(value);
@@ -436,6 +446,10 @@ export class FailingBackend extends EventBackend {
     return this.run("setUserRole", undefined);
   }
 
+  override updateProfile(): Promise<void> {
+    return this.run("updateProfile", undefined);
+  }
+
   override setRolePermission(): Promise<void> {
     return this.run("setRolePermission", undefined);
   }
@@ -554,6 +568,7 @@ export type FailingOp =
   | "setProjectAccess"
   | "createRole"
   | "setUserRole"
+  | "updateProfile"
   | "setRolePermission"
   | "updateRole"
   | "deleteRole"

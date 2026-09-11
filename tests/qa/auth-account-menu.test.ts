@@ -114,6 +114,11 @@ describe("the sidebar account menu", () => {
     // here because the dialog's own tests mount it directly and so cannot tell
     // whether anything actually opens it.
     expect(items).toContain("Change password");
+    // And editing your own details, which is how somebody fixes the name the
+    // sign-up trigger derived from their email address. Enumerated here for
+    // the same reason as the item above: a dialog with passing tests and no
+    // way to open it is a feature nobody has.
+    expect(items).toContain("Edit your details");
 
     unmount();
   });
