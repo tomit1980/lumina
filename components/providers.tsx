@@ -10,6 +10,7 @@ import {
   SelfEnrollDialog,
   SwitchTwoFactorPrompt,
 } from "@/components/auth/two-factor-dialogs";
+import { ChangePasswordDialog } from "@/components/auth/change-password-dialog";
 import { AccessDialog } from "@/components/access-dialog";
 import { ChannelDialog } from "@/components/channel-dialog";
 import { ConnectionStatus } from "@/components/connection-status";
@@ -90,6 +91,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 <AccessDialog />
                 <ShareFileDialog />
                 <SelfEnrollDialog />
+                <ChangePasswordDialog />
                 {/* Demo-account switching, and the 2FA prompt that guards it,
                     exist only in the local demo. Not mounted on a real
                     backend, so no code path can open it. */}

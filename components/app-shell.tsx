@@ -11,12 +11,13 @@ import {
   Command as CommandIcon,
   Hash,
   Home,
+  KeyRound,
   Lock,
   LogOut,
   Megaphone,
   Menu,
-  MoreHorizontal,
   Moon,
+  MoreHorizontal,
   Pencil,
   Plus,
   RotateCcw,
@@ -197,6 +198,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     setChannelDialogOpen,
     openProjectDialog,
     setDmDialogOpen,
+    setPasswordDialogOpen,
     setSecurityDialogOpen,
     openAccessDialog,
   } = useUI();
@@ -631,6 +633,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                 ))}
                 <DropdownMenuSeparator />
               </>
+            )}
+            {/* Your own password. Only on the real backend: the demo signs
+                everyone in with one shared password printed on the login
+                screen, so a change dialog there would be a control with
+                nothing behind it. */}
+            {!isDemo && (
+              <DropdownMenuItem onSelect={() => setPasswordDialogOpen(true)}>
+                <KeyRound className="size-4" />
+                Change password
+              </DropdownMenuItem>
             )}
             {!isDemo && (
               <DropdownMenuItem onSelect={() => setSecurityDialogOpen(true)}>

@@ -108,6 +108,12 @@ describe("the sidebar account menu", () => {
     expect(items).not.toContain("Reset demo data");
     // Two-factor is real on this path, and is the item that replaces them.
     expect(items).toContain("Set up two-factor");
+    // And so is changing your own password. Accounts are created by an admin
+    // who picks the first one, so without this item that password is permanent
+    // — which is what the Members screen used to promise otherwise. Asserted
+    // here because the dialog's own tests mount it directly and so cannot tell
+    // whether anything actually opens it.
+    expect(items).toContain("Change password");
 
     unmount();
   });

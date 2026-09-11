@@ -121,6 +121,20 @@ export interface AuthValue {
   beginSelfEnrollment: (userId: string) => Promise<EnrollmentDraft | null>;
   confirmSelfEnrollment: (draft: EnrollmentDraft, code: string) => Promise<boolean>;
 
+  /**
+   * Change your own password. Resolves `null` on success, or the reason.
+   *
+   * Your own, and only your own — this is `auth.updateUser`, which acts on the
+   * session's user and cannot be pointed at anybody else. Setting somebody
+   * else's password needs the secret key, which is why `scripts/set-password.ps1`
+   * exists and runs outside the browser.
+   *
+   * Added because the workspace was handing out first passwords with no way to
+   * replace them: the Members screen said "they can change it once they're in"
+   * while the app offered nothing that could.
+   */
+  changePassword: (next: string) => Promise<string | null>;
+
   /** Demo data wipe. Inert under the Supabase flag. */
   resetAll: () => Promise<void>;
 }
@@ -384,6 +398,8 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
         setStatus(userId, { status: "pending" });
         return true;
       },
+      changePassword: async () =>
+        "The demo signs everyone in with one shared password, so there is nothing to change here.",
       beginSelfEnrollment: async (userId) => draftFor(userId),
       confirmSelfEnrollment: async (draft, code) => {
         if (!(await verifyTotp(draft.secret, code))) return false;
@@ -869,6 +885,17 @@ function SupabaseAuthProvider({
         // does today. The dialog has its own "Couldn't start setup" panel; it
         // does not need the reason threaded through to stop being honest.
         return attempt.ok ? attempt.draft : null;
+      },
+      changePassword: async (next) => {
+        if (!client) return "Not connected to the workspace.";
+        // Mirrors the floor the Add-teammate dialog uses, so the two places a
+        // password is chosen agree. Supabase's own minimum is lower.
+        if (next.length < 8) return "Use a password of at least 8 characters.";
+        const { error } = await client.auth.updateUser({ password: next });
+        // Supabase's own sentence, not a generic one. It is the only thing
+        // that distinguishes "too weak", "same as the old one" and a project
+        // that requires a recent sign-in before a password change.
+        return error ? error.message : null;
       },
       confirmSelfEnrollment: async (draft, code) => {
         if (!client || !draft.factorId) return false;

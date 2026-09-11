@@ -272,7 +272,8 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
         {manageRoles && backendKind === "supabase" && (
           <div className="mb-4 flex items-center justify-between">
             <p className="text-[12px] text-muted-foreground">
-              You choose their first password; they can change it once they&apos;re in.
+              You choose their first password; they can change it from their own
+              account menu.
             </p>
             <Button
               size="sm"
