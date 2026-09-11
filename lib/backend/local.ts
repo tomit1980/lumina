@@ -29,6 +29,7 @@ import type {
   ResourceMember,
   RoleDef,
   StatusDef,
+  TaskSet,
   Task,
   User,
 } from "../types";
@@ -193,6 +194,7 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
     })),
     roles,
     statuses,
+    taskSets: parsed.taskSets ?? [],
     lastRead: parsed.lastRead ?? {},
   };
 }
@@ -346,6 +348,36 @@ export class LocalBackend implements Backend {
   }
 
   deleteStatus(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  // Task sets. The demo persists AppState as one blob, so the store's own
+  // patch is the whole write — exactly as the status methods above work.
+  createTaskSet(set: TaskSet): Promise<TaskSet> {
+    return Promise.resolve(set);
+  }
+
+  updateTaskSet(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  archiveTaskSet(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  createTaskSetItem(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  updateTaskSetItem(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  deleteTaskSetItem(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  reorderTaskSetItems(): Promise<void> {
     return Promise.resolve();
   }
 

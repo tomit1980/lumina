@@ -259,6 +259,7 @@ export function createSeed(): AppState {
       attachments: [],
       createdBy: "u_vlad",
       createdAt: now - 20 * DAY,
+      createdFromTaskSetId: null,
     },
     {
       id: "p_mobile",
@@ -272,6 +273,7 @@ export function createSeed(): AppState {
       attachments: [],
       createdBy: "u_sam",
       createdAt: now - 12 * DAY,
+      createdFromTaskSetId: null,
     },
   ];
 
@@ -464,6 +466,11 @@ export function createSeed(): AppState {
     activities,
     roles: DEFAULT_ROLES.map((r) => ({ ...r, permissions: [...r.permissions] })),
     statuses: DEFAULT_STATUSES.map((s) => ({ ...s })),
+    // The demo ships no task sets. They are a real-backend feature — the
+    // Settings editor is gated on `workspace.taskSets` and the local backend
+    // has no server to create anything on — so seeding one would put a
+    // control in the demo that cannot do anything.
+    taskSets: [],
     lastRead,
   };
 }

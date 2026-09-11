@@ -79,6 +79,7 @@ function storeState(project: Project): AppState {
     // definitions rather than two hand-written approximations.
     statuses: DEFAULT_STATUSES.map((s) => ({ ...s })),
     channels: [], dms: [], messages: [], tasks: [], activities: [], lastRead: {},
+    taskSets: [],
     projects: [project],
   };
 }
@@ -87,7 +88,7 @@ function project(id: string, restricted: boolean, createdBy: string): Project {
   return {
     id, name: `WW ${id}`, description: "", emoji: "🎨", color: "#7c3aed",
     priority: "medium", restricted, members: [], attachments: [],
-    createdBy, createdAt: Date.now(),
+    createdBy, createdAt: Date.now(), createdFromTaskSetId: null,
   };
 }
 
@@ -291,7 +292,7 @@ describe("createProject / updateProject / deleteProject", () => {
     const id = `p_ww_new_${stamp}`;
     createdProjects.add(id);
 
-    await expect(backend.createProject(project(id, false, ids.owner))).resolves.toMatchObject({ id });
+    await expect(backend.createProject(project(id, false, ids.owner), [])).resolves.toMatchObject({ id });
 
     const { data } = await serviceClient
       .from("projects").select("created_by,restricted").eq("id", id).single();

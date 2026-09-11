@@ -66,6 +66,8 @@ function empty(): HydrateRows {
     taskCollaborators: [],
     taskAttachments: [],
     activities: [],
+    taskSets: [],
+    taskSetItems: [],
     readState: [],
   };
 }
@@ -628,6 +630,7 @@ describe("the whole workspace", () => {
       users: [],
       roles: [],
       statuses: [],
+      taskSets: [],
       channels: [],
       dms: [],
       messages: [],

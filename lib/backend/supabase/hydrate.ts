@@ -83,6 +83,8 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     tasks,
     taskCollaborators,
     taskAttachments,
+    taskSets,
+    taskSetItems,
     activities,
     readState,
   ] = await Promise.all([
@@ -105,6 +107,8 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     client.from("tasks").select("*").order("position"),
     client.from("task_collaborators").select("*"),
     client.from("task_attachments").select("*"),
+    client.from("task_sets").select("*").order("updated_at", { ascending: false }),
+    client.from("task_set_items").select("*").order("position"),
     // Newest first so the cap keeps the *recent* feed, then reversed below:
     // `AppState.activities` is oldest-first (the store appends and slices).
     client.from("activities").select("*").order("ts", { ascending: false }).limit(MAX_ACTIVITIES),
@@ -143,6 +147,8 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     tasks: unwrap("tasks", tasks),
     taskCollaborators: unwrap("task_collaborators", taskCollaborators),
     taskAttachments: unwrap("task_attachments", taskAttachments),
+    taskSets: unwrap("task_sets", taskSets),
+    taskSetItems: unwrap("task_set_items", taskSetItems),
     activities: unwrap("activities", activities).reverse(),
     readState: unwrap("read_state", readState),
   };

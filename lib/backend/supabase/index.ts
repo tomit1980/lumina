@@ -26,6 +26,7 @@ import { signedOutState } from "./mapping";
 import { subscribeToWorkspace } from "./realtime";
 import * as roles from "./roles";
 import * as statuses from "./statuses";
+import * as taskSets from "./task-sets";
 import * as storage from "./storage";
 import * as tasks from "./tasks";
 import * as workspace from "./workspace";
@@ -40,6 +41,8 @@ import type {
   RolePatch,
   StatusPatch,
   TaskPatch,
+  TaskSetItemPatch,
+  TaskSetPatch,
   Unsubscribe,
 } from "../types";
 import type {
@@ -53,6 +56,8 @@ import type {
   RoleDef,
   StatusDef,
   Task,
+  TaskSet,
+  TaskSetItem,
   TaskStatus,
 } from "../../types";
 
@@ -252,6 +257,35 @@ export class SupabaseBackend implements Backend {
     return statuses.reorderStatuses(await this.client(), order);
   }
 
+  // Task sets.
+  async createTaskSet(set: TaskSet): Promise<TaskSet> {
+    return taskSets.createTaskSet(await this.client(), set);
+  }
+
+  async updateTaskSet(taskSetId: string, patch: TaskSetPatch): Promise<void> {
+    return taskSets.updateTaskSet(await this.client(), taskSetId, patch);
+  }
+
+  async archiveTaskSet(taskSetId: string, archived: boolean): Promise<void> {
+    return taskSets.archiveTaskSet(await this.client(), taskSetId, archived);
+  }
+
+  async createTaskSetItem(taskSetId: string, item: TaskSetItem): Promise<void> {
+    return taskSets.createTaskSetItem(await this.client(), taskSetId, item);
+  }
+
+  async updateTaskSetItem(itemId: string, patch: TaskSetItemPatch): Promise<void> {
+    return taskSets.updateTaskSetItem(await this.client(), itemId, patch);
+  }
+
+  async deleteTaskSetItem(itemId: string): Promise<void> {
+    return taskSets.deleteTaskSetItem(await this.client(), itemId);
+  }
+
+  async reorderTaskSetItems(order: Array<{ id: string; position: number }>): Promise<void> {
+    return taskSets.reorderTaskSetItems(await this.client(), order);
+  }
+
   // -------------------------------------------------------------------------
   // Task 5 — messages, DMs, reactions, read state. Implemented in ./chat;
   // these are the seam, so each one is a single delegation.
@@ -318,8 +352,8 @@ export class SupabaseBackend implements Backend {
   async setChannelAccess(channelId: string, patch: ChannelAccessPatch): Promise<void> {
     return workspace.setChannelAccess(await this.client(), channelId, patch);
   }
-  async createProject(project: Project): Promise<Project> {
-    return workspace.createProject(await this.client(), project);
+  async createProject(project: Project, tasks: Task[]): Promise<Project> {
+    return workspace.createProject(await this.client(), project, tasks);
   }
   async updateProject(projectId: string, patch: ProjectPatch): Promise<void> {
     return workspace.updateProject(await this.client(), projectId, patch);

@@ -131,6 +131,7 @@ function stateWithProject(project: Partial<Project> & { id: string }): Pick<AppS
         description: "",
         emoji: "📁",
         color: "#000000",
+        createdFromTaskSetId: null,
         priority: "medium",
         restricted: false,
         members: [],

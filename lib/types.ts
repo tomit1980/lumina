@@ -139,6 +139,48 @@ export interface StatusDef {
   isDone: boolean;
 }
 
+/**
+ * One line of a reusable task set.
+ *
+ * NOT a task, and named so it cannot be mistaken for one: it has no project,
+ * no assignee, no status and no completion. It is a description of a task that
+ * has not happened yet.
+ *
+ * It carries the fields that are true of a task before it exists. A status
+ * would tie a definition to a board column and a due-date offset would need a
+ * timezone the database does not have, so instantiated tasks take the first
+ * open column and no due date. Both are additive later.
+ */
+export interface TaskSetItem {
+  id: string;
+  title: string;
+  description: string;
+  priority: Priority;
+  labels: string[];
+  /** Order within the set. Becomes the instantiated task's board position. */
+  position: number;
+}
+
+/**
+ * A reusable set of tasks, for work that repeats.
+ *
+ * Creating a project from one instantiates its items as real tasks with fresh
+ * ids. Nothing is shared afterwards: editing a task changes no set, and
+ * editing a set reaches into no project already created.
+ */
+export interface TaskSet {
+  id: string;
+  name: string;
+  description: string;
+  items: TaskSetItem[];
+  createdBy: string;
+  createdAt: number;
+  /** Maintained by the database, including when only an item changes. */
+  updatedAt: number;
+  /** Archived sets stay in Settings and drop out of the project picker. */
+  archivedAt: number | null;
+}
+
 export const PRIORITIES = ["high", "medium", "low"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
@@ -183,6 +225,9 @@ export interface Project {
   attachments: Attachment[];
   createdBy: string;
   createdAt: number;
+  /** Which task set produced this project, if any. Provenance only — the
+   *  tasks are ordinary tasks and nothing syncs. */
+  createdFromTaskSetId: string | null;
 }
 
 export type ActivityKind = "task" | "message" | "channel" | "member" | "project";
@@ -220,6 +265,9 @@ export interface AppState {
   /** The board's columns, workspace-wide. Ordered by `position` when
    *  rendered — see `sortedStatuses` in lib/statuses.ts. */
   statuses: StatusDef[];
+  /** Reusable task sets, newest first. Archived ones are included — the
+   *  Settings screen shows them and the project picker filters them out. */
+  taskSets: TaskSet[];
   /** Key: `${userId}:${conversationId}` (channel or DM) → last-read epoch ms. */
   lastRead: Record<string, number>;
 }

@@ -268,6 +268,8 @@ describe("hydrateWorkspace — the query plan", () => {
     "tasks",
     "task_collaborators",
     "task_attachments",
+    "task_sets",
+    "task_set_items",
     "activities",
     "read_state",
   ];
@@ -453,7 +455,7 @@ describe("SupabaseBackend — every operation reaches the server", () => {
     ["createChannel", () => backend.createChannel({ members: [], createdAt: 0 } as never)],
     ["deleteChannel", () => backend.deleteChannel("c")],
     ["setChannelAccess", () => backend.setChannelAccess("c", { isPrivate: false, members: [] })],
-    ["createProject", () => backend.createProject({ attachments: [], members: [], createdAt: 0 } as never)],
+    ["createProject", () => backend.createProject({ attachments: [], members: [], createdAt: 0 } as never, [])],
     ["updateProject", () => backend.updateProject("p", { name: "n" })],
     ["deleteProject", () => backend.deleteProject("p")],
     ["setProjectAccess", () => backend.setProjectAccess("p", { restricted: false, members: [] })],

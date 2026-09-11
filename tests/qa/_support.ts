@@ -23,6 +23,7 @@ import type {
   Project,
   RoleDef,
   StatusDef,
+  TaskSet,
   Task,
   TaskStatus,
   Priority,
@@ -113,6 +114,7 @@ export function addProject(
     restricted: false,
     members: [],
     attachments: [],
+    createdFromTaskSetId: null,
     createdAt: Date.now(),
     ...project,
   };
@@ -312,6 +314,37 @@ export class FailingBackend extends EventBackend {
 
   override reorderStatuses(): Promise<void> {
     return this.run("reorderStatuses", undefined);
+  }
+
+  // Task sets. The union above is only half of it: an op listed there but not
+  // overridden here falls through to LocalBackend's resolve, and a test naming
+  // it would pass against a backend that never failed.
+  override createTaskSet(set: TaskSet): Promise<TaskSet> {
+    return this.run("createTaskSet", set);
+  }
+
+  override updateTaskSet(): Promise<void> {
+    return this.run("updateTaskSet", undefined);
+  }
+
+  override archiveTaskSet(): Promise<void> {
+    return this.run("archiveTaskSet", undefined);
+  }
+
+  override createTaskSetItem(): Promise<void> {
+    return this.run("createTaskSetItem", undefined);
+  }
+
+  override updateTaskSetItem(): Promise<void> {
+    return this.run("updateTaskSetItem", undefined);
+  }
+
+  override deleteTaskSetItem(): Promise<void> {
+    return this.run("deleteTaskSetItem", undefined);
+  }
+
+  override reorderTaskSetItems(): Promise<void> {
+    return this.run("reorderTaskSetItems", undefined);
   }
 
   override hydrate(): Promise<AppState> {
@@ -544,7 +577,14 @@ export type FailingOp =
   | "createStatus"
   | "updateStatus"
   | "deleteStatus"
-  | "reorderStatuses";
+  | "reorderStatuses"
+  | "createTaskSet"
+  | "updateTaskSet"
+  | "archiveTaskSet"
+  | "createTaskSetItem"
+  | "updateTaskSetItem"
+  | "deleteTaskSetItem"
+  | "reorderTaskSetItems";
 
 /** Runs a store action inside act() and returns whatever it returned, so
  *  `result.current` reflects the resulting state by the time this resolves.

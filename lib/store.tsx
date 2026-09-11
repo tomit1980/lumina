@@ -4,7 +4,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { backendKind, createBackend } from "./backend";
-import { isDoneStatus } from "./statuses";
+import { fallbackStatus, firstOpenStatus, isDoneStatus } from "./statuses";
 import type {
   AttachmentRemovals,
   Backend,
@@ -15,6 +15,8 @@ import type {
   RolePatch,
   StatusPatch,
   TaskPatch,
+  TaskSetItemPatch,
+  TaskSetPatch,
 } from "./backend/types";
 import {
   DEFAULT_ROLE_RANK,
@@ -40,6 +42,8 @@ import type {
   RoleDef,
   StatusDef,
   Task,
+  TaskSet,
+  TaskSetItem,
   TaskStatus,
   User,
 } from "./types";
@@ -225,6 +229,30 @@ interface StoreValue {
   updateStatus: (statusId: string, patch: StatusPatch) => Promise<boolean>;
   deleteStatus: (statusId: string) => Promise<boolean>;
   reorderStatuses: (orderedIds: string[]) => Promise<boolean>;
+
+  /**
+   * Reusable task sets. All gated on `workspace.taskSets`, held by Owner and
+   * Admin — deliberately not `project.create`, which is meant to be grantable
+   * on its own to someone who should not be able to delete the definitions.
+   */
+  createTaskSet: (input: {
+    name: string;
+    description?: string;
+    /** Lines to create with the set. Ids and positions are assigned here. */
+    items?: Array<Omit<TaskSetItem, "id" | "position">>;
+  }) => Promise<TaskSet | null>;
+  /** A copy with fresh ids and a name that does not collide. */
+  duplicateTaskSet: (taskSetId: string) => Promise<TaskSet | null>;
+  updateTaskSet: (taskSetId: string, patch: TaskSetPatch) => Promise<boolean>;
+  /** Archive, not delete: reversible, and projects keep pointing at it. */
+  archiveTaskSet: (taskSetId: string, archived: boolean) => Promise<boolean>;
+  createTaskSetItem: (
+    taskSetId: string,
+    input: { title: string; description?: string; priority?: Priority; labels?: string[] }
+  ) => Promise<TaskSetItem | null>;
+  updateTaskSetItem: (itemId: string, patch: TaskSetItemPatch) => Promise<boolean>;
+  deleteTaskSetItem: (itemId: string) => Promise<boolean>;
+  reorderTaskSetItems: (taskSetId: string, orderedIds: string[]) => Promise<boolean>;
   resetDemo: () => Promise<void>;
 
   /** Post to a channel or DM. Empty content is allowed when files are attached.
@@ -278,6 +306,9 @@ interface StoreValue {
     emoji: string;
     color: string;
     priority: Priority;
+    /** Instantiate this task set's lines as real tasks. Omitted or null means
+     *  an empty project, which is the ordinary case. */
+    taskSetId?: string | null;
   }) => Promise<Project | null>;
   updateProject: (
     projectId: string,
@@ -1570,6 +1601,261 @@ export function StoreProvider({
       );
     };
 
+    // ------------------------------------------------------------------
+    // Reusable task sets.
+    //
+    // Every guard here is `workspace.taskSets`, and every one is also enforced
+    // by `task_sets_write` / `task_set_items_write`. These exist for the
+    // sentence, not the rule: a Member calling PostgREST directly is refused
+    // by the database whatever this file says.
+    //
+    // Items are edited through their own actions rather than by patching a set
+    // wholesale, so a rename cannot silently rewrite the list.
+    // ------------------------------------------------------------------
+
+    const createTaskSet: StoreValue["createTaskSet"] = (input) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(null);
+      const name = input.name.trim();
+      if (!name) {
+        deny("Give the task set a name first.");
+        return Promise.resolve(null);
+      }
+      if (s.taskSets.some((t) => t.name.toLowerCase() === name.toLowerCase())) {
+        deny(`A task set called \u201C${name}\u201D already exists.`);
+        return Promise.resolve(null);
+      }
+      const now = Date.now();
+      const set: TaskSet = {
+        id: uid("ts"),
+        name,
+        description: input.description?.trim() ?? "",
+        // Positions reassigned by index: the order the caller built the lines
+        // in is the order stored, so duplicating a set cannot renumber it.
+        items: (input.items ?? []).map((item, position) => ({
+          ...item,
+          id: uid("tsi"),
+          position,
+        })),
+        createdBy: s.currentUserId,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+      };
+      return commit(
+        (st) => ({
+          ...st,
+          taskSets: [set, ...st.taskSets],
+          activities: activity(st, "member", `added the ${name} task set`, WORKSPACE_WIDE),
+        }),
+        () => backend.createTaskSet(set),
+        { ok: (created) => created, failed: null, describe: `add the ${name} task set` }
+      );
+    };
+
+    /**
+     * Duplicate a set, in the store rather than the backend.
+     *
+     * It is `createTaskSet` with fresh ids, which is the point: no second code
+     * path that could drift from the first, and no seam method whose behaviour
+     * could disagree with creation's.
+     */
+    const duplicateTaskSet: StoreValue["duplicateTaskSet"] = (taskSetId) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(null);
+      const source = s.taskSets.find((t) => t.id === taskSetId);
+      if (!source) {
+        deny("That task set doesn't exist.");
+        return Promise.resolve(null);
+      }
+      // "Onboarding" -> "Onboarding (copy)" -> "Onboarding (copy 2)". The names
+      // have to differ because createTaskSet refuses a duplicate, and a refusal
+      // nobody asked for would read as the button being broken.
+      const taken = new Set(s.taskSets.map((t) => t.name.toLowerCase()));
+      let name = `${source.name} (copy)`;
+      for (let n = 2; taken.has(name.toLowerCase()); n++) {
+        name = `${source.name} (copy ${n})`;
+      }
+      return createTaskSet({
+        name,
+        description: source.description,
+        items: source.items.map(({ title, description, priority, labels }) => ({
+          title,
+          description,
+          priority,
+          labels: [...labels],
+        })),
+      });
+    };
+
+    const updateTaskSet: StoreValue["updateTaskSet"] = (taskSetId, patch) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(false);
+      const set = s.taskSets.find((t) => t.id === taskSetId);
+      if (!set) return Promise.resolve(false);
+      const name = patch.name?.trim();
+      if (patch.name !== undefined && !name) {
+        deny("A task set needs a name.");
+        return Promise.resolve(false);
+      }
+      if (
+        name &&
+        s.taskSets.some(
+          (t) => t.id !== taskSetId && t.name.toLowerCase() === name.toLowerCase()
+        )
+      ) {
+        deny(`A task set called \u201C${name}\u201D already exists.`);
+        return Promise.resolve(false);
+      }
+      const applied = { ...patch, ...(name ? { name } : {}) };
+      return commit(
+        (st) => ({
+          ...st,
+          taskSets: st.taskSets.map((t) =>
+            t.id === taskSetId ? { ...t, ...applied, updatedAt: Date.now() } : t
+          ),
+        }),
+        () => backend.updateTaskSet(taskSetId, applied),
+        { ok: () => true, failed: false, describe: `save the ${set.name} task set` }
+      );
+    };
+
+    const archiveTaskSet: StoreValue["archiveTaskSet"] = (taskSetId, archived) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(false);
+      const set = s.taskSets.find((t) => t.id === taskSetId);
+      if (!set) return Promise.resolve(false);
+      return commit(
+        (st) => ({
+          ...st,
+          taskSets: st.taskSets.map((t) =>
+            t.id === taskSetId ? { ...t, archivedAt: archived ? Date.now() : null } : t
+          ),
+          activities: activity(
+            st,
+            "member",
+            `${archived ? "archived" : "restored"} the ${set.name} task set`,
+            WORKSPACE_WIDE
+          ),
+        }),
+        () => backend.archiveTaskSet(taskSetId, archived),
+        {
+          ok: () => true,
+          failed: false,
+          describe: `${archived ? "archive" : "restore"} the ${set.name} task set`,
+        }
+      );
+    };
+
+    const createTaskSetItem: StoreValue["createTaskSetItem"] = (taskSetId, input) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(null);
+      const set = s.taskSets.find((t) => t.id === taskSetId);
+      if (!set) return Promise.resolve(null);
+      const title = input.title.trim();
+      if (!title) {
+        deny("Give the task a title first.");
+        return Promise.resolve(null);
+      }
+      const item: TaskSetItem = {
+        id: uid("tsi"),
+        title,
+        description: input.description?.trim() ?? "",
+        priority: input.priority ?? "medium",
+        labels: input.labels ?? [],
+        // Appended. Guessing a position would move lines nobody asked to move.
+        position: Math.max(-1, ...set.items.map((i) => i.position)) + 1,
+      };
+      return commit(
+        (st) => ({
+          ...st,
+          taskSets: st.taskSets.map((t) =>
+            t.id === taskSetId
+              ? { ...t, items: [...t.items, item], updatedAt: Date.now() }
+              : t
+          ),
+        }),
+        () => backend.createTaskSetItem(taskSetId, item),
+        { ok: () => item, failed: null, describe: `add \u201C${title}\u201D` }
+      );
+    };
+
+    const updateTaskSetItem: StoreValue["updateTaskSetItem"] = (itemId, patch) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(false);
+      const title = patch.title?.trim();
+      if (patch.title !== undefined && !title) {
+        deny("A task needs a title.");
+        return Promise.resolve(false);
+      }
+      const applied = { ...patch, ...(title ? { title } : {}) };
+      return commit(
+        (st) => ({
+          ...st,
+          taskSets: st.taskSets.map((t) =>
+            t.items.some((i) => i.id === itemId)
+              ? {
+                  ...t,
+                  items: t.items.map((i) => (i.id === itemId ? { ...i, ...applied } : i)),
+                  updatedAt: Date.now(),
+                }
+              : t
+          ),
+        }),
+        () => backend.updateTaskSetItem(itemId, applied),
+        { ok: () => true, failed: false, describe: "save that task" }
+      );
+    };
+
+    const deleteTaskSetItem: StoreValue["deleteTaskSetItem"] = (itemId) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(false);
+      return commit(
+        (st) => ({
+          ...st,
+          taskSets: st.taskSets.map((t) =>
+            t.items.some((i) => i.id === itemId)
+              ? {
+                  ...t,
+                  items: t.items.filter((i) => i.id !== itemId),
+                  updatedAt: Date.now(),
+                }
+              : t
+          ),
+        }),
+        () => backend.deleteTaskSetItem(itemId),
+        { ok: () => true, failed: false, describe: "remove that task" }
+      );
+    };
+
+    const reorderTaskSetItems: StoreValue["reorderTaskSetItems"] = (
+      taskSetId,
+      orderedIds
+    ) => {
+      const s = stateRef.current;
+      if (!s || !guard("workspace.taskSets")) return Promise.resolve(false);
+      const order = orderedIds.map((id, position) => ({ id, position }));
+      return commit(
+        (st) => ({
+          ...st,
+          taskSets: st.taskSets.map((t) =>
+            t.id === taskSetId
+              ? {
+                  ...t,
+                  items: t.items.map((item) => {
+                    const at = orderedIds.indexOf(item.id);
+                    return at === -1 ? item : { ...item, position: at };
+                  }),
+                  updatedAt: Date.now(),
+                }
+              : t
+          ),
+        }),
+        () => backend.reorderTaskSetItems(order),
+        { ok: () => true, failed: false, describe: "reorder those tasks" }
+      );
+    };
+
     const reorderStatuses: StoreValue["reorderStatuses"] = (orderedIds) => {
       const s = stateRef.current;
       if (!s || !guard("workspace.statuses")) return Promise.resolve(false);
@@ -1983,28 +2269,90 @@ export function StoreProvider({
       if (!guard("project.create")) return Promise.resolve(null);
       const s = stateRef.current;
       if (!s) return Promise.resolve(null);
+
+      const { taskSetId, ...fields } = input;
+      // An archived set is not offered by the picker, and is not honoured if
+      // one is passed anyway — the list the person chose from is the list that
+      // should apply.
+      const set =
+        taskSetId != null
+          ? s.taskSets.find((t) => t.id === taskSetId && t.archivedAt === null)
+          : undefined;
+
       const project: Project = {
         id: uid("p"),
-        ...input,
+        ...fields,
         restricted: false,
         members: [],
         attachments: [],
         createdBy: s.currentUserId,
         createdAt: Date.now(),
+        createdFromTaskSetId: set?.id ?? null,
       };
+
+      // Instantiated tasks are ordinary tasks: fresh ids, no link back to the
+      // line that described them, nothing that syncs. The definition is read
+      // once, here, and never consulted again.
+      //
+      // They land in the first open column with no due date. A definition
+      // carries neither: a status would tie it to a board column, and a due
+      // date needs a timezone the database does not have.
+      // The first unfinished column, falling back to the first column at all
+      // for a board whose only column is the done one. If there is no column
+      // whatsoever there is nowhere to put a task, and inventing "backlog"
+      // here would produce a foreign-key error the person cannot read.
+      const column = firstOpenStatus(s.statuses) ?? fallbackStatus(s.statuses);
+      if (set && set.items.length > 0 && !column) {
+        deny("Add a column to the board before creating a project from a task set.");
+        return Promise.resolve(null);
+      }
+      const createdAt = Date.now();
+      const tasks: Task[] = (set?.items ?? [])
+        .slice()
+        .sort((a, b) => a.position - b.position)
+        .map((item, index) => ({
+          id: uid("t"),
+          projectId: project.id,
+          title: item.title,
+          description: item.description,
+          status: column as string,
+          priority: item.priority,
+          assigneeId: null,
+          dueDate: null,
+          startTime: null,
+          durationMinutes: null,
+          reminderMinutes: null,
+          labels: [...item.labels],
+          attachments: [],
+          // Explicit and non-negative, so the definition's order is the board's
+          // order rather than whatever the insert trigger would append.
+          order: index,
+          createdAt,
+          createdBy: s.currentUserId,
+          collaboratorIds: [],
+        }));
+
+      // ONE activity line, not one per task. Routing instantiation through
+      // `createTask` would put twelve entries in the feed for every new
+      // client, which is the feed being useless on exactly the day it matters.
+      const note = set
+        ? `created the ${fields.name} project from ${set.name} (${tasks.length} ${
+            tasks.length === 1 ? "task" : "tasks"
+          })`
+        : `created the ${fields.name} project`;
+
       return commit(
         (st) => ({
           ...st,
           projects: [...st.projects, project],
-          activities: activity(st, "project", `created the ${input.name} project`, {
-            projectId: project.id,
-          }),
+          tasks: [...st.tasks, ...tasks],
+          activities: activity(st, "project", note, { projectId: project.id }),
         }),
-        () => backend.createProject(project),
+        () => backend.createProject(project, tasks),
         {
           ok: (created) => created,
           failed: null,
-          describe: `create the ${input.name} project`,
+          describe: `create the ${fields.name} project`,
         }
       );
     };
@@ -2403,6 +2751,14 @@ export function StoreProvider({
       updateStatus,
       deleteStatus,
       reorderStatuses,
+      createTaskSet,
+      duplicateTaskSet,
+      updateTaskSet,
+      archiveTaskSet,
+      createTaskSetItem,
+      updateTaskSetItem,
+      deleteTaskSetItem,
+      reorderTaskSetItems,
       resetDemo,
       sendMessage,
       sendToUser,

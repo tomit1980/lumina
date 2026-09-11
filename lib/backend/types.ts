@@ -28,8 +28,11 @@ import type {
   Project,
   ResourceMember,
   RoleDef,
+  Priority,
   StatusDef,
   Task,
+  TaskSet,
+  TaskSetItem,
   TaskStatus,
 } from "../types";
 
@@ -75,6 +78,22 @@ export interface StatusPatch {
   name?: string;
   color?: string;
   isDone?: boolean;
+}
+
+/** The editable fields of a task set. `items` are edited through their own
+ *  methods, so a rename cannot silently rewrite the list. */
+export interface TaskSetPatch {
+  name?: string;
+  description?: string;
+}
+
+/** The editable fields of one line. `position` is changed by reordering the
+ *  whole set, never by patching one row — same rule as a task's `order`. */
+export interface TaskSetItemPatch {
+  title?: string;
+  description?: string;
+  priority?: Priority;
+  labels?: string[];
 }
 
 export interface ChannelAccessPatch {
@@ -229,6 +248,22 @@ export interface Backend {
    *  board from passing through orders nobody asked for. */
   reorderStatuses(order: Array<{ id: string; position: number }>): Promise<void>;
 
+  // Reusable task sets. Gated on `workspace.taskSets`, held by Owner and
+  // Admin — see 20260911000200_task_sets.sql for why it is not `project.create`.
+  /** Parent and lines in one call, so a set never exists without the items it
+   *  was created with. Duplicating a set is this method with fresh ids, which
+   *  is why there is no separate `duplicateTaskSet` to drift from it. */
+  createTaskSet(set: TaskSet): Promise<TaskSet>;
+  updateTaskSet(taskSetId: string, patch: TaskSetPatch): Promise<void>;
+  /** Archive, not delete: reversible, and it keeps a project's
+   *  `createdFromTaskSetId` pointing at something real. */
+  archiveTaskSet(taskSetId: string, archived: boolean): Promise<void>;
+  createTaskSetItem(taskSetId: string, item: TaskSetItem): Promise<void>;
+  updateTaskSetItem(itemId: string, patch: TaskSetItemPatch): Promise<void>;
+  deleteTaskSetItem(itemId: string): Promise<void>;
+  /** The whole ordered list, like `reorderStatuses`. */
+  reorderTaskSetItems(order: Array<{ id: string; position: number }>): Promise<void>;
+
   // Messages, DMs, reactions, read state.
   sendMessage(message: Message): Promise<Message>;
   /** One operation, because a DM's first message must not be able to create
@@ -247,7 +282,14 @@ export interface Backend {
   openDm(dm: DM): Promise<DM>;
 
   // Projects.
-  createProject(project: Project): Promise<Project>;
+  /**
+   * A project, and the tasks a task set contributes to it.
+   *
+   * One call because they must arrive together: a project with half its tasks
+   * is worse than no project. `tasks` is empty when no set was chosen, which
+   * is the ordinary case and the one this signature must not make awkward.
+   */
+  createProject(project: Project, tasks: Task[]): Promise<Project>;
   updateProject(projectId: string, patch: ProjectPatch): Promise<void>;
   deleteProject(projectId: string): Promise<void>;
   setProjectAccess(projectId: string, patch: ProjectAccessPatch): Promise<void>;

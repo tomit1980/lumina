@@ -45,7 +45,7 @@ import { fail, requireRows } from "./result";
 import { syncAttachmentLinks } from "./storage";
 import type { LuminaClient } from "./client";
 import type { ChannelAccessPatch, ProjectAccessPatch, ProjectPatch } from "../types";
-import type { Channel, Project, ResourceMember } from "../../types";
+import type { Channel, Project, ResourceMember, Task } from "../../types";
 
 // ---------------------------------------------------------------------------
 // Membership
@@ -251,22 +251,58 @@ export async function setChannelAccess(
 // Projects
 // ---------------------------------------------------------------------------
 
+/**
+ * A project, and any tasks a task set contributes to it.
+ *
+ * Goes through the `create_project_with_tasks` RPC rather than an insert,
+ * because the two must arrive together: a project holding four of its twelve
+ * tasks is worse than no project at all, and supabase-js has no client
+ * transaction. The function is `security invoker`, so both inserts still pass
+ * through `projects_insert` and `tasks_insert` as this caller — it bundles,
+ * it does not grant.
+ *
+ * It is also idempotent, which matters more than it looks: ids are generated
+ * in the browser, so a replayed request carries ids the tables already hold
+ * and creates nothing. See 20260911000300_project_insert_conflict.sql for why
+ * that is an existence check rather than `on conflict do nothing`.
+ *
+ * Members and attachments stay here as separate inserts. A brand-new project
+ * has neither in practice — `createProject` in lib/store.tsx builds it with
+ * both empty — and folding them into the function would mean encoding two
+ * more shapes in SQL for a case that does not arise.
+ */
 export async function createProject(
   client: LuminaClient,
-  project: Project
+  project: Project,
+  tasks: Task[]
 ): Promise<Project> {
-  const row = await client.from("projects").insert({
-    id: project.id,
-    name: project.name,
-    description: project.description,
-    emoji: project.emoji,
-    color: project.color,
-    priority: project.priority,
-    restricted: project.restricted,
-    created_by: project.createdBy,
-    created_at: new Date(project.createdAt).toISOString(),
+  const what = "creating that project";
+  const { error } = await client.rpc("create_project_with_tasks", {
+    p_project: {
+      id: project.id,
+      name: project.name,
+      description: project.description,
+      emoji: project.emoji,
+      color: project.color,
+      priority: project.priority,
+      restricted: project.restricted,
+      created_at: new Date(project.createdAt).toISOString(),
+      created_from_task_set_id: project.createdFromTaskSetId,
+    },
+    p_tasks: tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      labels: task.labels,
+      // The board position, sent explicitly so the definition's order
+      // survives: a null or -1 would let `set_task_position` append instead.
+      position: task.order,
+      created_at: new Date(task.createdAt).toISOString(),
+    })),
   });
-  if (row.error) fail("creating that project", row.error);
+  if (error) fail(what, error);
 
   if (project.members.length > 0) {
     const members = await client.from("project_members").insert(
@@ -278,22 +314,12 @@ export async function createProject(
     );
     if (members.error) {
       await client.from("projects").delete().eq("id", project.id);
-      fail("creating that project", members.error);
+      fail(what, members.error);
     }
   }
 
-  // A brand-new project has no files in practice (`createProject` in
-  // lib/store.tsx builds it with `attachments: []`), but the parameter can
-  // carry them and dropping them silently is the failure mode this plan keeps
-  // closing. The bytes are already in Storage by now; this links them.
   if (project.attachments.length > 0) {
-    await syncAttachmentLinks(
-      client,
-      "project",
-      project.id,
-      project.attachments,
-      "creating that project"
-    );
+    await syncAttachmentLinks(client, "project", project.id, project.attachments, what);
   }
 
   return project;

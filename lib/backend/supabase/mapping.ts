@@ -70,6 +70,8 @@ import {
   type ResourceMember,
   type RoleDef,
   type Task,
+  type TaskSet,
+  type TaskSetItem,
   type TaskStatus,
   type User,
 } from "../../types";
@@ -99,6 +101,8 @@ export type ProjectAttachmentRow = Row<"project_attachments">;
 export type TaskRow = Row<"tasks">;
 export type TaskCollaboratorRow = Row<"task_collaborators">;
 export type TaskAttachmentRow = Row<"task_attachments">;
+export type TaskSetRow = Row<"task_sets">;
+export type TaskSetItemRow = Row<"task_set_items">;
 export type ActivityRow = Row<"activities">;
 export type ReadStateRow = Row<"read_state">;
 
@@ -123,6 +127,8 @@ export interface HydrateRows {
   tasks: TaskRow[];
   taskCollaborators: TaskCollaboratorRow[];
   taskAttachments: TaskAttachmentRow[];
+  taskSets: TaskSetRow[];
+  taskSetItems: TaskSetItemRow[];
   activities: ActivityRow[];
   readState: ReadStateRow[];
 }
@@ -247,6 +253,32 @@ export function toRole(row: RoleRow): RoleDef {
     isSystem: row.is_system,
     locked: row.locked,
     rank: row.rank,
+  };
+}
+
+export function toTaskSetItem(row: TaskSetItemRow): TaskSetItem {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    priority: toPriority(row.priority),
+    labels: row.labels,
+    position: row.position,
+  };
+}
+
+/** Items arrive separately and are sorted here, so every caller gets the
+ *  definition's order rather than PostgREST's row order. */
+export function toTaskSet(row: TaskSetRow, items: TaskSetItem[]): TaskSet {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    items: [...items].sort((a, b) => a.position - b.position),
+    createdBy: owner(row.created_by),
+    createdAt: toEpoch(row.created_at),
+    updatedAt: toEpoch(row.updated_at),
+    archivedAt: toEpochOrNull(row.archived_at),
   };
 }
 
@@ -392,6 +424,8 @@ export function toAppState(rows: HydrateRows): AppState {
   /** Join rows whose attachment the caller cannot see are skipped. That can
    *  happen legitimately: `attachments_read` and the join table's own read
    *  policy are separate gates. */
+  const taskSetItemsBySet = groupBy(rows.taskSetItems, (i) => i.task_set_id);
+
   const filesFor = (ids: string[]): Attachment[] =>
     ids
       .map((id) => attachmentsById.get(id))
@@ -404,6 +438,9 @@ export function toAppState(rows: HydrateRows): AppState {
     users: rows.profiles.map(toUser),
     roles: rows.roles.map(toRole),
     statuses: rows.statuses.map(toStatusDef),
+    taskSets: rows.taskSets.map((set) =>
+      toTaskSet(set, (taskSetItemsBySet.get(set.id) ?? []).map(toTaskSetItem))
+    ),
     channels: rows.channels.map((c) =>
       toChannel(c, members(channelMembersByChannel.get(c.id)))
     ),
@@ -448,6 +485,7 @@ export function toAppState(rows: HydrateRows): AppState {
         ),
         createdBy: owner(p.created_by),
         createdAt: toEpoch(p.created_at),
+        createdFromTaskSetId: p.created_from_task_set_id,
       })
     ),
     tasks: rows.tasks.map(
@@ -515,6 +553,7 @@ export function signedOutState(): AppState {
     activities: [],
     roles: [],
     statuses: [],
+    taskSets: [],
     lastRead: {},
   };
 }
