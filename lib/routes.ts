@@ -37,7 +37,7 @@ export function useCurrentRoute(): {
 /** Which section of Settings is open. A query param rather than a path
  *  segment for the same reason every other resource here uses one: this is a
  *  static export, and a dynamic segment would need a server. */
-export type SettingsTab = "members" | "roles" | "statuses";
+export type SettingsTab = "members" | "roles" | "statuses" | "taskSets";
 
 export const settingsHref = (tab: SettingsTab) => `/settings?tab=${tab}`;
 

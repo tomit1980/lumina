@@ -43,6 +43,10 @@ const COLORS = [
   "#14b8a6",
 ];
 
+/** Radix's Select treats "" as "no value", so the none option needs a real
+ *  one. Never reaches the store: it is mapped back to null on submit. */
+const NO_TASK_SET = "__none__";
+
 export function ProjectDialog() {
   const router = useRouter();
   const { projectDialog, closeProjectDialog } = useUI();
@@ -57,6 +61,8 @@ export function ProjectDialog() {
   const [emoji, setEmoji] = React.useState(EMOJIS[0]);
   const [color, setColor] = React.useState(COLORS[0]);
   const [priority, setPriority] = React.useState<Priority>("medium");
+  /** "" means no task set — the ordinary case, and the default. */
+  const [taskSetId, setTaskSetId] = React.useState("");
 
   React.useEffect(() => {
     if (!projectDialog.open) return;
@@ -72,9 +78,15 @@ export function ProjectDialog() {
       setEmoji(EMOJIS[0]);
       setColor(COLORS[0]);
       setPriority("medium");
+      setTaskSetId("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectDialog.open, projectDialog.editId]);
+
+  // Archived sets stay in Settings and drop out of here. The store applies
+  // the same rule, so passing one anyway changes nothing.
+  const available = state.taskSets.filter((t) => t.archivedAt === null);
+  const chosen = available.find((t) => t.id === taskSetId);
 
   const saveOnce = async () => {
     const trimmed = name.trim();
@@ -104,10 +116,18 @@ export function ProjectDialog() {
       emoji,
       color,
       priority,
+      taskSetId: taskSetId || null,
     });
     if (!project) return;
     closeProjectDialog();
-    toast.success(`Project “${trimmed}” created`);
+    // The count comes from the set that was chosen, not from a guess about
+    // what the store did: if instantiation had been refused, `project` would
+    // be null and this line would never run.
+    toast.success(`Project “${trimmed}” created`, {
+      description: chosen
+        ? `${chosen.items.length} ${chosen.items.length === 1 ? "task" : "tasks"} added from ${chosen.name}.`
+        : undefined,
+    });
     router.push(projectHref(project.id));
   };
 
@@ -161,6 +181,51 @@ export function ProjectDialog() {
               </SelectContent>
             </Select>
           </div>
+
+          {/* Task sets, on create only. Editing a project must not offer to
+              pour a second set into it: instantiation happens once, and an
+              "apply a set to an existing project" action is a different
+              feature with different rules about duplicates. */}
+          {!editing && available.length > 0 && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="project-task-set">Task set</Label>
+              <Select
+                value={taskSetId || NO_TASK_SET}
+                onValueChange={(v) => setTaskSetId(v === NO_TASK_SET ? "" : v)}
+              >
+                <SelectTrigger id="project-task-set">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_TASK_SET}>No task set</SelectItem>
+                  {available.map((set) => (
+                    <SelectItem key={set.id} value={set.id}>
+                      {set.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {chosen && (
+                <div className="rounded-lg border bg-muted/30 p-2.5">
+                  <p className="text-[12px] font-medium">
+                    {chosen.items.length}{" "}
+                    {chosen.items.length === 1 ? "task" : "tasks"} will be created
+                  </p>
+                  {chosen.items.length > 0 && (
+                    <ol className="mt-1.5 max-h-32 space-y-0.5 overflow-y-auto text-[12px] text-muted-foreground">
+                      {[...chosen.items]
+                        .sort((a, b) => a.position - b.position)
+                        .map((item, i) => (
+                          <li key={item.id}>
+                            {i + 1}. {item.title}
+                          </li>
+                        ))}
+                    </ol>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="grid gap-1.5">
             <Label>Icon</Label>
             <div className="flex flex-wrap gap-1.5">

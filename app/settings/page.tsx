@@ -6,6 +6,7 @@ import { ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { StatusesSection } from "@/components/settings/statuses-section";
+import { TaskSetsSection } from "@/components/settings/task-sets-section";
 import { WorkspacePeople } from "@/components/settings/workspace-people";
 import { useCurrentRoute } from "@/lib/routes";
 import { settingsHref, type SettingsTab } from "@/lib/routes";
@@ -29,21 +30,29 @@ const TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "members", label: "Members" },
   { id: "roles", label: "Roles & permissions" },
   { id: "statuses", label: "Board columns" },
+  { id: "taskSets", label: "Task sets" },
 ];
 
 export default function SettingsPage() {
   const { state, can } = useStore();
   const { tab } = useCurrentRoute();
   const active: SettingsTab =
-    tab === "roles" || tab === "statuses" ? tab : "members";
+    tab === "roles" || tab === "statuses" || tab === "taskSets" ? tab : "members";
 
   const manageRoles = can("members.manage");
   const mayEditStatuses = can("workspace.statuses");
+  const mayEditTaskSets = can("workspace.taskSets");
 
   // The Board columns tab is Owner-only, so it is not offered to anybody
   // else. The section refuses on its own too — this is the cosmetic half of
   // a rule the database actually keeps.
-  const visible = TABS.filter((t) => t.id !== "statuses" || mayEditStatuses);
+  // Board columns is Owner-only; Task sets is Owner and Admin. Neither tab is
+  // offered to somebody who cannot use it, and both sections refuse on their
+  // own as well — this is the cosmetic half of a rule the database keeps.
+  const visible = TABS.filter(
+    (t) =>
+      (t.id !== "statuses" || mayEditStatuses) && (t.id !== "taskSets" || mayEditTaskSets)
+  );
 
   return (
     <div className="h-full overflow-y-auto">
@@ -84,6 +93,8 @@ export default function SettingsPage() {
         <div className="mt-6">
           {active === "statuses" ? (
             <StatusesSection />
+          ) : active === "taskSets" ? (
+            <TaskSetsSection />
           ) : (
             <WorkspacePeople section={active} />
           )}
