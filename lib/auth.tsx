@@ -721,6 +721,32 @@ function SupabaseAuthProvider({
         return { step: "error", message: "Incorrect email or password." };
       }
 
+      // THE FACTOR CHECK COMES BEFORE THE PROFILE READ, AND THE ORDER IS THE
+      // WHOLE POINT.
+      //
+      // `signInWithPassword` issues an aal1 session. For an account that has a
+      // verified factor, `session_is_assured()` is false at that moment, so
+      // `require_assurance` (20260910004000) filters `profiles` to nothing —
+      // no error, no rows, because a restrictive policy filters rather than
+      // raises. Reading the profile here therefore returned null and the login
+      // screen told the workspace's Owner that he had no profile.
+      //
+      // He had one. It was unreadable for the three seconds between his
+      // password and his code, which is exactly what that policy is for. The
+      // effect was that enrolling two-factor locked you out permanently.
+      //
+      // `listFactors` is an auth API rather than a table, so it answers at
+      // aal1. And `profiles.id` IS the auth uid (`handle_new_user` guarantees
+      // it), so nothing here needs the profile row to know who is signing in.
+      // The profile is read once the session can actually read it — after the
+      // second factor, in `finishGatedLogin`.
+      const factorId = await verifiedFactorId(client);
+      if (factorId) {
+        setPending({ profileId: data.user.id, factorId });
+        return { step: "totp" };
+      }
+
+      // No verified factor, so the session is assured and this read works.
       const profile = await fetchProfile(client, data.user.id);
       if (!profile) {
         await signOutQuietly(client);
@@ -729,12 +755,6 @@ function SupabaseAuthProvider({
           step: "error",
           message: "This account has no Lumina profile yet — ask an admin to finish setting it up.",
         };
-      }
-
-      const factorId = await verifiedFactorId(client);
-      if (factorId) {
-        setPending({ profileId: profile.id, factorId });
-        return { step: "totp" };
       }
 
       if (profile.mfa_required) {
@@ -809,8 +829,21 @@ function SupabaseAuthProvider({
       // the profile rather than trusting what login() saw, because the flag
       // could have been cleared in between - by them, on another device,
       // finishing this same flow.
+      // Now aal2, so this read is the first one that can succeed for an
+      // account with a factor — which makes it the place the missing-profile
+      // case has to be handled.
       const profile = await fetchProfile(client, pending.profileId);
-      if (profile?.must_change_password) {
+      if (!profile) {
+        await signOutQuietly(client);
+        gated.current = false;
+        setPending(null);
+        setLoginEnrollment(null);
+        return {
+          step: "error",
+          message: "This account has no Lumina profile yet — ask an admin to finish setting it up.",
+        };
+      }
+      if (profile.must_change_password) {
         setLoginEnrollment(null);
         return { step: "password" };
       }

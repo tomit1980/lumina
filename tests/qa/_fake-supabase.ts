@@ -44,6 +44,17 @@ export interface FakeSupabase {
   /** The only TOTP code `verify` accepts. */
   validCode: string;
   session: { user: { id: string } } | null;
+  /**
+   * The session's assurance level, exactly as it governs `require_assurance`.
+   *
+   * "none" = signed out. `signInWithPassword` gives "aal1"; answering a factor
+   * gives "aal2". This is not decoration: 20260910004000_require_assurance.sql
+   * makes `profiles` UNREADABLE to an aal1 session whose account has a
+   * verified factor, and a fake that ignored it let the login screen tell a
+   * user with two-factor that they had no profile — for a day, with 768 green
+   * tests, because the instrument could not express the failure.
+   */
+  assurance: "none" | "aal1" | "aal2";
   signOutCalls: number;
   enrollCalls: number;
   /** Every `profiles.update({mfa_required})` this client was asked to make. */
@@ -90,6 +101,7 @@ export function createFakeSupabase(options: {
     factors: options.factors ?? [],
     validCode: "123456",
     session: options.signedInAs ? { user: { id: options.signedInAs } } : null,
+    assurance: "none",
     signOutCalls: 0,
     enrollCalls: 0,
     requirementWrites: [],
@@ -138,6 +150,7 @@ export function createFakeSupabase(options: {
         };
       }
       fake.session = { user: { id: uid } };
+      fake.assurance = "aal1";
       emit("SIGNED_IN");
       return {
         data: { user: { id: uid }, session: fake.session },
@@ -170,6 +183,7 @@ export function createFakeSupabase(options: {
     signOut: async () => {
       fake.signOutCalls += 1;
       fake.session = null;
+      fake.assurance = "none";
       emit("SIGNED_OUT");
       return { error: null };
     },
@@ -220,6 +234,9 @@ export function createFakeSupabase(options: {
           return { data: null, error: { message: "Invalid TOTP code entered" } };
         }
         factor.status = "verified";
+        // Answering the factor is what raises the session, and therefore what
+        // makes profiles readable again.
+        fake.assurance = "aal2";
         return { data: { access_token: "token" }, error: null };
       },
 
@@ -230,11 +247,26 @@ export function createFakeSupabase(options: {
     },
   };
 
+  /**
+   * `session_is_assured()` from 20260910004000_require_assurance.sql:
+   * aal2, OR the account has no verified factor. Note what that means for an
+   * aal1 session that DOES have one — it reads nothing at all.
+   */
+  const assured = () => {
+    if (fake.assurance === "none") return true;
+    if (fake.assurance === "aal2") return true;
+    return !fake.factors.some((f) => f.status === "verified");
+  };
+
   // Table and column arguments are accepted and ignored: this fake serves
   // only `profiles`, and the provider only ever selects from it.
   const from = () => ({
     select: () => {
-      const rows = fake.profiles.map((p) => ({ ...p }));
+      // `require_assurance`, modelled rather than assumed. A restrictive RLS
+      // policy FILTERS: no error, no rows. So an unassured read looks exactly
+      // like an account with no profile, which is precisely how this failure
+      // presented itself in production.
+      const rows = assured() ? fake.profiles.map((p) => ({ ...p })) : [];
       // Awaitable on its own (the mfa_required map) *and* chainable into
       // .eq().maybeSingle() (a single profile) — both shapes the client uses.
       return Object.assign(Promise.resolve({ data: rows, error: null }), {

@@ -182,6 +182,51 @@ describe("the login screen's three-step machine, on real MFA", () => {
     await waitFor(() => expect(screen.getByText("THE APP")).toBeInTheDocument());
   });
 
+  it("does not claim a user with two-factor has no profile (the day-one lockout)", async () => {
+    // THE REGRESSION. Enrolling two-factor on production locked the workspace
+    // Owner out completely, and the message blamed his account:
+    //
+    //   "This account has no Lumina profile yet — ask an admin to finish
+    //    setting it up."
+    //
+    // He had a profile. `signInWithPassword` issues an aal1 session, and for
+    // an account with a verified factor `require_assurance` filters `profiles`
+    // to nothing — no error, no rows — so the profile read that used to run
+    // BEFORE the factor check returned null and login concluded the account
+    // was unfinished. Every account that turned two-factor on was bricked.
+    //
+    // Asserted as the absence of that sentence AND the presence of the TOTP
+    // step, because "no error shown" alone would also pass on a blank screen.
+    const fake = fakeFor({
+      factors: [{ id: "factor-1", factor_type: "totp", status: "verified" }],
+    });
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "correct-horse");
+
+    expect(await screen.findByText("Two-factor verification")).toBeInTheDocument();
+    expect(screen.queryByText(/no Lumina profile/i)).toBeNull();
+
+    // And it gets all the way in, which is what "locked out" was denying.
+    await enterCode(fake.validCode);
+    await waitFor(() => expect(screen.getByText("THE APP")).toBeInTheDocument());
+  });
+
+  it("CONTROL: an account that genuinely has no profile is still told so", async () => {
+    // The message was not wrong to exist — the runbook documents an auth user
+    // with no profile row as a real failure. Without this control, the fix
+    // could have been "delete the check", which would swap a false accusation
+    // for a silent dead end.
+    const fake = fakeFor();
+    fake.profiles = [];
+
+    await renderGate(fake);
+    await signIn(ALICE.email, "correct-horse");
+
+    expect(await screen.findByText(/no Lumina profile/i)).toBeInTheDocument();
+    expect(fake.signOutCalls).toBe(1);
+  });
+
   it("a wrong code at the TOTP step keeps them out", async () => {
     const fake = fakeFor({
       factors: [{ id: "factor-1", factor_type: "totp", status: "verified" }],
