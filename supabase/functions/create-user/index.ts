@@ -134,7 +134,16 @@ Deno.serve(async (req) => {
   // Retried briefly: the trigger is AFTER INSERT, so the row is normally
   // there, and "normally" is not "always". An account silently landing on the
   // wrong role would look like a permissions bug weeks later.
-  const patch: Record<string, string> = { role_id: roleId };
+  // `must_change_password` is set here and never cleared from the browser: a
+  // trigger on auth.users takes it off when the password actually changes
+  // (20260911000100_must_change_password.sql). The password an admin types
+  // above has been spoken aloud or pasted into a chat window and the admin
+  // knows it, so it is a delivery mechanism rather than a credential, and it
+  // should stop working the moment the person is in.
+  const patch: Record<string, string | boolean> = {
+    role_id: roleId,
+    must_change_password: true,
+  };
   if (name) patch.name = name;
 
   let assigned = false;

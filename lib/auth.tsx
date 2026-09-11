@@ -60,6 +60,14 @@ export type LoginOutcome =
   | { step: "success" }
   | { step: "totp" }
   | { step: "enroll"; secret: string; uri: string; account: string }
+  /**
+   * They must replace the password they were given before they get in.
+   *
+   * Last of the gates, in both paths: two-factor is the stronger check and
+   * runs first, so by the time this appears the person is as authenticated as
+   * the workspace asks them to be. The session still is not published.
+   */
+  | { step: "password" }
   | { step: "error"; message: string };
 
 export interface EnrollmentDraft {
@@ -85,6 +93,8 @@ export interface AuthValue {
   login: (identifier: string, password: string) => Promise<LoginOutcome>;
   submitLoginTotp: (code: string) => Promise<LoginOutcome>;
   submitEnrollment: (code: string) => Promise<LoginOutcome>;
+  /** Replace the handed-out password, as the last step of signing in. */
+  submitFirstPassword: (next: string) => Promise<LoginOutcome>;
   cancelPendingLogin: () => void;
   /** Live enrollment draft during a forced-enrollment login. */
   loginEnrollment: EnrollmentDraft | null;
@@ -354,6 +364,10 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
       login,
       submitLoginTotp,
       submitEnrollment,
+      submitFirstPassword: async () => ({
+        step: "error" as const,
+        message: "The demo signs everyone in with one shared password, so there is nothing to replace.",
+      }),
       cancelPendingLogin: () => {
         setPendingLogin(null);
         setLoginEnrollment(null);
@@ -442,13 +456,13 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
 
 type ProfileRow = Pick<
   Database["public"]["Tables"]["profiles"]["Row"],
-  "id" | "handle" | "email" | "mfa_required"
+  "id" | "handle" | "email" | "mfa_required" | "must_change_password"
 >;
 
 async function fetchProfile(client: Client, uid: string): Promise<ProfileRow | null> {
   const { data, error } = await client
     .from("profiles")
-    .select("id, handle, email, mfa_required")
+    .select("id, handle, email, mfa_required, must_change_password")
     .eq("id", uid)
     .maybeSingle();
   return error ? null : data;
@@ -634,11 +648,16 @@ function SupabaseAuthProvider({
       if (uid) {
         const profile = await fetchProfile(client, uid);
         const factorId = await verifiedFactorId(client);
-        if (!profile || (profile.mfa_required && !factorId)) {
-          // Either the profile row never appeared (see the runbook), or a
-          // forced enrolment was never completed. There is no safe half-state
-          // to restore into, and leaving the session would let a reload walk
-          // straight past the enrolment step — so start clean.
+        if (
+          !profile ||
+          (profile.mfa_required && !factorId) ||
+          profile.must_change_password
+        ) {
+          // Either the profile row never appeared (see the runbook), a forced
+          // enrolment was never completed, or the password they were handed is
+          // still in place. There is no safe half-state to restore into, and
+          // leaving the session would let a reload walk straight past whichever
+          // step is outstanding — so start clean.
           await signOutQuietly(client);
         } else if (!cancelled) {
           setSession(profile.id);
@@ -755,8 +774,26 @@ function SupabaseAuthProvider({
         };
       }
 
+      if (profile.must_change_password) {
+        // `pending` normally carries the factor the TOTP step will answer.
+        // There is none here, and the field is only read by finishGatedLogin,
+        // which this path never reaches — so an empty string records "gated on
+        // something else" without inventing a factor that does not exist.
+        setPending({ profileId: profile.id, factorId: "" });
+        return { step: "password" };
+      }
+
       gated.current = false;
       setSession(profile.id);
+      return { step: "success" };
+    };
+
+    /** Publish the session, now that every gate has been passed. */
+    const admit = (profileId: string): LoginOutcome => {
+      gated.current = false;
+      setSession(profileId);
+      setPending(null);
+      setLoginEnrollment(null);
       return { step: "success" };
     };
 
@@ -766,12 +803,38 @@ function SupabaseAuthProvider({
       }
       const ok = await challengeAndVerify(client, pending.factorId, code);
       if (!ok) return { step: "error", message: "That code isn't valid. Try again." };
-      gated.current = false;
-      setSession(pending.profileId);
-      setPending(null);
-      setLoginEnrollment(null);
       setSelfEnrolled(true);
-      return { step: "success" };
+
+      // Two-factor is done; the password gate may still be standing. Re-read
+      // the profile rather than trusting what login() saw, because the flag
+      // could have been cleared in between - by them, on another device,
+      // finishing this same flow.
+      const profile = await fetchProfile(client, pending.profileId);
+      if (profile?.must_change_password) {
+        setLoginEnrollment(null);
+        return { step: "password" };
+      }
+      return admit(pending.profileId);
+    };
+
+    /**
+     * Replace the password you were handed, as the last step of signing in.
+     *
+     * The flag is NOT written here. A trigger on auth.users clears it when
+     * `encrypted_password` actually changes, so this cannot report success
+     * over a password that did not move - and equally cannot be skipped by a
+     * client that writes the flag without the password.
+     */
+    const submitFirstPassword = async (next: string): Promise<LoginOutcome> => {
+      if (!client || !pending) {
+        return { step: "error", message: "Session expired - start over." };
+      }
+      if (next.length < 8) {
+        return { step: "error", message: "Use a password of at least 8 characters." };
+      }
+      const { error } = await client.auth.updateUser({ password: next });
+      if (error) return { step: "error", message: error.message };
+      return admit(pending.profileId);
     };
 
     const cancelPendingLogin = () => {
@@ -838,6 +901,7 @@ function SupabaseAuthProvider({
       login,
       submitLoginTotp: finishGatedLogin,
       submitEnrollment: finishGatedLogin,
+      submitFirstPassword,
       cancelPendingLogin,
       loginEnrollment,
       logout,

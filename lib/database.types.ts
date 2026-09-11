@@ -381,6 +381,7 @@ export type Database = {
           handle: string
           id: string
           mfa_required: boolean
+          must_change_password: boolean
           name: string
           role_id: string
           title: string
@@ -392,6 +393,7 @@ export type Database = {
           handle: string
           id: string
           mfa_required?: boolean
+          must_change_password?: boolean
           name: string
           role_id: string
           title?: string
@@ -403,6 +405,7 @@ export type Database = {
           handle?: string
           id?: string
           mfa_required?: boolean
+          must_change_password?: boolean
           name?: string
           role_id?: string
           title?: string

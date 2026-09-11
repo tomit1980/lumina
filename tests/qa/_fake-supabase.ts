@@ -19,6 +19,9 @@ export interface FakeProfile {
   handle: string;
   email: string;
   mfa_required: boolean;
+  /** Set when an admin creates the account; only a real password change
+   *  clears it, which here means `auth.updateUser({ password })`. */
+  must_change_password?: boolean;
 }
 
 interface FakeFactor {
@@ -45,6 +48,10 @@ export interface FakeSupabase {
   enrollCalls: number;
   /** Every `profiles.update({mfa_required})` this client was asked to make. */
   requirementWrites: { id: string; mfa_required: boolean }[];
+  /** Every `auth.updateUser({ password })` this client was asked to make. */
+  passwordUpdates: string[];
+  /** Make the next password update fail, with this message. */
+  passwordFailure: string | null;
   /** Make the next `profiles` update fail, as RLS would. */
   failRequirementWrites: boolean;
   /**
@@ -86,6 +93,8 @@ export function createFakeSupabase(options: {
     signOutCalls: 0,
     enrollCalls: 0,
     requirementWrites: [],
+    passwordUpdates: [],
+    passwordFailure: null,
     failRequirementWrites: false,
     enrollFailure: null,
   };
@@ -134,6 +143,28 @@ export function createFakeSupabase(options: {
         data: { user: { id: uid }, session: fake.session },
         error: null,
       };
+    },
+
+    // Stands in for GoTrue plus the users_clear_password_flag trigger: in the
+    // real system the browser never writes must_change_password, a trigger on
+    // auth.users clears it when encrypted_password actually moves. Modelling
+    // it here rather than letting the test clear the flag keeps the fake
+    // honest about who owns that write.
+    updateUser: async ({ password }: { password?: string }) => {
+      if (fake.passwordFailure) {
+        return { data: { user: null }, error: { message: fake.passwordFailure } };
+      }
+      if (typeof password === "string") {
+        fake.passwordUpdates.push(password);
+        const uid = fake.session?.user.id;
+        const profile = fake.profiles.find((p) => p.id === uid);
+        if (profile) {
+          profile.must_change_password = false;
+          const email = profile.email;
+          if (email in fake.passwords) fake.passwords[email] = password;
+        }
+      }
+      return { data: { user: fake.session?.user ?? null }, error: null };
     },
 
     signOut: async () => {

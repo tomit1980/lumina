@@ -80,6 +80,7 @@ function profile(over: Partial<ProfileRow> & Pick<ProfileRow, "id">): ProfileRow
     color: "#7c3aed",
     created_at: "2026-09-08T10:00:00+00:00",
     mfa_required: false,
+    must_change_password: false,
     ...over,
   };
 }

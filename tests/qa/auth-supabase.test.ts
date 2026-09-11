@@ -92,6 +92,15 @@ async function signIn(email: string, password: string) {
 }
 
 /** Types a code into the OTP field, which submits itself once six digits land. */
+/** Fill the "choose your own password" step and submit it. */
+async function setFirstPassword(next: string, again = next) {
+  fireEvent.change(screen.getByLabelText("New password"), { target: { value: next } });
+  fireEvent.change(screen.getByLabelText("Type it again"), { target: { value: again } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /set password and continue/i }));
+  });
+}
+
 async function enterCode(code: string) {
   await act(async () => {
     fireEvent.change(screen.getByLabelText("6-digit verification code"), {
@@ -253,6 +262,122 @@ describe("the login screen's three-step machine, on real MFA", () => {
 
     expect(await screen.findByText(/upstream connect error/)).toBeInTheDocument();
     expect(screen.queryByText(/MFA enroll is disabled/)).toBeNull();
+  });
+
+  it("holds a new teammate at 'choose your own password' before the app", async () => {
+    // The password an admin typed into Add teammate was read out, pasted into
+    // a chat window, or written down, and the admin still knows it. It is a
+    // delivery mechanism, not a credential.
+    const fake = fakeFor();
+    fake.profiles[0].must_change_password = true;
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "correct-horse");
+
+    expect(await screen.findByText("Choose your own password")).toBeInTheDocument();
+    // The session exists — signInWithPassword succeeded — and is deliberately
+    // not published. That gap is the whole gate.
+    expect(fake.session).not.toBeNull();
+    expect(screen.queryByText("THE APP")).toBeNull();
+
+    await setFirstPassword("replaced-by-them");
+
+    await waitFor(() => expect(screen.getByText("THE APP")).toBeInTheDocument());
+    expect(fake.passwordUpdates).toEqual(["replaced-by-them"]);
+  });
+
+  it("CONTROL: without the flag the same sign-in goes straight through", async () => {
+    // Without this, a build that always showed the password step — or one that
+    // never showed it — would be indistinguishable from a working gate.
+    const fake = fakeFor();
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "correct-horse");
+
+    await waitFor(() => expect(screen.getByText("THE APP")).toBeInTheDocument());
+    expect(screen.queryByText("Choose your own password")).toBeNull();
+    expect(fake.passwordUpdates).toEqual([]);
+  });
+
+  it("refuses a mismatch without spending the round trip", async () => {
+    const fake = fakeFor();
+    fake.profiles[0].must_change_password = true;
+    await renderGate(fake);
+    await signIn(ALICE.email, "correct-horse");
+    await screen.findByText("Choose your own password");
+
+    await setFirstPassword("replaced-by-them", "replaced-by-thou");
+
+    expect(await screen.findByText("The two passwords don't match.")).toBeInTheDocument();
+    expect(fake.passwordUpdates).toEqual([]);
+    expect(screen.queryByText("THE APP")).toBeNull();
+  });
+
+  it("keeps them out when the server refuses the new password", async () => {
+    // The flag comes off a database trigger watching the real password column,
+    // so a refused change means the requirement genuinely still stands. Letting
+    // them in here would be the app overruling the only thing that knows.
+    const fake = fakeFor();
+    fake.profiles[0].must_change_password = true;
+    fake.passwordFailure = "New password should be different from the old password.";
+    await renderGate(fake);
+    await signIn(ALICE.email, "correct-horse");
+    await screen.findByText("Choose your own password");
+
+    await setFirstPassword("correct-horse");
+
+    expect(
+      await screen.findByText(/New password should be different/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText("THE APP")).toBeNull();
+  });
+
+  it("a reload cannot walk past the password step", async () => {
+    // The mirror of the same rule for forced enrolment. signInWithPassword
+    // issued a real session that survives a refresh, so without this the gate
+    // is one F5 away from irrelevant.
+    const fake = fakeFor({ signedInAs: ALICE.id });
+    fake.profiles[0].must_change_password = true;
+
+    await renderGate(fake);
+
+    expect(screen.queryByText("THE APP")).toBeNull();
+    expect(await screen.findByText("Welcome to Lumina")).toBeInTheDocument();
+    expect(fake.signOutCalls).toBe(1);
+  });
+
+  it("CONTROL: the same restore without the flag does sign in", async () => {
+    const fake = fakeFor({ signedInAs: ALICE.id });
+
+    await renderGate(fake);
+
+    await waitFor(() => expect(screen.getByText("THE APP")).toBeInTheDocument());
+    expect(fake.signOutCalls).toBe(0);
+  });
+
+  it("two-factor comes first, and the password step follows it", async () => {
+    // Ordering matters: the password change runs on the session two-factor
+    // just proved. If it came first, somebody holding only a shared password
+    // could set a new one before answering the second factor at all.
+    const fake = fakeFor({
+      factors: [{ id: "factor-1", factor_type: "totp", status: "verified" }],
+    });
+    fake.profiles[0].must_change_password = true;
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "correct-horse");
+
+    expect(await screen.findByText("Two-factor verification")).toBeInTheDocument();
+    expect(screen.queryByText("Choose your own password")).toBeNull();
+
+    await enterCode(fake.validCode);
+
+    expect(await screen.findByText("Choose your own password")).toBeInTheDocument();
+    expect(screen.queryByText("THE APP")).toBeNull();
+
+    await setFirstPassword("replaced-after-2fa");
+
+    await waitFor(() => expect(screen.getByText("THE APP")).toBeInTheDocument());
   });
 
   it("backing out of the second step ends the half-open session", async () => {

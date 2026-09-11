@@ -179,6 +179,17 @@ describe("the account that comes out", () => {
     expect(await roleOf(added.byOwner)).toBe("admin");
   });
 
+  it("must replace the password it was given", async () => {
+    // The admin typed that password and read it out, so it is a delivery
+    // mechanism rather than a credential. The function sets the flag; only a
+    // real password change clears it (users_clear_password_flag), and
+    // tests/rls/must-change-password.test.ts is where that half is proved.
+    const { data } = await serviceClient
+      .from("profiles").select("must_change_password").eq("email", added.byOwner).maybeSingle();
+
+    expect(data?.must_change_password).toBe(true);
+  });
+
   it("can sign in immediately with the password that was chosen", async () => {
     // The reason `email_confirm: true` is passed. An unconfirmed account
     // exists, shows up in the dashboard, and cannot sign in — the exact trap

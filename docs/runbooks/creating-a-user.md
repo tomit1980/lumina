@@ -96,8 +96,22 @@ and Owner have.
 | Role | any role at or below your own rank |
 
 The account is confirmed on creation, so they can sign in the moment you press
-the button. Send them the address and the password; they change it themselves
-from their account menu.
+the button. Send them the address and the password.
+
+**They must replace it at their first sign-in.** The password you typed was read
+out, pasted into a chat window or written down, and you know it — it is a
+delivery mechanism, not a credential. So the app holds them at a "choose your
+own password" screen before it lets them in, and the one you chose stops working
+the moment they do.
+
+That requirement is not something the app can be talked out of. The flag lives on
+their profile, they cannot clear it themselves (`guard_must_change_password`
+refuses), and it comes off only when `auth.users.encrypted_password` actually
+changes — a database trigger, not a browser call. A reload during the step signs
+them back out rather than letting them past it.
+
+Afterwards they can change it again whenever they like, from their own account
+menu → **Change password**.
 
 **You cannot hand out a role above your own.** An Admin adding an Owner is
 refused by name, before the account is created — so there is no half-made user

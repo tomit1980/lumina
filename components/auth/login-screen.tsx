@@ -21,7 +21,7 @@ import { DEMO_PASSWORD, useAuth, type LoginOutcome } from "@/lib/auth";
 import { backendKind } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
-type Step = "credentials" | "totp" | "enroll";
+type Step = "credentials" | "totp" | "enroll" | "password";
 
 // Owner first: it is the top role, and the demo is the only place it can be
 // signed into without a runbook. `findUserId` already matched it by handle —
@@ -44,6 +44,7 @@ export function LoginScreen() {
     login,
     submitLoginTotp,
     submitEnrollment,
+    submitFirstPassword,
     cancelPendingLogin,
     loginEnrollment,
   } = useAuth();
@@ -52,6 +53,10 @@ export function LoginScreen() {
   const [identifier, setIdentifier] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [code, setCode] = React.useState("");
+  /** The "choose your own" step. Kept apart from `password`, which holds the
+   *  one they were given and is still needed if they go back. */
+  const [nextPassword, setNextPassword] = React.useState("");
+  const [nextAgain, setNextAgain] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
@@ -64,6 +69,11 @@ export function LoginScreen() {
     setCode("");
     if (outcome.step === "totp") setStep("totp");
     else if (outcome.step === "enroll") setStep("enroll");
+    else if (outcome.step === "password") {
+      setNextPassword("");
+      setNextAgain("");
+      setStep("password");
+    }
     // "success" → session flips; AuthGate swaps in the app.
   };
 
@@ -88,12 +98,27 @@ export function LoginScreen() {
     setBusy(false);
   };
 
+  const choosePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    if (nextPassword !== nextAgain) {
+      setError("The two passwords don't match.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    apply(await submitFirstPassword(nextPassword));
+    setBusy(false);
+  };
+
   const back = () => {
     cancelPendingLogin();
     setStep("credentials");
     setCode("");
     setError(null);
     setPassword("");
+    setNextPassword("");
+    setNextAgain("");
   };
 
   const fillDemo = (handle: string) => {
@@ -121,11 +146,14 @@ export function LoginScreen() {
             {step === "credentials" && "Welcome to Lumina"}
             {step === "totp" && "Two-factor verification"}
             {step === "enroll" && "Secure your account"}
+            {step === "password" && "Choose your own password"}
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
             {step === "credentials" && "Sign in to Northlight Studio"}
             {step === "totp" && "Enter the code from your authenticator app"}
             {step === "enroll" && "Two-factor is required for your role"}
+            {step === "password" &&
+              "The one you were given was shared with you — replace it to continue"}
           </p>
         </div>
 
@@ -236,6 +264,56 @@ export function LoginScreen() {
                 Back to sign in
               </button>
             </div>
+          )}
+
+          {/* The last gate. Two-factor runs first, so by now they are as
+              authenticated as the workspace asks — what is left is that the
+              password they hold was chosen by somebody else. */}
+          {step === "password" && (
+            <form onSubmit={choosePassword} className="flex flex-col gap-4">
+              <div className="grid gap-1.5">
+                <Label htmlFor="first-pw">New password</Label>
+                <div className="relative">
+                  <Lock className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="first-pw"
+                    type="password"
+                    autoFocus
+                    autoComplete="new-password"
+                    placeholder="At least 8 characters"
+                    className="pl-8"
+                    value={nextPassword}
+                    onChange={(e) => setNextPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="first-pw-again">Type it again</Label>
+                <Input
+                  id="first-pw-again"
+                  type="password"
+                  autoComplete="new-password"
+                  value={nextAgain}
+                  onChange={(e) => setNextAgain(e.target.value)}
+                />
+              </div>
+
+              {error && <FormError message={error} />}
+
+              <Button type="submit" className="w-full" disabled={busy}>
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <KeyRound className="size-4" />
+                )}
+                Set password and continue
+              </Button>
+              {/* No way back. "Back to sign in" on the two-factor steps drops an
+                  abandoned factor and ends the half-open session; here there is
+                  nothing to abandon, and offering an exit from a gate the admin
+                  imposed would just be a way around it. Signing out and in
+                  again lands on this same screen. */}
+            </form>
           )}
         </div>
 
