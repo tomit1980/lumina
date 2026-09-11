@@ -27,6 +27,13 @@ export const ALL_PERMISSIONS: Permission[] = [
   // members.manage, because the boundary between Admin and Owner is exactly
   // this line.
   "workspace.statuses",
+  // Reusable task sets. Deliberately NOT folded into `project.create`:
+  // 20260906000350_fix_project_policies.sql contemplates a custom role holding
+  // that on its own - "an ordinary project manager" - and bundling set
+  // management into it would mean granting project creation silently also
+  // grants the right to delete the definition every future project is built
+  // from. Different blast radius, invisible at the moment of granting.
+  "workspace.taskSets",
 ];
 
 /**
@@ -135,6 +142,10 @@ export const PERMISSION_META: Record<
   },
   "workspace.statuses": {
     label: "Edit the board's columns",
+    group: "Administration",
+  },
+  "workspace.taskSets": {
+    label: "Manage task sets",
     group: "Administration",
   },
 };

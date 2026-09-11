@@ -488,6 +488,7 @@ export type Database = {
           color: string
           created_at: string
           created_by: string | null
+          created_from_task_set_id: string | null
           description: string
           emoji: string
           id: string
@@ -499,6 +500,7 @@ export type Database = {
           color?: string
           created_at?: string
           created_by?: string | null
+          created_from_task_set_id?: string | null
           description?: string
           emoji?: string
           id: string
@@ -510,6 +512,7 @@ export type Database = {
           color?: string
           created_at?: string
           created_by?: string | null
+          created_from_task_set_id?: string | null
           description?: string
           emoji?: string
           id?: string
@@ -523,6 +526,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "projects_created_from_task_set_id_fkey"
+            columns: ["created_from_task_set_id"]
+            isOneToOne: false
+            referencedRelation: "task_sets"
             referencedColumns: ["id"]
           },
         ]
@@ -710,6 +720,82 @@ export type Database = {
           },
         ]
       }
+      task_set_items: {
+        Row: {
+          description: string
+          id: string
+          labels: string[]
+          position: number
+          priority: string
+          task_set_id: string
+          title: string
+        }
+        Insert: {
+          description?: string
+          id: string
+          labels?: string[]
+          position?: number
+          priority?: string
+          task_set_id: string
+          title: string
+        }
+        Update: {
+          description?: string
+          id?: string
+          labels?: string[]
+          position?: number
+          priority?: string
+          task_set_id?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_set_items_task_set_id_fkey"
+            columns: ["task_set_id"]
+            isOneToOne: false
+            referencedRelation: "task_sets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      task_sets: {
+        Row: {
+          archived_at: string | null
+          created_at: string
+          created_by: string | null
+          description: string
+          id: string
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          id: string
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          created_at?: string
+          created_by?: string | null
+          description?: string
+          id?: string
+          name?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_sets_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tasks: {
         Row: {
           assignee_id: string | null
@@ -808,6 +894,10 @@ export type Database = {
       channel_is_manageable: {
         Args: { target_channel_id: string }
         Returns: boolean
+      }
+      create_project_with_tasks: {
+        Args: { p_project: Json; p_tasks: Json }
+        Returns: undefined
       }
       dm_pair_key: { Args: { a: string; b: string }; Returns: string }
       find_or_create_dm: { Args: { other_user_id: string }; Returns: string }

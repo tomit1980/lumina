@@ -12,7 +12,8 @@ export type Permission =
   | "members.manage"
   /** Edit the board's columns for the whole workspace — the Owner's one
    *  power beyond Admin, and the line the rank rules defend. */
-  | "workspace.statuses";
+  | "workspace.statuses"
+  | "workspace.taskSets";
 
 /** Fine-grained, per-resource access: "editor" is full read/write, "viewer" is read-only. */
 export type AccessLevel = "viewer" | "editor";

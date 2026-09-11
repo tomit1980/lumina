@@ -130,6 +130,7 @@ function project(over: Partial<ProjectRow> & Pick<ProjectRow, "id">): ProjectRow
     color: "#7c3aed",
     priority: "medium",
     restricted: false,
+    created_from_task_set_id: null,
     created_by: ME,
     created_at: "2026-09-08T10:00:00+00:00",
     ...over,
