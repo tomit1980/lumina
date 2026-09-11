@@ -462,11 +462,25 @@ async function unenrollOwnFactors(client: Client): Promise<void> {
   } catch {}
 }
 
+/**
+ * What `startEnrollment` answers with.
+ *
+ * It used to answer `EnrollmentDraft | null`, and the `null` threw away the
+ * only useful part. Enrolment fails for two quite different reasons - a
+ * transient network problem, and TOTP enrolment being switched off in the
+ * project's Auth settings - and the caller has to tell them apart, because
+ * "try again" is sound advice for the first and advice that can never work
+ * for the second.
+ */
+type EnrollmentAttempt =
+  | { ok: true; draft: EnrollmentDraft }
+  | { ok: false; message: string };
+
 async function startEnrollment(
   client: Client,
   userId: string,
   account: string
-): Promise<EnrollmentDraft | null> {
+): Promise<EnrollmentAttempt> {
   try {
     // Supabase keeps unverified factors around, so an abandoned attempt would
     // pile a second one on top of the first. Clear them before enrolling.
@@ -480,17 +494,25 @@ async function startEnrollment(
       factorType: "totp",
       issuer: WORKSPACE,
     });
-    if (error || !data) return null;
+    if (error || !data) {
+      return { ok: false, message: error?.message ?? "Supabase refused the enrolment." };
+    }
     return {
-      userId,
-      account,
-      secret: data.totp.secret,
-      uri: data.totp.uri,
-      qrCode: data.totp.qr_code,
-      factorId: data.id,
+      ok: true,
+      draft: {
+        userId,
+        account,
+        secret: data.totp.secret,
+        uri: data.totp.uri,
+        qrCode: data.totp.qr_code,
+        factorId: data.id,
+      },
     };
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "The enrolment request didn't complete.",
+    };
   }
 }
 
@@ -681,11 +703,31 @@ function SupabaseAuthProvider({
       }
 
       if (profile.mfa_required) {
-        const draft = await startEnrollment(client, profile.id, profile.handle);
+        const attempt = await startEnrollment(client, profile.id, profile.handle);
+        const draft = attempt.ok ? attempt.draft : null;
         if (!draft?.factorId) {
           await signOutQuietly(client);
           gated.current = false;
-          return { step: "error", message: "Couldn't start two-factor setup. Try again." };
+          // Carry Supabase's own words rather than a sentence invented here.
+          //
+          // This used to say "Couldn't start two-factor setup. Try again." -
+          // which is fine for a dropped connection and actively misleading
+          // when TOTP enrolment is switched off for the project, because then
+          // there is nothing to try again and every attempt ends the same way.
+          //
+          // Deliberately not matched against a particular error code. The
+          // access suite found enrolment ENABLED on development, so the
+          // disabled-provider signal has never been observed here, and a check
+          // written against a guessed string is a check that never fires. The
+          // server's message is passed through and the likeliest cause is
+          // named as a possibility rather than asserted as the reason.
+          const reason = attempt.ok ? "Supabase returned no factor." : attempt.message;
+          return {
+            step: "error",
+            message:
+              `Two-factor setup couldn't start: ${reason} ` +
+              "If this keeps happening, an admin needs to check that two-factor is enabled for the workspace.",
+          };
         }
         setPending({ profileId: profile.id, factorId: draft.factorId });
         setLoginEnrollment(draft);
@@ -822,7 +864,11 @@ function SupabaseAuthProvider({
       beginSelfEnrollment: async (userId) => {
         if (!client) return null;
         const profile = await fetchProfile(client, userId);
-        return startEnrollment(client, userId, profile?.handle ?? userId);
+        const attempt = await startEnrollment(client, userId, profile?.handle ?? userId);
+        // `null` keeps SelfEnrollDialog's QA-120 `failed` flag working as it
+        // does today. The dialog has its own "Couldn't start setup" panel; it
+        // does not need the reason threaded through to stop being honest.
+        return attempt.ok ? attempt.draft : null;
       },
       confirmSelfEnrollment: async (draft, code) => {
         if (!client || !draft.factorId) return false;

@@ -271,6 +271,36 @@ Two-factor is Supabase's own TOTP MFA. A person enrols from **their account
 menu → Set up two-factor**, or is walked through enrolment at sign-in when you
 have required it of them. Codes are verified by Supabase, not by the browser.
 
+### Before you require it of anybody
+
+**TOTP enrolment has to be enabled on the project**, under **Authentication →
+Multi-Factor Authentication**. It is a per-project switch, and it is off in
+`supabase/config.toml` for the local stack.
+
+This is not a detail. If it is off, requiring two-factor of somebody **locks
+them out permanently**: the app tries to enrol them at sign-in, Supabase
+refuses, and they are signed out — on that attempt and on every attempt after
+it. They cannot clear their own requirement, because `guard_mfa_required`
+refuses a change from anyone without `members.manage`. Only an admin can undo
+it, and only from a session of their own.
+
+`tests/rls/forced-enrolment.test.ts` checks the switch on **development** every
+time the access suite runs — it enrols a real factor, verifies a real code, and
+fails with Supabase's own message if enrolment is refused.
+
+For **production** the check costs nothing and is worth doing anyway: enrol
+your own account from the account menu. If the QR code appears, enrolment works
+and requiring it of somebody else is safe.
+
+### If somebody is already locked out
+
+**Members → (them) → Cancel requirement.** That clears `mfa_required`, and they
+can sign in with their password alone at the next attempt.
+
+They cannot do this themselves and no email will rescue them — so it needs an
+admin who can still sign in. Which is the argument for not requiring two-factor
+of the last remaining admin until you have checked the switch.
+
 ### What the People page can do
 
 **Members → (person) → the two-factor button** writes `profiles.mfa_required`:

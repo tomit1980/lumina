@@ -47,6 +47,17 @@ export interface FakeSupabase {
   requirementWrites: { id: string; mfa_required: boolean }[];
   /** Make the next `profiles` update fail, as RLS would. */
   failRequirementWrites: boolean;
+  /**
+   * Make `mfa.enroll` fail with this message, as a project with TOTP
+   * enrolment switched off does. Null means enrolment works.
+   *
+   * The real signal has never been seen: tests/rls/forced-enrolment.test.ts
+   * found enrolment ENABLED on development, so there is no observed string to
+   * copy. That is exactly why the code under test passes the server's message
+   * through instead of matching on one - and why this knob takes the message
+   * as a parameter rather than hard-coding a guess.
+   */
+  enrollFailure: string | null;
 }
 
 export function createFakeSupabase(options: {
@@ -76,6 +87,7 @@ export function createFakeSupabase(options: {
     enrollCalls: 0,
     requirementWrites: [],
     failRequirementWrites: false,
+    enrollFailure: null,
   };
 
   let nextFactor = fake.factors.length + 1;
@@ -146,6 +158,9 @@ export function createFakeSupabase(options: {
 
       enroll: async () => {
         fake.enrollCalls += 1;
+        if (fake.enrollFailure) {
+          return { data: null, error: { message: fake.enrollFailure } };
+        }
         const id = `factor-${nextFactor++}`;
         fake.factors.push({ id, factor_type: "totp", status: "unverified" });
         return {

@@ -211,6 +211,50 @@ describe("the login screen's three-step machine, on real MFA", () => {
     expect(fake.factors[0].status).toBe("verified");
   });
 
+  it("says what went wrong when enrolment is refused, and does not say 'try again'", async () => {
+    // The failure this exists for is TOTP enrolment being switched off in the
+    // project's Auth settings. The old message was "Couldn't start two-factor
+    // setup. Try again." - fine for a dropped connection, and actively
+    // misleading here, because there is nothing to try again: every attempt
+    // ends identically and only an admin can change it.
+    //
+    // Note what is NOT asserted: a particular error code. Enrolment is enabled
+    // on development (tests/rls/forced-enrolment.test.ts), so the real
+    // disabled-provider signal has never been observed, and matching on a
+    // guessed string would be a check that never fires. The contract is that
+    // the server's own words reach the person, whatever they turn out to be.
+    const fake = fakeFor();
+    fake.profiles[0].mfa_required = true;
+    fake.enrollFailure = "MFA enroll is disabled for this project";
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "correct-horse");
+
+    expect(
+      await screen.findByText(/MFA enroll is disabled for this project/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/try again/i)).toBeNull();
+    // Still outside, and not left holding a half-open aal1 session.
+    expect(screen.queryByText("THE APP")).toBeNull();
+    expect(screen.queryByText("Secure your account")).toBeNull();
+    expect(fake.signOutCalls).toBe(1);
+  });
+
+  it("CONTROL: a different refusal carries its own words, not the first one's", async () => {
+    // Without this, the test above would pass against a branch that printed
+    // one fixed sentence for every failure - which is the bug it replaced.
+    // Two different messages have to come out differently.
+    const fake = fakeFor();
+    fake.profiles[0].mfa_required = true;
+    fake.enrollFailure = "upstream connect error";
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "correct-horse");
+
+    expect(await screen.findByText(/upstream connect error/)).toBeInTheDocument();
+    expect(screen.queryByText(/MFA enroll is disabled/)).toBeNull();
+  });
+
   it("backing out of the second step ends the half-open session", async () => {
     const fake = fakeFor({
       factors: [{ id: "factor-1", factor_type: "totp", status: "verified" }],
