@@ -100,6 +100,119 @@ describe("the gated person cannot simply turn it off", () => {
   });
 });
 
+describe("what the database does with a password that was never replaced", () => {
+  // Placed before the block below on purpose: that one changes the gated
+  // account's password, which is the one event that clears the flag. Every
+  // assertion here needs the flag still standing.
+
+  it("REFUSES a workspace read, which until 20260912000200 it did not", async () => {
+    // The finding this gate was built for. `must_change_password` decided
+    // which screen lib/auth.tsx rendered and nothing else, so the person
+    // holding the password they were handed — the one credential in the system
+    // that is expected to leak, by 20260911000100's own account of it — could
+    // skip the screen and read the workspace straight from PostgREST.
+    //
+    // `statuses` is the table to ask about: every workspace carries the five
+    // seeded by 20260910005000 and `statuses_read` is `using (true)`, so the
+    // control below is guaranteed a non-empty answer. Asking about `projects`
+    // or `tasks` would be green whether the policy existed or not, since this
+    // account belongs to neither.
+    //
+    // Silently, like every restrictive policy: filtered to nothing, not an
+    // error. The assertion is about rows, which is why the control matters.
+    const them = await signInAs(emails.gated, TEST_PASSWORD);
+
+    const { data, error } = await them.from("statuses").select("id");
+
+    expect(error).toBeNull();
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  it("CONTROL: a member who never had the flag reads the same table fine", async () => {
+    // Without this the refusal above would pass just as happily against an
+    // empty table, a dropped permissive policy, or a gate that had started
+    // refusing the whole workspace rather than half-finished sign-ins.
+    const them = await signInAs(emails.ordinary, TEST_PASSWORD);
+
+    const { data, error } = await them.from("statuses").select("id");
+
+    expect(error).toBeNull();
+    expect((data ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("ALLOWS them their own profile row, because the login screen needs it", async () => {
+    // The one carve-out in require_password_change. lib/auth.tsx cannot know
+    // it is meant to render the password step without reading the flag, and
+    // the flag is on this row. Gate it and the login screen can no longer tell
+    // "replace your password" from "this account has no profile", which is a
+    // real and differently-handled case.
+    const them = await signInAs(emails.gated, TEST_PASSWORD);
+
+    const { data, error } = await them
+      .from("profiles").select("id, must_change_password").eq("id", ids.gated).maybeSingle();
+
+    expect(error).toBeNull();
+    expect(data?.must_change_password).toBe(true);
+  });
+
+  it("REFUSES them anybody else's profile row", async () => {
+    // The carve-out is one row, not the table. `profiles_read` is
+    // `using (true)`, so the looser version — let a gated session read
+    // `profiles` entirely — would hand the workspace directory, every name and
+    // handle and email, to that same leaked password. A smaller prize than the
+    // workspace, which is exactly why it would have been easy to wave through.
+    const them = await signInAs(emails.gated, TEST_PASSWORD);
+
+    const { data, error } = await them.from("profiles").select("id").eq("id", ids.ordinary);
+
+    expect(error).toBeNull();
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  it("CONTROL: the unflagged member reads that same profile fine", async () => {
+    const them = await signInAs(emails.ordinary, TEST_PASSWORD);
+
+    const { data, error } = await them.from("profiles").select("id").eq("id", ids.gated);
+
+    expect(error).toBeNull();
+    expect(data ?? []).toHaveLength(1);
+  });
+
+  it("REFUSES find_or_create_dm, which no policy can reach", async () => {
+    // SECURITY DEFINER, so RLS is not consulted for its three inserts and no
+    // restrictive policy above applies to them. Without the check inside the
+    // function this call would hand a gated session a real DM —
+    // `conversations`, `dms` and two `dm_members` rows — built past a gate
+    // that was closed.
+    //
+    // And note the shape: everywhere else here the refusal is a silent filter;
+    // this one RAISES, because the check is a line of plpgsql rather than a
+    // policy. A test that assumed the silent shape would pass on the error
+    // being falsy and prove nothing.
+    const them = await signInAs(emails.gated, TEST_PASSWORD);
+
+    const { error } = await them.rpc("find_or_create_dm", { other_user_id: ids.ordinary });
+
+    expect(error?.message ?? "").toContain("Finish signing in");
+  });
+
+  it("CONTROL: the unflagged member opens the same kind of DM", async () => {
+    // Otherwise the refusal above would pass against a function that refused
+    // everybody — a missing permission, a profile it cannot see, a typo in the
+    // argument name.
+    const them = await signInAs(emails.ordinary, TEST_PASSWORD);
+
+    const { data, error } = await them.rpc("find_or_create_dm", { other_user_id: ids.admin });
+
+    expect(error?.message ?? null).toBeNull();
+    expect(data).toBeTruthy();
+
+    // Leave lumina-dev as we found it: `dms` and `dm_members` both cascade
+    // from `conversations` (20260906000200:24,29).
+    await serviceClient.from("conversations").delete().eq("id", data as string);
+  });
+});
+
 describe("what actually takes it off", () => {
   it("clears when the password really changes", async () => {
     // The rule stated positively: the flag follows auth.users.encrypted_password

@@ -901,6 +901,14 @@ export type Database = {
       }
       dm_pair_key: { Args: { a: string; b: string }; Returns: string }
       find_or_create_dm: { Args: { other_user_id: string }; Returns: string }
+      gate_coverage: {
+        Args: never
+        Returns: {
+          require_assurance: boolean
+          require_password_change: boolean
+          table_name: string
+        }[]
+      }
       has_permission: { Args: { perm: string }; Returns: boolean }
       is_attachment_uploader: { Args: { att_id: string }; Returns: boolean }
       move_task: {
@@ -917,6 +925,7 @@ export type Database = {
           uploaded_at: string
         }[]
       }
+      password_is_current: { Args: never; Returns: boolean }
       project_is_manageable: {
         Args: { target_project_id: string }
         Returns: boolean
