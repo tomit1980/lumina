@@ -53,6 +53,10 @@ const ids: Record<string, string> = {};
 
 /** The aal2 session from step 3, kept for the control in the last block. */
 let assured: SupabaseClient | null = null;
+/** The password-only session, kept so later tests need not re-sign-in: the
+ *  suite is rate-limited per project and this identity has already spent a
+ *  sign-in on the refusal below. */
+let unassured: SupabaseClient | null = null;
 /** A verified factor's id, so the aal1 session can be built against it. */
 let factorId = "";
 /** The enrolment secret, for generating codes. */
@@ -169,6 +173,8 @@ describe("what the database does with a half-finished sign-in", () => {
 
     expect(error).toBeNull();
     expect(data ?? []).toHaveLength(0);
+
+    unassured = client;
   });
 
   it("CONTROL: the aal2 session reads the same table fine", async () => {
@@ -196,5 +202,64 @@ describe("what the database does with a half-finished sign-in", () => {
 
     expect(error).toBeNull();
     expect((data ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("REFUSES `statuses`, which the gate did not cover until 20260912000100", async () => {
+    // One of the three tables 20260910004000's hand-written list missed. It is
+    // the only one of the three worth asserting from this file: every
+    // workspace carries the five statuses seeded by 20260910005000 and
+    // `statuses_read` is `using (true)`, so the control below is guaranteed a
+    // non-empty answer. `conversations` and `message_attachments` hold nothing
+    // for this account in either direction, so the same assertion about them
+    // would be green whether the policy existed or not — the kind of test this
+    // repo has already written up (T-04, a control that cannot fail).
+    // assurance-coverage.test.ts is where their coverage is asserted instead.
+    const { data, error } = await unassured!.from("statuses").select("id");
+
+    expect(error).toBeNull();
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  it("CONTROL: the aal2 session reads the same statuses fine", async () => {
+    const { data, error } = await assured!.from("statuses").select("id");
+
+    expect(error).toBeNull();
+    expect((data ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("REFUSES find_or_create_dm, which no policy can reach", async () => {
+    // The half of the gate that is not a policy at all. `find_or_create_dm` is
+    // SECURITY DEFINER, and RLS is not consulted inside a definer function, so
+    // `require_assurance` never saw its three inserts: before 20260912000100
+    // this exact call came back with a real DM — conversations, dms and two
+    // dm_members rows — created by a session that had not finished signing in.
+    //
+    // And note the shape of the refusal. Everywhere else in this file an
+    // unassured read is FILTERED, silently, to nothing; here it RAISES,
+    // because the check is a line of plpgsql rather than a policy. A test that
+    // assumed the silent shape would have passed on the error object being
+    // falsy and proved nothing.
+    const { error } = await unassured!.rpc("find_or_create_dm", {
+      other_user_id: ids.ordinary,
+    });
+
+    expect(error?.message ?? "").toContain("Finish signing in");
+  });
+
+  it("CONTROL: the aal2 session opens that same DM", async () => {
+    // Without this, the refusal above would pass just as well against a
+    // function that refused everybody — a permission the account lacks, a
+    // profile it cannot see, a typo in the argument name.
+    const { data, error } = await assured!.rpc("find_or_create_dm", {
+      other_user_id: ids.ordinary,
+    });
+
+    expect(error?.message ?? null).toBeNull();
+    expect(data).toBeTruthy();
+
+    // Leave lumina-dev as we found it. `dms` and `dm_members` both cascade
+    // from `conversations` (20260906000200:24,29), so the one delete is the
+    // whole cleanup.
+    await serviceClient.from("conversations").delete().eq("id", data as string);
   });
 });
