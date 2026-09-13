@@ -68,7 +68,13 @@ export type LoginOutcome =
    * the workspace asks them to be. The session still is not published.
    */
   | { step: "password" }
-  | { step: "error"; message: string };
+  /**
+   * `field` says which input the refusal is about, so the screen can mark
+   * that one `aria-invalid` and move focus to it. Left unset for the server's
+   * generic refusal, which is deliberately about both — telling them apart
+   * would tell an attacker which addresses exist.
+   */
+  | { step: "error"; message: string; field?: "email" | "password" };
 
 export interface EnrollmentDraft {
   userId: string;
@@ -705,7 +711,16 @@ function SupabaseAuthProvider({
       if (!client) return { step: "error", message: "Still connecting — try again." };
       const email = identifier.trim();
       if (!email.includes("@")) {
-        return { step: "error", message: "Sign in with your work email address." };
+        return { step: "error", message: "Sign in with your work email address.", field: "email" };
+      }
+      // Local, so it costs no round trip and leaks nothing: the generic
+      // "Incorrect email or password" below exists so the SERVER's answer
+      // cannot distinguish a wrong password from an unknown address, and a
+      // check that never reaches the server distinguishes neither. Without it
+      // a blank password was sent and came back with that generic sentence,
+      // which is a worse hint than "you left this empty".
+      if (!password) {
+        return { step: "error", message: "Enter your password.", field: "password" };
       }
 
       setPending(null);

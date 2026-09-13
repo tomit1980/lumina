@@ -245,6 +245,20 @@ now guards it.
 
 ---
 
+## Control sizes, and why they are not a bug
+
+An independent audit measured the sign-in inputs and button at **28 CSS pixels** tall and recorded
+it as a measurement rather than a failure. That was the right call and the answer is: it passes.
+
+WCAG 2.2 SC 2.5.8 (Target Size, Minimum) requires **24x24 CSS px at level AA**. The 44 px figure
+people reach for is level **AAA**, plus Apple and Android platform guidance for touch-first
+interfaces. Lumina is a desktop-first internal tool for a small firm.
+
+Recorded here so the next audit can check the reasoning rather than re-raise the finding. If Lumina
+ever becomes touch-first, this is the paragraph to revisit.
+
+---
+
 ## Troubleshooting
 
 **"Invalid login credentials" for a user you just created.**

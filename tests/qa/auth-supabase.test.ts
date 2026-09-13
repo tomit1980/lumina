@@ -182,6 +182,37 @@ describe("the login screen's three-step machine, on real MFA", () => {
     await waitFor(() => expect(screen.getByText("THE APP")).toBeInTheDocument());
   });
 
+  it("refuses a blank password without spending a round trip", async () => {
+    // An independent audit observed that a valid-format address with an empty
+    // password came back with the generic "Incorrect email or password" —
+    // after a request. That sentence exists so the SERVER's answer cannot
+    // distinguish a wrong password from an unknown address. A check that never
+    // reaches the server distinguishes neither, and "you left this empty" is
+    // not a hint about who has an account here.
+    //
+    // Asserted as the call count, not the message: a store that sent the
+    // request anyway and then rewrote the reply would produce the same words.
+    const fake = fakeFor();
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "");
+
+    expect(await screen.findByText("Enter your password.")).toBeInTheDocument();
+    expect(fake.signInCalls).toBe(0);
+  });
+
+  it("CONTROL: a filled-in password does reach the server", async () => {
+    // Without this, the assertion above would pass against a login that had
+    // stopped calling Supabase at all.
+    const fake = fakeFor();
+    await renderGate(fake);
+
+    await signIn(ALICE.email, "wrong-password");
+
+    expect(await screen.findByText("Incorrect email or password.")).toBeInTheDocument();
+    expect(fake.signInCalls).toBe(1);
+  });
+
   it("does not claim a user with two-factor has no profile (the day-one lockout)", async () => {
     // THE REGRESSION. Enrolling two-factor on production locked the workspace
     // Owner out completely, and the message blamed his account:

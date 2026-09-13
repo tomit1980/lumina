@@ -37,6 +37,9 @@ export function OtpInput({
       onChange={(e) => handle(e.target.value)}
       placeholder="••••••"
       aria-label="6-digit verification code"
+      // The `invalid` prop only ever painted a red border. Assistive tech
+      // reads this attribute, not the class list.
+      aria-invalid={invalid || undefined}
       className={cn(
         "h-12 w-full rounded-xl border bg-background text-center font-mono text-2xl tracking-[0.5em] outline-none transition-shadow",
         "placeholder:tracking-[0.4em] placeholder:text-muted-foreground/40",

@@ -55,6 +55,8 @@ export interface FakeSupabase {
    * tests, because the instrument could not express the failure.
    */
   assurance: "none" | "aal1" | "aal2";
+  /** Every `signInWithPassword`, refused or not. */
+  signInCalls: number;
   signOutCalls: number;
   enrollCalls: number;
   /** Every `profiles.update({mfa_required})` this client was asked to make. */
@@ -102,6 +104,7 @@ export function createFakeSupabase(options: {
     validCode: "123456",
     session: options.signedInAs ? { user: { id: options.signedInAs } } : null,
     assurance: "none",
+    signInCalls: 0,
     signOutCalls: 0,
     enrollCalls: 0,
     requirementWrites: [],
@@ -142,6 +145,10 @@ export function createFakeSupabase(options: {
       email: string;
       password: string;
     }) => {
+      // Counted before the outcome is known: a test asserting a check ran
+      // "before the round trip" needs to know the trip was never taken, and a
+      // refused trip is still a trip.
+      fake.signInCalls += 1;
       const uid = fake.authUsers[email];
       if (!uid || fake.passwords[email] !== password) {
         return {

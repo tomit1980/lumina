@@ -58,13 +58,29 @@ export function LoginScreen() {
   const [nextPassword, setNextPassword] = React.useState("");
   const [nextAgain, setNextAgain] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  /** Which field the current error is about, or null for a refusal about
+   *  both. Drives `aria-invalid` and where focus lands. */
+  const [errorField, setErrorField] = React.useState<"email" | "password" | null>(null);
   const [busy, setBusy] = React.useState(false);
+
+  const emailRef = React.useRef<HTMLInputElement>(null);
+  const passwordRef = React.useRef<HTMLInputElement>(null);
 
   const apply = (outcome: LoginOutcome) => {
     if (outcome.step === "error") {
       setError(outcome.message);
+      setErrorField(outcome.field ?? null);
+      // Move focus to what is wrong. A sighted user sees the red paragraph
+      // appear; a keyboard or screen-reader user was left on the button, or —
+      // after an async refusal — on the page body, with no signal at all.
+      // `role="alert"` announces the text; this is what makes it actionable.
+      if (step === "credentials") {
+        const target = outcome.field === "password" ? passwordRef : emailRef;
+        target.current?.focus();
+      }
       return;
     }
+    setErrorField(null);
     setError(null);
     setCode("");
     if (outcome.step === "totp") setStep("totp");
@@ -166,11 +182,16 @@ export function LoginScreen() {
                 </Label>
                 <Input
                   id="login-id"
+                  ref={emailRef}
                   autoFocus
                   autoComplete={isDemo ? "username" : "email"}
                   placeholder={isDemo ? "moshe" : "you@company.com"}
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
+                  // A refusal about both fields marks both: "Incorrect email
+                  // or password" is, by design, about both.
+                  aria-invalid={!!error && errorField !== "password"}
+                  aria-describedby={error ? ERROR_ID : undefined}
                 />
               </div>
               <div className="grid gap-1.5">
@@ -179,12 +200,15 @@ export function LoginScreen() {
                   <Lock className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     id="login-pw"
+                    ref={passwordRef}
                     type="password"
                     autoComplete="current-password"
                     placeholder="••••••••"
                     className="pl-8"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    aria-invalid={!!error && errorField !== "email"}
+                    aria-describedby={error ? ERROR_ID : undefined}
                   />
                 </div>
               </div>
@@ -351,9 +375,24 @@ export function LoginScreen() {
   );
 }
 
+/**
+ * Every refusal on this screen, announced and associated.
+ *
+ * It was an ordinary paragraph: visible, and invisible to anything that is not
+ * a pair of eyes. An independent audit reproduced that (LUM-QA-001) — no
+ * `role`, no live region, no `aria-describedby` from the fields it was about.
+ *
+ * `role="alert"` is implicitly `aria-live="assertive"`, which is right here and
+ * would be wrong almost anywhere else: this refusal blocks the only action on
+ * the screen, so interrupting is the correct behaviour rather than rudeness.
+ */
+const ERROR_ID = "login-error";
+
 function FormError({ message }: { message: string }) {
   return (
     <motion.p
+      id={ERROR_ID}
+      role="alert"
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
       className="rounded-lg bg-destructive/10 px-3 py-2 text-[13px] text-destructive"

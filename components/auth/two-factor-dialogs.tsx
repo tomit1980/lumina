@@ -80,7 +80,7 @@ export function SwitchTwoFactorPrompt() {
             invalid={error}
           />
           {error && (
-            <p className="text-center text-[13px] text-destructive">
+            <p role="alert" className="text-center text-[13px] text-destructive">
               That code isn&apos;t valid. Try again.
             </p>
           )}
@@ -216,7 +216,7 @@ export function SelfEnrollDialog() {
                   invalid={error}
                 />
                 {error && (
-                  <p className="text-[13px] text-destructive">
+                  <p role="alert" className="text-[13px] text-destructive">
                     That code isn&apos;t valid yet. Try again.
                   </p>
                 )}
