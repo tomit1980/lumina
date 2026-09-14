@@ -40,6 +40,7 @@ import { AddMemberDialog } from "@/components/add-member-dialog";
 import { RoleDialog } from "@/components/role-dialog";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth, type TwoFactorStatus } from "@/lib/auth";
+import { twoFactorMenu, type TwoFactorMenuNote } from "@/lib/two-factor";
 import { backendKind } from "@/lib/backend";
 import {
   ALL_PERMISSIONS,
@@ -52,6 +53,16 @@ import { useUI } from "@/components/ui-context";
 import type { Permission, RoleDef } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { dmHref } from "@/lib/routes";
+
+/** The one place the menu's prose lives, keyed by the note lib/two-factor.ts
+ *  returns. Kept beside the badge labels rather than in that module: it decides
+ *  what is true, this decides how to say it. */
+const NOTE_TEXT: Record<TwoFactorMenuNote, string> = {
+  enrolled: "Enrolled an authenticator.",
+  "awaiting-enrolment": "Required — they'll set it up at next sign-in.",
+  "removed-in-dashboard":
+    "To remove their authenticator, use the Supabase dashboard.",
+};
 
 const TWO_FACTOR_META: Record<
   TwoFactorStatus,
@@ -106,6 +117,7 @@ export function TwoFactorControl({
 }) {
   const meta = TWO_FACTOR_META[status];
   const Icon = meta.icon;
+  const menu = twoFactorMenu({ status, required, isSelf });
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -123,36 +135,34 @@ export function TwoFactorControl({
           Two-factor for {userName}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {/* What is true of them, when it is worth saying. */}
-        {status === "enrolled" && (
-          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-            Enrolled an authenticator.
-          </div>
-        )}
-        {status === "pending" && (
-          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-            Required — they&apos;ll set it up at next sign-in.
-          </div>
-        )}
+        {/* What is true of them, and then what can be done about it. The
+            decision is in lib/two-factor.ts so the combinations can be
+            asserted without opening a dropdown; this renders its answer. */}
+        {menu.notes
+          .filter((note) => note !== "removed-in-dashboard")
+          .map((note) => (
+            <div
+              key={note}
+              className="px-2 py-1.5 text-[11px] text-muted-foreground"
+            >
+              {NOTE_TEXT[note]}
+            </div>
+          ))}
 
-        {/* The requirement, which an admin can always change — including for
-            somebody who has already enrolled. */}
-        {required ? (
+        {menu.items.includes("cancel-requirement") && (
           <DropdownMenuItem onSelect={onClearRequirement}>
             <ShieldOff className="size-4" />
             Cancel requirement
           </DropdownMenuItem>
-        ) : (
+        )}
+        {menu.items.includes("require") && (
           <DropdownMenuItem onSelect={onRequire}>
             <ShieldCheck className="size-4 text-emerald-500" />
             Require two-factor
           </DropdownMenuItem>
         )}
 
-        {/* The authenticator itself. Self-service only: `auth.mfa.unenroll`
-            acts on the caller's own account, and there is no server here to
-            hold a secret key that could act on anybody else's. */}
-        {status === "enrolled" && isSelf && (
+        {menu.items.includes("reset") && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={onReset}>
@@ -165,9 +175,9 @@ export function TwoFactorControl({
             </DropdownMenuItem>
           </>
         )}
-        {status === "enrolled" && !isSelf && (
+        {menu.notes.includes("removed-in-dashboard") && (
           <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-            To remove their authenticator, use the Supabase dashboard.
+            {NOTE_TEXT["removed-in-dashboard"]}
           </div>
         )}
       </DropdownMenuContent>

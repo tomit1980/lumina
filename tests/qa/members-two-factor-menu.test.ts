@@ -83,40 +83,29 @@ function readMenu(
   return { items, text };
 }
 
-describe("somebody else's row", () => {
-  it("offers what an admin can do, and nothing it cannot", () => {
-    // Enrolled, and required of them. Four assertions on ONE open menu: each
-    // Radix open costs seconds in jsdom and the cost compounds within a file,
-    // so the combinations below are covered by the fewest opens that still
-    // discriminate. The two presences are the control for the two absences —
-    // without them this would pass just as well against a menu that never
-    // opened, which is the failure mode of asserting on a closed dropdown.
+describe("the rendered menu", () => {
+  it("puts the decision on screen: what it can do, and not what it cannot", () => {
+    // ONE opened menu, deliberately. Every Radix open costs seconds in jsdom
+    // and the cost compounds within a file; seven of them took 165s and tipped
+    // CI's reporter into a timeout that failed a build where all 883 tests
+    // passed. The combinations live in ./two-factor-menu.test.ts, which runs in
+    // milliseconds. This case exists because that one cannot tell whether
+    // anything reached the screen at all — the gap ./members-screen.test.ts was
+    // written for, where a control nobody renders is a control nobody can
+    // prove is there.
+    //
+    // Somebody else's row, enrolled and required: the single case where all
+    // three rules are visible at once.
     const { items, text } = readMenu({ isSelf: false, status: "enrolled", required: true });
 
+    // Cannot: unenrolling somebody else needs the secret key.
     expect(items.join(" | ")).not.toMatch(/Reset/);
     expect(items).not.toContain("Disable two-factor");
 
-    // Still available to somebody who HAS enrolled — the item used to live in
-    // the `pending` branch and would have vanished the moment they did.
+    // Can: the requirement, still available to somebody who HAS enrolled.
+    // Also the control for the two absences above — without it they would pass
+    // just as well against a menu that never opened.
     expect(items).toContain("Cancel requirement");
     expect(text).toMatch(/Supabase dashboard/);
-  });
-
-  it("offers Require to an enrolled person nobody has required it of", () => {
-    const { items } = readMenu({ isSelf: false, status: "enrolled", required: false });
-
-    expect(items).toContain("Require two-factor");
-    expect(items).not.toContain("Cancel requirement");
-  });
-});
-
-describe("your own row", () => {
-  it("offers reset and disable, which are self-service and do work", () => {
-    const { items, text } = readMenu({ isSelf: true, status: "enrolled" });
-
-    expect(items.join(" | ")).toMatch(/Reset/);
-    expect(items).toContain("Disable two-factor");
-    // And does not send you to the dashboard for a factor you can drop here.
-    expect(text).not.toMatch(/Supabase dashboard/);
   });
 });
