@@ -1049,6 +1049,12 @@ export type Database = {
       }
       has_permission: { Args: { perm: string }; Returns: boolean }
       is_attachment_uploader: { Args: { att_id: string }; Returns: boolean }
+      mfa_enrolled_ids: {
+        Args: never
+        Returns: {
+          user_id: string
+        }[]
+      }
       move_task: {
         Args: { p_index: number; p_status: string; p_task_id: string }
         Returns: undefined

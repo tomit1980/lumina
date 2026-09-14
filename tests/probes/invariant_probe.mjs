@@ -124,6 +124,46 @@ try {
   check("deleting a project still cascades past the creator-editor invariant",
     (projStill ?? []).length === 0,
     dropProj.error ? `BLOCKED: ${dropProj.error.message.slice(0, 60)}` : "deleted");
+
+  // -------------------------------------------------------------------
+  // `mfa_enrolled_ids()` (20260915000100) — who may ask who has an
+  // authenticator. A `security definer` function reading `auth.mfa_factors`,
+  // a table no policy in this schema can gate, so its only door is the
+  // permission check in its own body plus the grants on the function itself.
+  //
+  // The suite for it was written by whoever wrote it and shares its blind
+  // spots; this asks the same questions from an ordinary browser session,
+  // which is the whole reason this directory exists.
+  // -------------------------------------------------------------------
+  const anon = createClient(URL, anonKey, { auth: { persistSession: false } });
+  const anonAsk = await anon.rpc("mfa_enrolled_ids");
+  // The MESSAGE is the check, not merely the refusal. "permission denied for
+  // function" means anon was stopped at the door by the grant. Anything else
+  // means it entered the body and was turned back by a line that a later edit
+  // could reorder — see 20260914000400_client_rpc_anon.sql.
+  check("a signed-out caller cannot execute mfa_enrolled_ids",
+    !!anonAsk.error && /permission denied for function/i.test(anonAsk.error.message),
+    anonAsk.error ? anonAsk.error.message.slice(0, 70) : "NO ERROR - ANON EXECUTED IT");
+
+  const plainAsk = await (await as("plain")).rpc("mfa_enrolled_ids");
+  check("an ordinary member is told about nobody's authenticator",
+    !plainAsk.error && (plainAsk.data ?? []).length === 0,
+    plainAsk.error ? plainAsk.error.message.slice(0, 60)
+      : `${(plainAsk.data ?? []).length} row(s)`);
+
+  // CONTROL. Without it the silence above would pass just as well against a
+  // function that answers nobody at all, or one that no longer exists.
+  //
+  // It proves REACHABILITY, not discrimination: no probe fixture has a
+  // verified factor, because enrolling one needs a real TOTP code and
+  // `auth.mfa_factors` cannot be written over the API. The check that an admin
+  // is told about a genuinely enrolled person, and an ordinary member is not,
+  // is tests/rls/mfa-enrolled.test.ts, which enrols for real.
+  const bossAsk = await (await as("boss")).rpc("mfa_enrolled_ids");
+  check("CONTROL: an admin reaches the function rather than being refused",
+    !bossAsk.error && Array.isArray(bossAsk.data),
+    bossAsk.error ? `REFUSED: ${bossAsk.error.message.slice(0, 60)}`
+      : `${(bossAsk.data ?? []).length} row(s)`);
 } catch (err) {
   // A throw here means the checks below never ran. Without this, `failures`
   // stays 0 and the epilogue cheerfully reports success for a probe that

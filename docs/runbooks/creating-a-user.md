@@ -350,13 +350,27 @@ of the last remaining admin until you have checked the switch.
 
 ### What it cannot do, and why
 
-**You cannot see whether someone else has actually enrolled, and you cannot
-remove their authenticator.** Both are `auth.admin` operations, and those need
-the secret key — which bypasses every RLS policy and must never be in a browser
-bundle. The app holds only the publishable key, so it does not pretend to know:
-another person's badge reports *required* or *not required*, never *enrolled*.
-The reset and disable actions therefore appear only on your own account, where
-unenrolling is an ordinary self-service call.
+**You can see whether someone else has enrolled. You cannot remove their
+authenticator.**
+
+Seeing it used to be impossible too, and the badge guessed: it reported
+`mfa_required` and read "2FA pending" about people who had set an authenticator
+up months earlier. `mfa_enrolled_ids()` (migration `20260915000100`) fixed that
+without putting the secret key in the bundle. It is a `security definer`
+function over `auth.mfa_factors` — a table the `authenticated` role cannot read
+— which checks `members.manage` in its own body and returns **ids and nothing
+else**: no factor, no secret, no timestamp. Anyone without that permission gets
+no rows, and they are not shown the badge in the first place. The same technique
+already backs `session_is_assured()`.
+
+So the three badges now mean what they say. *2FA on* is enrolled, *2FA pending*
+is required but not yet enrolled, *2FA off* is neither.
+
+Removing somebody's authenticator is still an `auth.admin` operation needing the
+secret key, so **Reset** and **Disable two-factor** appear only on your own row,
+where unenrolling is an ordinary self-service call. On anybody else's row the
+menu says so and points here. **Require** and **Cancel requirement** work on
+every row, including for somebody who has already enrolled.
 
 **So: when someone loses their phone**, do it in the dashboard —
 **Authentication → Users → (the person) → Remove MFA factor** (older dashboards

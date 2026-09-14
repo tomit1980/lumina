@@ -690,21 +690,57 @@ describe("the People page's two-factor controls write profiles.mfa_required", ()
     expect(fake.profiles.find((p) => p.id === BOB.id)?.mfa_required).toBe(false);
   });
 
-  it("another person's enrolment state is never reported as known", async () => {
-    // Alice (signed in) has a verified factor; Bob is merely *required* to
-    // have one. Listing Bob's factors is an auth.admin call the publishable
-    // key cannot make, so Bob must never read as "enrolled" — not even by
-    // Alice's own factor leaking across.
+  /**
+   * RE-AIMED, not deleted. This block used to assert that another person's
+   * enrolment "is never reported as known", which was true of the app and
+   * encoded a limitation as if it were a rule: the badge said "pending"
+   * forever, whether or not they had ever set an authenticator up.
+   *
+   * `mfa_enrolled_ids()` (20260915000100) makes it knowable without the secret
+   * key, so the rule is now the narrower and more useful one — the app reports
+   * exactly what the database named, and invents nothing.
+   */
+  it("reports another person as enrolled when the database names them", async () => {
+    const fake = fakeFor({ signedInAs: ALICE.id });
+    fake.profiles[1].mfa_required = true;
+    fake.enrolledIds = [BOB.id];
+    await renderAdmin(fake);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("bob-status")).toHaveTextContent("enrolled")
+    );
+  });
+
+  it("does NOT invent enrolment for somebody the database did not name", async () => {
+    // Alice (signed in) has a verified factor; Bob is merely *required* to have
+    // one, and the function names nobody. Bob must read "pending" — the
+    // failure this guards against is Alice's own factor leaking across every
+    // row, which is what `selfEnrolled` would do if it were applied by
+    // accident rather than only to the signed-in user.
     const fake = fakeFor({
       signedInAs: ALICE.id,
       factors: [{ id: "factor-1", factor_type: "totp", status: "verified" }],
     });
     fake.profiles[1].mfa_required = true;
+    fake.enrolledIds = [];
     await renderAdmin(fake);
 
     await waitFor(() =>
       expect(screen.getByTestId("bob-status")).toHaveTextContent("pending")
     );
     expect(screen.getByTestId("bob-status")).not.toHaveTextContent("enrolled");
+  });
+
+  it("reports off, not enrolled, to a caller the function refuses", async () => {
+    // Somebody without members.manage gets no rows. That is indistinguishable
+    // from "nobody is enrolled", which is fine precisely because the control
+    // this badge lives in is not rendered for them at all.
+    const fake = fakeFor({ signedInAs: ALICE.id });
+    fake.enrolledIds = [BOB.id];
+    fake.mfaEnrolledRefused = true;
+    await renderAdmin(fake);
+
+    await waitFor(() => expect(fake.rpcCalls).toContain("mfa_enrolled_ids"));
+    expect(screen.getByTestId("bob-status")).toHaveTextContent("off");
   });
 });

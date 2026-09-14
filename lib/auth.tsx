@@ -140,6 +140,17 @@ export interface AuthValue {
 
   twoFactorStatus: (userId: string) => TwoFactorStatus;
   /**
+   * Is two-factor *required* of this person, independently of whether they
+   * have enrolled?
+   *
+   * Separate from `twoFactorStatus` because the two facts came apart once
+   * enrolment became knowable. The People page offers "Require" and "Cancel
+   * requirement" from this, so the admin keeps that control over somebody who
+   * has already set an authenticator up — under the old single status those
+   * items lived in the `pending` branch and vanished the moment they enrolled.
+   */
+  twoFactorRequired: (userId: string) => boolean;
+  /**
    * The four admin two-factor actions, and they all resolve `false` when the
    * write did not land.
    *
@@ -432,6 +443,12 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
       cancelSwitch: () => setPendingSwitch(null),
 
       twoFactorStatus: (userId) => factors[userId]?.status ?? "off",
+      // The demo's own state carries the requirement inside `status`, so this
+      // reads it back out rather than keeping a second copy that could drift.
+      twoFactorRequired: (userId) => {
+        const status = factors[userId]?.status ?? "off";
+        return status === "pending" || status === "enrolled";
+      },
       // The demo path writes to memory, so these cannot fail; they resolve
       // `true` to satisfy the seam the Supabase path needs.
       requireTwoFactor: async (userId) => {
@@ -628,6 +645,9 @@ function SupabaseAuthProvider({
   /** `profiles.mfa_required`, by user id. Profiles are readable by any signed-in
    *  user, so this is one small read that keeps `twoFactorStatus` synchronous. */
   const [mfaRequired, setMfaRequired] = React.useState<Record<string, boolean>>({});
+  /** Everyone with a verified factor, as `mfa_enrolled_ids()` reports them.
+   *  Empty for a caller without `members.manage`, who is not shown the badge. */
+  const [mfaEnrolled, setMfaEnrolled] = React.useState<Set<string>>(new Set());
   const [selfEnrolled, setSelfEnrolled] = React.useState(false);
 
   /**
@@ -778,7 +798,8 @@ function SupabaseAuthProvider({
     };
   }, [client]);
 
-  // Everyone's requirement flag, plus our own enrolment state, once signed in.
+  // Everyone's requirement flag, everyone's enrolment, plus our own, once
+  // signed in.
   React.useEffect(() => {
     if (!client || !session) return;
     let cancelled = false;
@@ -788,6 +809,21 @@ function SupabaseAuthProvider({
         setMfaRequired(
           Object.fromEntries(data.map((p) => [p.id, p.mfa_required] as const))
         );
+      }
+      /**
+       * Who actually has an authenticator. `auth.mfa_factors` is not readable
+       * by the `authenticated` role and listing somebody else's factors is an
+       * `auth.admin` call, so this goes through `mfa_enrolled_ids()` — a
+       * definer function that checks `members.manage` in its own body and
+       * returns ids and nothing else.
+       *
+       * Asked unconditionally rather than gated on a permission this provider
+       * does not know: a caller without it gets an empty set, which is the
+       * same answer it would give for a workspace where nobody has enrolled.
+       */
+      const { data: enrolled } = await client.rpc("mfa_enrolled_ids");
+      if (!cancelled) {
+        setMfaEnrolled(new Set((enrolled ?? []).map((row) => row.user_id)));
       }
       const factorId = await verifiedFactorId(client);
       if (!cancelled) setSelfEnrolled(!!factorId);
@@ -1105,16 +1141,28 @@ function SupabaseAuthProvider({
       resetAll: async () => {},
 
       /**
-       * `enrolled` is only ever answerable about the signed-in user: listing
-       * anyone else's factors is an `auth.admin` call. For everyone else this
-       * reports the requirement flag, which is what an admin can actually act
-       * on — so the People page's reset/disable items, which are gated on
-       * `enrolled`, only appear for yourself, where they work.
+       * Three states that now mean what they say. `enrolled` used to be
+       * answerable only about the signed-in user, so everybody else read
+       * "pending" forever whether or not they had ever set an authenticator
+       * up; `mfa_enrolled_ids()` makes it knowable without the secret key.
+       *
+       * Your own row still answers from `selfEnrolled`, which comes from a
+       * direct `listFactors()` call that the enrol and unenrol flows already
+       * refresh — so setting up an authenticator updates your own badge
+       * immediately, rather than waiting for the next sign-in.
+       *
+       * Knowing this does NOT mean an admin can act on it: removing somebody
+       * else's factor is still an `auth.admin` call. That is why
+       * `workspace-people.tsx` gates the reset and disable items on whose row
+       * it is, and no longer on this status.
        */
       twoFactorStatus: (userId) => {
-        if (userId === session && selfEnrolled) return "enrolled";
+        const enrolled =
+          userId === session ? selfEnrolled : mfaEnrolled.has(userId);
+        if (enrolled) return "enrolled";
         return mfaRequired[userId] ? "pending" : "off";
       },
+      twoFactorRequired: (userId) => !!mfaRequired[userId],
       requireTwoFactor: (userId) => setRequirement(userId, true),
       clearTwoFactorRequirement: (userId) => setRequirement(userId, false),
       // The requirement write is the one that can be refused and the one the
@@ -1166,6 +1214,7 @@ function SupabaseAuthProvider({
     pending,
     loginEnrollment,
     mfaRequired,
+    mfaEnrolled,
     selfEnrolled,
     recovering,
   ]);

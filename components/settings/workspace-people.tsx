@@ -66,9 +66,27 @@ const TWO_FACTOR_META: Record<
   enrolled: { label: "2FA on", icon: ShieldCheck, className: "text-emerald-500" },
 };
 
-function TwoFactorControl({
+/**
+ * The two-factor badge and its menu.
+ *
+ * Exported for `tests/qa/members-two-factor-menu.test.ts`, which drives the
+ * four combinations of `required` and `status` directly. Reaching them through
+ * the whole screen would need a seeded workspace and a fake auth session, and
+ * would test that scaffolding more than the rule.
+ *
+ * `required` and `status` are SEPARATE inputs on purpose. They used to be one:
+ * every item hung off the badge, and `enrolled` was only ever true for the
+ * signed-in user, so the enrolment actions were hidden from other people's
+ * rows by accident. Once `mfa_enrolled_ids()` made enrolment knowable, that
+ * accident would have surfaced two buttons that cannot work on somebody else's
+ * account — and would have hidden "Cancel requirement" from anyone who had
+ * enrolled, since it lived in the `pending` branch.
+ */
+export function TwoFactorControl({
   userName,
   status,
+  required,
+  isSelf,
   onRequire,
   onClearRequirement,
   onReset,
@@ -76,6 +94,11 @@ function TwoFactorControl({
 }: {
   userName: string;
   status: TwoFactorStatus;
+  /** Is two-factor required of them, whether or not they have enrolled? */
+  required: boolean;
+  /** Is this the signed-in user's own row? Removing anybody else's factor is
+   *  an `auth.admin` call the publishable key cannot make. */
+  isSelf: boolean;
   onRequire: () => void;
   onClearRequirement: () => void;
   onReset: () => void;
@@ -100,25 +123,38 @@ function TwoFactorControl({
           Two-factor for {userName}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {status === "off" && (
+        {/* What is true of them, when it is worth saying. */}
+        {status === "enrolled" && (
+          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+            Enrolled an authenticator.
+          </div>
+        )}
+        {status === "pending" && (
+          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+            Required — they&apos;ll set it up at next sign-in.
+          </div>
+        )}
+
+        {/* The requirement, which an admin can always change — including for
+            somebody who has already enrolled. */}
+        {required ? (
+          <DropdownMenuItem onSelect={onClearRequirement}>
+            <ShieldOff className="size-4" />
+            Cancel requirement
+          </DropdownMenuItem>
+        ) : (
           <DropdownMenuItem onSelect={onRequire}>
             <ShieldCheck className="size-4 text-emerald-500" />
             Require two-factor
           </DropdownMenuItem>
         )}
-        {status === "pending" && (
+
+        {/* The authenticator itself. Self-service only: `auth.mfa.unenroll`
+            acts on the caller's own account, and there is no server here to
+            hold a secret key that could act on anybody else's. */}
+        {status === "enrolled" && isSelf && (
           <>
-            <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-              Required — they&apos;ll set it up at next sign-in.
-            </div>
-            <DropdownMenuItem onSelect={onClearRequirement}>
-              <ShieldOff className="size-4" />
-              Cancel requirement
-            </DropdownMenuItem>
-          </>
-        )}
-        {status === "enrolled" && (
-          <>
+            <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={onReset}>
               <RotateCcw className="size-4" />
               Reset (re-enroll)
@@ -128,6 +164,11 @@ function TwoFactorControl({
               Disable two-factor
             </DropdownMenuItem>
           </>
+        )}
+        {status === "enrolled" && !isSelf && (
+          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+            To remove their authenticator, use the Supabase dashboard.
+          </div>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -223,6 +264,7 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
   } = useStore();
   const {
     twoFactorStatus,
+    twoFactorRequired,
     requireTwoFactor,
     clearTwoFactorRequirement,
     resetTwoFactor,
@@ -353,6 +395,8 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
                   <TwoFactorControl
                     userName={user.name.split(" ")[0]}
                     status={twoFactorStatus(user.id)}
+                    required={twoFactorRequired(user.id)}
+                    isSelf={isMe}
                     // QA-119: each of these awaits its write before saying it
                     // happened. They used to fire the green toast the instant
                     // the switch moved, so a refused write produced

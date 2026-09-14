@@ -66,6 +66,21 @@ export interface FakeSupabase {
   enrollCalls: number;
   /** Every `profiles.update({mfa_required})` this client was asked to make. */
   requirementWrites: { id: string; mfa_required: boolean }[];
+  /**
+   * What `mfa_enrolled_ids()` answers — the ids of people with a verified
+   * factor, as the database reports them to a `members.manage` holder.
+   *
+   * Deliberately separate from `factors`, which models `listFactors()` and is
+   * the SIGNED-IN user's own factors only. Conflating the two would let the
+   * provider pass a test by leaking your own enrolment onto everybody else,
+   * which is the exact bug this function exists to avoid.
+   */
+  enrolledIds: string[];
+  /** Model a caller without `members.manage`: the function returns no rows
+   *  rather than raising, which is how every read in this schema refuses. */
+  mfaEnrolledRefused: boolean;
+  /** Every `rpc()` name this client was asked for, in order. */
+  rpcCalls: string[];
   /** Every `auth.updateUser({ password })` this client was asked to make. */
   passwordUpdates: string[];
   /** Make the next password update fail, with this message. */
@@ -131,6 +146,9 @@ export function createFakeSupabase(options: {
     signOutCalls: 0,
     enrollCalls: 0,
     requirementWrites: [],
+    enrolledIds: [],
+    mfaEnrolledRefused: false,
+    rpcCalls: [],
     passwordUpdates: [],
     passwordFailure: null,
     failRequirementWrites: false,
@@ -347,8 +365,24 @@ export function createFakeSupabase(options: {
     }),
   });
 
+  /**
+   * `mfa_enrolled_ids()` from 20260915000100_mfa_enrolled.sql.
+   *
+   * The `assured()` gate applies here too: the function is `security definer`
+   * so no policy filters it, but an unassured session cannot get far enough to
+   * ask — and modelling it keeps this fake honest about the one failure that
+   * has actually bitten (an aal1 session reading nothing and looking like an
+   * empty workspace).
+   */
+  const rpc = async (name: string) => {
+    fake.rpcCalls.push(name);
+    if (name !== "mfa_enrolled_ids") return { data: null, error: null };
+    if (fake.mfaEnrolledRefused || !assured()) return { data: [], error: null };
+    return { data: fake.enrolledIds.map((user_id) => ({ user_id })), error: null };
+  };
+
   // The one cast, and it is on the test's own object: production code stays
   // typed against the real `SupabaseClient<Database>`.
-  fake.client = { auth, from } as unknown as SupabaseClient<Database>;
+  fake.client = { auth, from, rpc } as unknown as SupabaseClient<Database>;
   return fake;
 }
