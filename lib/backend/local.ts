@@ -471,6 +471,34 @@ export class LocalBackend implements Backend {
     return Promise.resolve();
   }
 
+  updateClientInfo(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  setClientDocument(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  /**
+   * The demo has no Vault and no server, so there is nowhere to put a client's
+   * password that is not the same localStorage blob everything else lives in.
+   *
+   * REFUSING IS THE HONEST ANSWER. Resolving would leave `hasPassword` true on
+   * a record whose password exists nowhere, and the Reveal button would then
+   * be a promise the demo cannot keep. This is the established shape for a
+   * capability the local backend does not have — `changePassword` and
+   * `createUser` both refuse with a sentence rather than pretending.
+   */
+  setClientPassword(): Promise<void> {
+    return Promise.reject(
+      new Error("The demo cannot store a client's password securely.")
+    );
+  }
+
+  revealClientPassword(): Promise<string | null> {
+    return Promise.resolve(null);
+  }
+
   deleteProject(): Promise<void> {
     return Promise.resolve();
   }

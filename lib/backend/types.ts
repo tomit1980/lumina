@@ -22,6 +22,7 @@ import type {
   AppState,
   Attachment,
   Channel,
+  ClientInfo,
   DM,
   Message,
   Permission,
@@ -68,6 +69,42 @@ export type ProjectPatch = Partial<
   Pick<Project, "name" | "description" | "emoji" | "color" | "priority" | "attachments">
 > &
   AttachmentRemovals;
+
+/**
+ * The editable fields of a client record, as `updateClientInfo` receives them.
+ *
+ * THREE THINGS ARE ABSENT AND EACH IS A DECISION, not an omission:
+ *
+ * - `documents` has its own method. A patch carrying the whole map would make
+ *   two people ticking two different boxes a last-write-wins race over both;
+ *   one row per document means each write touches only what was clicked.
+ * - `hasPassword` is derived, never sent. The password goes through
+ *   `setClientPassword`, which is the only thing that may change it.
+ * - `updatedAt` / `updatedBy` are written by a database trigger from
+ *   `auth.uid()`. A client that could send them could lie about them, and an
+ *   audit column the subject controls is not an audit column.
+ */
+export type ClientInfoPatch = Partial<
+  Pick<
+    ClientInfo,
+    | "fullName"
+    | "dateOfBirth"
+    | "phone"
+    | "email"
+    | "address"
+    | "superCompany"
+    | "memberId"
+    | "amount"
+    | "currency"
+    | "diagnosis"
+    | "lastDayOfWork"
+    | "employerName"
+    | "contractSigned"
+    | "newPhone"
+    | "newEmail"
+    | "notes"
+  >
+>;
 
 /** The editable fields of a task, as `updateTask` receives them. */
 export type TaskPatch = Partial<Omit<Task, "id" | "projectId">> & AttachmentRemovals;
@@ -308,6 +345,47 @@ export interface Backend {
    */
   createProject(project: Project, tasks: Task[]): Promise<Project>;
   updateProject(projectId: string, patch: ProjectPatch): Promise<void>;
+
+  // The client record behind a project. See 20260914000200_client_info.sql.
+  //
+  // All four are gated on editor access to that project, enforced by the
+  // database rather than by these methods: the two table writes by
+  // `client_info_*`/`client_documents_*`, the two password calls by an
+  // explicit check inside each function (RLS is not consulted inside a
+  // `security definer` function, which is the hole 20260912000100 was written
+  // to close).
+  /**
+   * Creates the record or patches it. ONE METHOD FOR BOTH, because the record
+   * is created lazily by whichever field is edited first and no caller should
+   * have to know whether it is the first. Implemented as an upsert.
+   */
+  updateClientInfo(projectId: string, patch: ClientInfoPatch): Promise<void>;
+  /** One document's received flag. Its own method rather than part of the
+   *  patch above — see `ClientInfoPatch`. */
+  setClientDocument(
+    projectId: string,
+    documentType: string,
+    received: boolean
+  ): Promise<void>;
+  /**
+   * Stores, replaces or (with `null`) clears the client's account password.
+   *
+   * Not a column write. The value goes to Supabase Vault through an RPC and is
+   * never held in `AppState`, never returned by a select, and never present in
+   * a realtime payload — only a pointer to it is on the row.
+   */
+  setClientPassword(projectId: string, value: string | null): Promise<void>;
+  /**
+   * Reads it back, once, for one person who asked.
+   *
+   * EVERY CALL IS LOGGED to the project's activity feed by the database,
+   * inside the same transaction and before the value is read — so a reveal
+   * that reaches the caller has always left a record. The line names the actor
+   * and the project and no part of the value.
+   *
+   * Resolves `null` when no password is stored, which is not an error.
+   */
+  revealClientPassword(projectId: string): Promise<string | null>;
   deleteProject(projectId: string): Promise<void>;
   setProjectAccess(projectId: string, patch: ProjectAccessPatch): Promise<void>;
 

@@ -260,6 +260,7 @@ export function createSeed(): AppState {
       createdBy: "u_vlad",
       createdAt: now - 20 * DAY,
       createdFromTaskSetId: null,
+      client: null,
     },
     {
       id: "p_mobile",
@@ -274,6 +275,7 @@ export function createSeed(): AppState {
       createdBy: "u_sam",
       createdAt: now - 12 * DAY,
       createdFromTaskSetId: null,
+      client: null,
     },
   ];
 

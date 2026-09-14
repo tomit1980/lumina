@@ -62,6 +62,8 @@ function empty(): HydrateRows {
     projects: [],
     projectMembers: [],
     projectAttachments: [],
+  clientInfo: [],
+  clientDocuments: [],
     tasks: [],
     taskCollaborators: [],
     taskAttachments: [],

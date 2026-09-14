@@ -450,6 +450,132 @@ export type Database = {
           },
         ]
       }
+      project_client_documents: {
+        Row: {
+          document_type: string
+          project_id: string
+          received: boolean
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          document_type: string
+          project_id: string
+          received?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          document_type?: string
+          project_id?: string
+          received?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_client_documents_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_client_documents_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_client_info: {
+        Row: {
+          address: string
+          amount: number | null
+          contract_signed: boolean
+          created_at: string
+          currency: string
+          date_of_birth: string | null
+          diagnosis: string
+          email: string
+          employer_name: string
+          full_name: string
+          last_day_of_work: string | null
+          member_id: string
+          new_email: string
+          new_phone: string
+          notes: string
+          password_secret_id: string | null
+          phone: string
+          project_id: string
+          super_company: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          address?: string
+          amount?: number | null
+          contract_signed?: boolean
+          created_at?: string
+          currency?: string
+          date_of_birth?: string | null
+          diagnosis?: string
+          email?: string
+          employer_name?: string
+          full_name?: string
+          last_day_of_work?: string | null
+          member_id?: string
+          new_email?: string
+          new_phone?: string
+          notes?: string
+          password_secret_id?: string | null
+          phone?: string
+          project_id: string
+          super_company?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          address?: string
+          amount?: number | null
+          contract_signed?: boolean
+          created_at?: string
+          currency?: string
+          date_of_birth?: string | null
+          diagnosis?: string
+          email?: string
+          employer_name?: string
+          full_name?: string
+          last_day_of_work?: string | null
+          member_id?: string
+          new_email?: string
+          new_phone?: string
+          notes?: string
+          password_secret_id?: string | null
+          phone?: string
+          project_id?: string
+          super_company?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_client_info_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_client_info_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_members: {
         Row: {
           level: string
@@ -885,6 +1011,10 @@ export type Database = {
     }
     Functions: {
       actor_rank: { Args: never; Returns: number }
+      assert_client_editor: {
+        Args: { p_project_id: string }
+        Returns: undefined
+      }
       attachment_of_object: { Args: { object_name: string }; Returns: string }
       can_join_dm: { Args: { target_dm_id: string }; Returns: boolean }
       can_see_attachment: { Args: { att_id: string }; Returns: boolean }
@@ -894,6 +1024,14 @@ export type Database = {
       channel_is_manageable: {
         Args: { target_channel_id: string }
         Returns: boolean
+      }
+      client_secret_ids: {
+        Args: never
+        Returns: {
+          referenced: boolean
+          secret_id: string
+          secret_name: string
+        }[]
       }
       create_project_with_tasks: {
         Args: { p_project: Json; p_tasks: Json }
@@ -931,7 +1069,15 @@ export type Database = {
         Returns: boolean
       }
       project_is_viewer_only: { Args: { proj_id: string }; Returns: boolean }
+      reveal_client_password: {
+        Args: { p_project_id: string }
+        Returns: string
+      }
       session_is_assured: { Args: never; Returns: boolean }
+      set_client_password: {
+        Args: { p_project_id: string; p_value: string }
+        Returns: undefined
+      }
       toggle_reaction: {
         Args: { emoji: string; message_id: string }
         Returns: Json

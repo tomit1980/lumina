@@ -211,6 +211,75 @@ export interface Task {
   collaboratorIds: string[];
 }
 
+/**
+ * The client behind a project: one case record, one project, one row.
+ *
+ * NESTED ON `Project` rather than kept in a parallel list keyed by project id.
+ * A `clientInfo: ClientInfo[]` beside `projects` would make "project A's
+ * record" a lookup that a component could get wrong, and getting it wrong
+ * means showing one client's date of birth under another's name. Nesting makes
+ * the association structural: there is no way to hold the record without
+ * holding the project it belongs to.
+ *
+ * `null` means no record has been created yet, which is the state of every
+ * project until somebody types something into the form. The pane renders the
+ * same empty fields either way, so absence never has to be special-cased in
+ * the UI — only in the knowledge that there is nothing to show.
+ */
+export interface ClientInfo {
+  fullName: string;
+  /** "YYYY-MM-DD" or null. A STRING, NOT epoch milliseconds, and that is the
+   *  whole defence against the timezone bug `Task.dueDate` keeps producing: a
+   *  date of birth has no instant, so it never gets one. */
+  dateOfBirth: string | null;
+  phone: string;
+  email: string;
+  address: string;
+
+  superCompany: string;
+  memberId: string;
+  /** Dollars and cents, or null for "not yet known". Null and 0 are different
+   *  answers and this field keeps them different. */
+  amount: number | null;
+  /** ISO 4217, stored beside the amount rather than assumed to be AUD. */
+  currency: string;
+  diagnosis: string;
+  /** "YYYY-MM-DD" or null. See `dateOfBirth`. */
+  lastDayOfWork: string | null;
+  employerName: string;
+
+  contractSigned: boolean;
+
+  /** Contact details that changed after the application went in. These NEVER
+   *  overwrite `phone`/`email`: the originals are what the fund has on file,
+   *  and losing them would mean losing the ability to say what was submitted. */
+  newPhone: string;
+  newEmail: string;
+
+  notes: string;
+
+  /** Document type id → received. A missing key is "not received", the same as
+   *  `false`, because a row is only written once somebody touches the box. */
+  documents: Record<string, boolean>;
+
+  /**
+   * Whether a password is stored — NOT the password.
+   *
+   * The value itself is in Supabase Vault and never enters `AppState`, a
+   * hydrate, a realtime payload or browser storage. It reaches the screen only
+   * through `revealClientPassword`, which logs every call, and lives in one
+   * component's React state for as long as it is on screen.
+   */
+  hasPassword: boolean;
+
+  /** Epoch ms of the last write, as the database recorded it. Used to re-key
+   *  the pane's uncontrolled inputs when a colleague's edit arrives. */
+  updatedAt: number;
+  /** Who the database saw writing last — set by a trigger from `auth.uid()`,
+   *  never sent by the client. Null when that account has since been removed. */
+  updatedBy: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -228,6 +297,8 @@ export interface Project {
   /** Which task set produced this project, if any. Provenance only — the
    *  tasks are ordinary tasks and nothing syncs. */
   createdFromTaskSetId: string | null;
+  /** The client's case record, or null until the first edit creates it. */
+  client: ClientInfo | null;
 }
 
 export type ActivityKind = "task" | "message" | "channel" | "member" | "project";

@@ -37,6 +37,7 @@ import { AttachmentsField } from "@/components/attachments";
 import { DocumentPage } from "@/components/documents/document-page";
 import { Board } from "@/components/kanban/board";
 import { ListView } from "@/components/kanban/list-view";
+import { ClientInfoPane } from "@/components/project/client-info-pane";
 import { useUI } from "@/components/ui-context";
 import { createAttachmentFromDataUrl } from "@/lib/attachments";
 import { emptySpreadsheetDataUrl, MIME, textToDataUrl, withExtension } from "@/lib/documents";
@@ -46,6 +47,11 @@ import { useStore } from "@/lib/store";
 import { isDone } from "@/lib/statuses";
 import { PRIORITIES, PRIORITY_META, type Priority } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/** The tabs a project has, in the order they appear. Named rather than
+ *  written inline twice: the state and the Tabs callback had drifted into two
+ *  copies of the same union, and a third tab meant remembering both. */
+type ProjectView = "board" | "list" | "client" | "files";
 
 function EmptyState({
   icon,
@@ -92,7 +98,7 @@ function ProjectPageInner() {
     useUI();
   const canEditProject = can("project.create");
 
-  const [view, setView] = React.useState<"board" | "list" | "files">("board");
+  const [view, setView] = React.useState<ProjectView>("board");
   const [assigneeFilter, setAssigneeFilter] = React.useState("all");
   const [priorityFilter, setPriorityFilter] = React.useState("all");
   const [newFile, setNewFile] = React.useState<"markdown" | "spreadsheet" | null>(null);
@@ -284,13 +290,16 @@ function ProjectPageInner() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2 pb-3">
-          <Tabs value={view} onValueChange={(v) => setView(v as "board" | "list" | "files")}>
+          <Tabs value={view} onValueChange={(v) => setView(v as ProjectView)}>
             <TabsList className="h-8">
               <TabsTrigger value="board" className="text-xs">
                 Board
               </TabsTrigger>
               <TabsTrigger value="list" className="text-xs">
                 List
+              </TabsTrigger>
+              <TabsTrigger value="client" className="text-xs">
+                Client Info
               </TabsTrigger>
               <TabsTrigger value="files" className="gap-1.5 text-xs">
                 Files
@@ -303,7 +312,12 @@ function ProjectPageInner() {
             </TabsList>
           </Tabs>
 
-          {view !== "files" && (
+          {/* The filters narrow a list of tasks, so they belong to the two
+              views that show one. Written as "is this a task view" rather
+              than "is this not Files", because the second phrasing silently
+              hands the cluster to every tab added later — which is exactly
+              what it did when Client Info arrived. */}
+          {(view === "board" || view === "list") && (
             <div className="ml-auto flex items-center gap-2">
               <ListFilter
                 className={cn(
@@ -361,6 +375,13 @@ function ProjectPageInner() {
           <Board project={project} tasks={tasks} viewerOnly={viewerOnly} />
         ) : view === "list" ? (
           <ListView tasks={tasks} viewerOnly={viewerOnly} />
+        ) : view === "client" ? (
+          // `!viewerOnly`, not `canEditProject`: editing the client record is
+          // editor access to THIS project, the same bar `client_info_insert`
+          // enforces in the database. `canEditProject` is `project.create`,
+          // which would lock out a teammate who may edit every task on the
+          // case — see the store's `clientEditGuard`.
+          <ClientInfoPane project={project} canEdit={!viewerOnly} />
         ) : (
           <div className="mx-auto h-full max-w-lg overflow-y-auto px-6 py-6">
             {project.attachments.length === 0 && canManageFiles && (

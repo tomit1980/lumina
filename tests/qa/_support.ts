@@ -115,6 +115,7 @@ export function addProject(
     members: [],
     attachments: [],
     createdFromTaskSetId: null,
+    client: null,
     createdAt: Date.now(),
     ...project,
   };
@@ -438,6 +439,26 @@ export class FailingBackend extends EventBackend {
     return this.run("updateProject", undefined);
   }
 
+  // The client record. LocalBackend's `setClientPassword` REJECTS by design
+  // (the demo has nowhere secure to put one), so without this override a test
+  // naming any other failing op would still see that call fail — and would be
+  // asserting the demo's refusal while believing it had asserted a rollback.
+  override updateClientInfo(): Promise<void> {
+    return this.run("updateClientInfo", undefined);
+  }
+
+  override setClientDocument(): Promise<void> {
+    return this.run("setClientDocument", undefined);
+  }
+
+  override setClientPassword(): Promise<void> {
+    return this.run("setClientPassword", undefined);
+  }
+
+  override revealClientPassword(): Promise<string | null> {
+    return this.run("revealClientPassword", "the-secret");
+  }
+
   override createRole(role: RoleDef): Promise<RoleDef> {
     return this.run("createRole", role);
   }
@@ -566,6 +587,10 @@ export type FailingOp =
   | "createProject"
   | "updateProject"
   | "setProjectAccess"
+  | "updateClientInfo"
+  | "setClientDocument"
+  | "setClientPassword"
+  | "revealClientPassword"
   | "createRole"
   | "setUserRole"
   | "updateProfile"

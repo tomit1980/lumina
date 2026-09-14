@@ -20,6 +20,7 @@
  */
 import * as activityWrites from "./activity";
 import * as chat from "./chat";
+import * as clientInfo from "./client-info";
 import { browserClient, type LuminaClient } from "./client";
 import { hydrateWorkspace } from "./hydrate";
 import { signedOutState } from "./mapping";
@@ -36,6 +37,7 @@ import type {
   AttachmentOwner,
   Backend,
   ChannelAccessPatch,
+  ClientInfoPatch,
   ProjectAccessPatch,
   ProjectPatch,
   RealtimeEvent,
@@ -363,6 +365,28 @@ export class SupabaseBackend implements Backend {
   }
   async updateProject(projectId: string, patch: ProjectPatch): Promise<void> {
     return workspace.updateProject(await this.client(), projectId, patch);
+  }
+
+  async updateClientInfo(projectId: string, patch: ClientInfoPatch): Promise<void> {
+    return clientInfo.updateClientInfo(await this.client(), projectId, patch);
+  }
+  async setClientDocument(
+    projectId: string,
+    documentType: string,
+    received: boolean
+  ): Promise<void> {
+    return clientInfo.setClientDocument(
+      await this.client(),
+      projectId,
+      documentType,
+      received
+    );
+  }
+  async setClientPassword(projectId: string, value: string | null): Promise<void> {
+    return clientInfo.setClientPassword(await this.client(), projectId, value);
+  }
+  async revealClientPassword(projectId: string): Promise<string | null> {
+    return clientInfo.revealClientPassword(await this.client(), projectId);
   }
   async deleteProject(projectId: string): Promise<void> {
     return workspace.deleteProject(await this.client(), projectId);

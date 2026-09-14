@@ -5,10 +5,17 @@ import { toast } from "sonner";
 
 import { backendKind, createBackend } from "./backend";
 import { fallbackStatus, firstOpenStatus, isDoneStatus } from "./statuses";
+import {
+  DEFAULT_CURRENCY,
+  isIsoDate,
+  isPlausibleEmail,
+  isPlausiblePhone,
+} from "./client-info";
 import type {
   AttachmentRemovals,
   Backend,
   ChannelAccessPatch,
+  ClientInfoPatch,
   ProjectAccessPatch,
   ProjectPatch,
   RealtimeEvent,
@@ -33,6 +40,7 @@ import type {
   AppState,
   Attachment,
   Channel,
+  ClientInfo,
   DM,
   Message,
   MessageAttachment,
@@ -328,6 +336,34 @@ interface StoreValue {
     opts?: { undone?: string }
   ) => Promise<boolean>;
   deleteProject: (projectId: string) => Promise<boolean>;
+
+  /**
+   * The client record behind a project. All four need editor access to that
+   * project — not `project.create`, which would exclude a teammate who may
+   * edit every task on the case.
+   */
+  updateClientInfo: (
+    projectId: string,
+    patch: ClientInfoPatch
+  ) => Promise<boolean>;
+  /** One document's received flag. Its own action so two people ticking two
+   *  boxes do not overwrite each other. */
+  setClientDocument: (
+    projectId: string,
+    documentType: string,
+    received: boolean
+  ) => Promise<boolean>;
+  /** Stores, replaces, or (with `null`) clears the client's account password.
+   *  The value goes to Supabase Vault; `AppState` only ever learns whether one
+   *  exists. */
+  setClientPassword: (
+    projectId: string,
+    value: string | null
+  ) => Promise<boolean>;
+  /** Reads it back once, for the caller only. Every call is logged to the
+   *  project's feed by the database. Resolves null when there is none stored
+   *  or the request was refused. */
+  revealClientPassword: (projectId: string) => Promise<string | null>;
   /** Sets restriction + the per-member access list in one go. The project's
    *  creator is always kept as an editor so they can't lock themselves out. */
   setProjectAccess: (
@@ -2366,6 +2402,7 @@ export function StoreProvider({
         createdBy: s.currentUserId,
         createdAt: Date.now(),
         createdFromTaskSetId: set?.id ?? null,
+        client: null,
       };
 
       // Instantiated tasks are ordinary tasks: fresh ids, no link back to the
@@ -2490,6 +2527,226 @@ export function StoreProvider({
           failed: false,
           describe: `save ${target ? `“${target.name}”` : "this project"}`,
           undone: opts?.undone,
+        }
+      );
+    };
+
+    /**
+     * The empty record a project has before anybody types anything.
+     *
+     * Built here rather than imported so an optimistic patch on a project with
+     * `client === null` has something to spread into. Every field is the
+     * column default, which is what the database would have produced anyway.
+     */
+    const emptyClientInfo = (): ClientInfo => ({
+      fullName: "",
+      dateOfBirth: null,
+      phone: "",
+      email: "",
+      address: "",
+      superCompany: "",
+      memberId: "",
+      amount: null,
+      currency: DEFAULT_CURRENCY,
+      diagnosis: "",
+      lastDayOfWork: null,
+      employerName: "",
+      contractSigned: false,
+      newPhone: "",
+      newEmail: "",
+      notes: "",
+      documents: {},
+      hasPassword: false,
+      updatedAt: 0,
+      updatedBy: null,
+    });
+
+    /**
+     * Who may edit a project's client record.
+     *
+     * `projectIsViewerOnly`, NOT `projectIsManageable` — which is the bar
+     * `updateProject` uses and would have been the easy thing to copy. The
+     * decision was "anyone with editor access to the project", and
+     * `projectIsManageable` additionally requires `project.create` or
+     * ownership, so copying it would mean a teammate who may edit every task
+     * on a case may not record the client's phone number. This mirrors
+     * `client_info_insert` in 20260914000200 exactly, which is the rule that
+     * actually decides it.
+     */
+    const clientEditGuard = (projectId: string): AppState | null => {
+      const s = stateRef.current;
+      const project = s?.projects.find((p) => p.id === projectId);
+      if (!s || !project) return null;
+      if (projectIsViewerOnly(s, project)) {
+        deny("You can only view this project.");
+        return null;
+      }
+      return s;
+    };
+
+    /** Applies a patch to one project's client record, creating it if this is
+     *  the first edit. */
+    const patchClient = (
+      s: AppState,
+      projectId: string,
+      change: (client: ClientInfo) => ClientInfo
+    ): AppState => ({
+      ...s,
+      projects: s.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, client: change(p.client ?? emptyClientInfo()) }
+          : p
+      ),
+    });
+
+    const updateClientInfo: StoreValue["updateClientInfo"] = (projectId, patch) => {
+      if (!clientEditGuard(projectId)) return Promise.resolve(false);
+
+      // Validated BEFORE the optimistic patch, so a refusal never puts a bad
+      // value on screen and then takes it away again. Each refusal says what
+      // the field wants; `lib/client-info.ts` owns every rule so that the pane,
+      // the store and the tests cannot disagree about what "valid" means.
+      if (patch.email !== undefined && patch.email !== "" && !isPlausibleEmail(patch.email)) {
+        deny("That doesn't look like an email address.");
+        return Promise.resolve(false);
+      }
+      if (patch.newEmail !== undefined && patch.newEmail !== "" && !isPlausibleEmail(patch.newEmail)) {
+        deny("That doesn't look like an email address.");
+        return Promise.resolve(false);
+      }
+      if (patch.phone !== undefined && patch.phone !== "" && !isPlausiblePhone(patch.phone)) {
+        deny("That doesn't look like a phone number.");
+        return Promise.resolve(false);
+      }
+      if (patch.newPhone !== undefined && patch.newPhone !== "" && !isPlausiblePhone(patch.newPhone)) {
+        deny("That doesn't look like a phone number.");
+        return Promise.resolve(false);
+      }
+      for (const field of ["dateOfBirth", "lastDayOfWork"] as const) {
+        const value = patch[field];
+        if (value !== undefined && value !== null && !isIsoDate(value)) {
+          deny("That isn't a date we can store.");
+          return Promise.resolve(false);
+        }
+      }
+      if (
+        patch.amount !== undefined &&
+        patch.amount !== null &&
+        (!Number.isFinite(patch.amount) || patch.amount < 0)
+      ) {
+        deny("An amount has to be a number and cannot be negative.");
+        return Promise.resolve(false);
+      }
+
+      return commit(
+        (s) => {
+          const project = s.projects.find((p) => p.id === projectId);
+          if (!project) return s;
+          const was = project.client?.contractSigned ?? false;
+          const next = patchClient(s, projectId, (client) => ({ ...client, ...patch }));
+          // ONE FIELD GETS A FEED LINE, and only on a real change. Autosave
+          // fires on every blur, so a line per field would bury the feed; the
+          // contract being signed is the milestone somebody else on the case
+          // actually wants to hear about. The rest of the audit is
+          // `updated_at`/`updated_by`, which the database writes itself.
+          if (patch.contractSigned === undefined || patch.contractSigned === was) {
+            return next;
+          }
+          return {
+            ...next,
+            activities: activity(
+              next,
+              "project",
+              patch.contractSigned
+                ? `marked the contract signed on “${project.name}”`
+                : `marked the contract unsigned on “${project.name}”`,
+              { projectId }
+            ),
+          };
+        },
+        () => backend.updateClientInfo(projectId, patch),
+        {
+          ok: () => true,
+          failed: false,
+          describe: "save the client details",
+        }
+      );
+    };
+
+    const setClientDocument: StoreValue["setClientDocument"] = (
+      projectId,
+      documentType,
+      received
+    ) => {
+      if (!clientEditGuard(projectId)) return Promise.resolve(false);
+      return commit(
+        (s) =>
+          patchClient(s, projectId, (client) => ({
+            ...client,
+            documents: { ...client.documents, [documentType]: received },
+          })),
+        () => backend.setClientDocument(projectId, documentType, received),
+        {
+          ok: () => true,
+          failed: false,
+          describe: "save that document",
+        }
+      );
+    };
+
+    /**
+     * Stores or clears the client's account password.
+     *
+     * NOT OPTIMISTIC IN THE USUAL SENSE, and deliberately so: the patch flips
+     * `hasPassword`, which is all `AppState` ever knows, and the value itself
+     * is never in state at all. Showing a password as "stored" before Vault
+     * confirmed it would be the one optimistic lie with a real cost — somebody
+     * would clear their own note believing the app had it.
+     *
+     * So the patch is applied, and `commit` rolls `hasPassword` back on any
+     * refusal, which is exactly the guarantee that makes the flag trustworthy.
+     */
+    const setClientPassword: StoreValue["setClientPassword"] = (projectId, value) => {
+      if (!clientEditGuard(projectId)) return Promise.resolve(false);
+      const stored = value !== null && value !== "";
+      return commit(
+        (s) =>
+          patchClient(s, projectId, (client) => ({ ...client, hasPassword: stored })),
+        () => backend.setClientPassword(projectId, value),
+        {
+          ok: () => true,
+          failed: false,
+          describe: stored
+            ? "save the client's password"
+            : "clear the client's password",
+        }
+      );
+    };
+
+    /**
+     * Reads the password back, once, for whoever asked.
+     *
+     * NOT a `commit`: nothing in `AppState` changes and there is nothing to
+     * roll back. The value is handed to the caller and goes nowhere else — not
+     * into state, not into localStorage, not into the feed.
+     *
+     * The "who revealed it" line is written by the database inside the same
+     * transaction, before the value is read. Logging it from here instead
+     * would be a claim about a request rather than a record of one, and could
+     * be skipped by anybody calling the RPC directly.
+     */
+    const revealClientPassword: StoreValue["revealClientPassword"] = (projectId) => {
+      if (!clientEditGuard(projectId)) return Promise.resolve(null);
+      return backend.revealClientPassword(projectId).then(
+        (value) => value,
+        () => {
+          // The server's own message is not shown. It is the only error in
+          // this store whose text could describe a secret's storage, and
+          // "refused" is the whole of what the person needs to act on.
+          toast.error("Couldn't show it", {
+            description: "The server refused that request.",
+          });
+          return null;
         }
       );
     };
@@ -2851,6 +3108,10 @@ export function StoreProvider({
       openDm,
       createProject,
       updateProject,
+      updateClientInfo,
+      setClientDocument,
+      setClientPassword,
+      revealClientPassword,
       deleteProject,
       setProjectAccess,
       createTask,

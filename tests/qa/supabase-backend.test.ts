@@ -265,6 +265,12 @@ describe("hydrateWorkspace — the query plan", () => {
     "projects",
     "project_members",
     "project_attachments",
+    // The client case record (20260914000200_client_info.sql). Two selects,
+    // not a join onto `projects`: the document rows are a separate table, and
+    // `password_secret_id` comes back as a pointer whose value is not
+    // fetchable from here at all.
+    "project_client_info",
+    "project_client_documents",
     "tasks",
     "task_collaborators",
     "task_attachments",

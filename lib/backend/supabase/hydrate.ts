@@ -80,6 +80,8 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     projects,
     projectMembers,
     projectAttachments,
+    clientInfo,
+    clientDocuments,
     tasks,
     taskCollaborators,
     taskAttachments,
@@ -104,6 +106,12 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     client.from("projects").select("*").order("created_at"),
     client.from("project_members").select("*"),
     client.from("project_attachments").select("*"),
+    // Every column BUT the password pointer's value — there is no value to
+    // fetch, only `password_secret_id`, and `hasPassword` is all the browser
+    // is ever told. The password itself comes back exactly once, from
+    // reveal_client_password(), for one person who asked and was logged.
+    client.from("project_client_info").select("*"),
+    client.from("project_client_documents").select("*"),
     client.from("tasks").select("*").order("position"),
     client.from("task_collaborators").select("*"),
     client.from("task_attachments").select("*"),
@@ -144,6 +152,8 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     projects: unwrap("projects", projects),
     projectMembers: unwrap("project_members", projectMembers),
     projectAttachments: unwrap("project_attachments", projectAttachments),
+    clientInfo: unwrap("project_client_info", clientInfo),
+    clientDocuments: unwrap("project_client_documents", clientDocuments),
     tasks: unwrap("tasks", tasks),
     taskCollaborators: unwrap("task_collaborators", taskCollaborators),
     taskAttachments: unwrap("task_attachments", taskAttachments),

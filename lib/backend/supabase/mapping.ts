@@ -49,6 +49,7 @@
  *      owns both, and `AppState` is handed to every component.
  */
 import { ALL_PERMISSIONS } from "../../permissions";
+import { DEFAULT_CURRENCY } from "../../client-info";
 import { SEED_VERSION } from "../../seed";
 import type { Database } from "../../database.types";
 import {
@@ -59,6 +60,7 @@ import {
   type AppState,
   type Attachment,
   type Channel,
+  type ClientInfo,
   type DM,
   type Message,
   type MessageAttachment,
@@ -98,6 +100,8 @@ export type AttachmentRow = Row<"attachments">;
 export type ProjectRow = Row<"projects">;
 export type ProjectMemberRow = Row<"project_members">;
 export type ProjectAttachmentRow = Row<"project_attachments">;
+export type ClientInfoRow = Row<"project_client_info">;
+export type ClientDocumentRow = Row<"project_client_documents">;
 export type TaskRow = Row<"tasks">;
 export type TaskCollaboratorRow = Row<"task_collaborators">;
 export type TaskAttachmentRow = Row<"task_attachments">;
@@ -124,6 +128,8 @@ export interface HydrateRows {
   projects: ProjectRow[];
   projectMembers: ProjectMemberRow[];
   projectAttachments: ProjectAttachmentRow[];
+  clientInfo: ClientInfoRow[];
+  clientDocuments: ClientDocumentRow[];
   tasks: TaskRow[];
   taskCollaborators: TaskCollaboratorRow[];
   taskAttachments: TaskAttachmentRow[];
@@ -282,6 +288,75 @@ export function toTaskSet(row: TaskSetRow, items: TaskSetItem[]): TaskSet {
   };
 }
 
+/**
+ * A project's client record, or `null` when it has none yet.
+ *
+ * NULL RATHER THAN AN EMPTY RECORD. "Nobody has filled this in" and "somebody
+ * filled it in and cleared every field" are different facts, and only the
+ * first one is true of every project that existed before this feature. The
+ * pane renders the same empty form for both, so the distinction costs the UI
+ * nothing and keeps `updatedAt` from claiming a write that never happened.
+ *
+ * DOCUMENT ROWS CAN ARRIVE WITHOUT AN INFO ROW: ticking a checkbox first
+ * writes only to `project_client_documents`. So the record is built whenever
+ * either side has something, and the info half falls back to column defaults.
+ *
+ * `amount` comes back from PostgREST as a JS number for `numeric` columns
+ * within double precision, which 14,2 is — but `String(...)` and `Number(...)`
+ * both appear in the wild depending on the driver's settings, so it is
+ * normalised here rather than trusted.
+ *
+ * THE PASSWORD IS NOT HERE AND CANNOT BE. `password_secret_id` is a pointer;
+ * this reads it only to answer "is there one", and the value itself never
+ * enters `AppState`.
+ */
+export function toClientInfo(
+  row: ClientInfoRow | undefined,
+  documentRows: ClientDocumentRow[]
+): ClientInfo | null {
+  if (!row && documentRows.length === 0) return null;
+
+  const documents: Record<string, boolean> = {};
+  for (const d of documentRows) documents[d.document_type] = d.received;
+
+  // The newest write on either table. A document tick and a field edit both
+  // count as "when this record last changed", and the pane re-keys its inputs
+  // off this value.
+  const stamps = [
+    ...(row ? [toEpoch(row.updated_at)] : []),
+    ...documentRows.map((d) => toEpoch(d.updated_at)),
+  ];
+
+  const amount =
+    row?.amount === null || row?.amount === undefined ? null : Number(row.amount);
+
+  return {
+    fullName: row?.full_name ?? "",
+    dateOfBirth: row?.date_of_birth ?? null,
+    phone: row?.phone ?? "",
+    email: row?.email ?? "",
+    address: row?.address ?? "",
+    superCompany: row?.super_company ?? "",
+    memberId: row?.member_id ?? "",
+    amount: amount !== null && Number.isFinite(amount) ? amount : null,
+    // `char(3)` pads to three characters, so a shorter code would come back
+    // with trailing spaces. It cannot today (the check constraint is exactly
+    // three letters), and trimming costs nothing if that ever loosens.
+    currency: (row?.currency ?? DEFAULT_CURRENCY).trim(),
+    diagnosis: row?.diagnosis ?? "",
+    lastDayOfWork: row?.last_day_of_work ?? null,
+    employerName: row?.employer_name ?? "",
+    contractSigned: row?.contract_signed ?? false,
+    newPhone: row?.new_phone ?? "",
+    newEmail: row?.new_email ?? "",
+    notes: row?.notes ?? "",
+    documents,
+    hasPassword: row?.password_secret_id !== null && row?.password_secret_id !== undefined,
+    updatedAt: stamps.length > 0 ? Math.max(...stamps) : 0,
+    updatedBy: row?.updated_by ?? null,
+  };
+}
+
 export function toStatusDef(row: StatusRow): StatusDef {
   return {
     id: row.id,
@@ -413,6 +488,8 @@ export function toAppState(rows: HydrateRows): AppState {
   const reactionsByMessage = groupBy(rows.reactions, (r) => r.message_id);
   const messageAttachmentsByMessage = groupBy(rows.messageAttachments, (r) => r.message_id);
   const projectAttachmentsByProject = groupBy(rows.projectAttachments, (r) => r.project_id);
+  const clientInfoByProject = new Map(rows.clientInfo.map((r) => [r.project_id, r]));
+  const clientDocumentsByProject = groupBy(rows.clientDocuments, (r) => r.project_id);
   const taskAttachmentsByTask = groupBy(rows.taskAttachments, (r) => r.task_id);
   const collaboratorsByTask = groupBy(rows.taskCollaborators, (r) => r.task_id);
 
@@ -486,6 +563,10 @@ export function toAppState(rows: HydrateRows): AppState {
         createdBy: owner(p.created_by),
         createdAt: toEpoch(p.created_at),
         createdFromTaskSetId: p.created_from_task_set_id,
+        client: toClientInfo(
+          clientInfoByProject.get(p.id),
+          clientDocumentsByProject.get(p.id) ?? []
+        ),
       })
     ),
     tasks: rows.tasks.map(

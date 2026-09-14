@@ -88,7 +88,7 @@ function project(id: string, restricted: boolean, createdBy: string): Project {
   return {
     id, name: `WW ${id}`, description: "", emoji: "🎨", color: "#7c3aed",
     priority: "medium", restricted, members: [], attachments: [],
-    createdBy, createdAt: Date.now(), createdFromTaskSetId: null,
+    createdBy, createdAt: Date.now(), createdFromTaskSetId: null, client: null,
   };
 }
 
