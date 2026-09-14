@@ -194,23 +194,33 @@ starting point, not a decision.
 
 ## Locked out
 
-**Lumina has no "forgot password" link yet.** Until it does, this is the way back
-in for anyone who cannot sign in.
+### The first thing to try: the app's own reset link
 
-### The email routes, and why they are the second choice
+**Sign-in screen → "Forgot your password?"** → type the address → a link arrives
+by email. Following it lands on "Choose a new password"; setting one signs you
+out, and you sign in with the new password. Every gate still applies afterwards
+— two-factor, a forced first password — because a reset link proves somebody
+reads that inbox and nothing more.
 
-The Supabase dashboard offers **Send password recovery** and **Send magic link**
-on a user's page. Both work, and both depend on Supabase's shared mail service,
-which the free tier caps at roughly two messages an hour. That cap is easy to
-spend without meaning to, and the reply when you do - `email rate limit
-exceeded` - arrives at exactly the moment you are locked out and least able to
-wait an hour.
+It works for an account that never replaced the password it was handed, too:
+the requirement is cleared by a database trigger watching the real password
+column, so a reset satisfies it exactly as the in-app screen does.
 
-If you use them, **fix the Site URL first**: Authentication -> URL Configuration
--> Site URL must be `https://tomit1980.github.io/lumina/`, with
-`https://tomit1980.github.io/lumina/**` in Redirect URLs. The redirect is baked
-into the email when it is sent, so a link generated while Site URL still said
-`localhost` lands on a site that is not running, and is spent either way.
+**PRECONDITION, and it is silent when wrong.** In the Supabase dashboard for
+the project → **Authentication → URL Configuration**:
+
+- **Site URL**: `https://tomit1980.github.io/lumina/`
+- **Redirect URLs**: `https://tomit1980.github.io/lumina/**`
+
+A `redirectTo` that is not on the allow-list is **ignored and replaced by the
+Site URL, with no error anywhere**. So a wrong Site URL sends every reset link
+to somewhere that is not Lumina, and the feature appears to do nothing at all.
+
+**The cap is real.** Supabase's shared mailer allows roughly two messages an
+hour on the free tier. The screen says a link is "on its way" rather than
+"sent", because nothing in a browser can know the difference — and when the cap
+is hit, it says so specifically. If nothing arrives in a few minutes, use the
+route below rather than requesting again.
 
 ### The route that needs no email
 

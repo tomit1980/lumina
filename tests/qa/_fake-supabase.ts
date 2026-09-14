@@ -57,6 +57,11 @@ export interface FakeSupabase {
   assurance: "none" | "aal1" | "aal2";
   /** Every `signInWithPassword`, refused or not. */
   signInCalls: number;
+  /** Every reset request, with the redirect the caller asked Supabase to bake
+   *  into the email. */
+  resetRequests: { email: string; redirectTo?: string }[];
+  /** Make the next reset request fail with this message. */
+  resetFailure: string | null;
   signOutCalls: number;
   enrollCalls: number;
   /** Every `profiles.update({mfa_required})` this client was asked to make. */
@@ -87,6 +92,17 @@ export function createFakeSupabase(options: {
   factors?: FakeFactor[];
   /** Start already signed in as this user id (a persisted session). */
   signedInAs?: string;
+  /**
+   * Start as though the page was opened from a password-reset link.
+   *
+   * Reproduces both halves of what the real client does: the session already
+   * exists by the time anything reads it (supabase-js consumes the fragment
+   * while initialising, and `getSession()` awaits that), AND the fragment is
+   * still on `window.location` when the provider first renders. A fake that
+   * only emitted the event would let a provider pass that keys on the event
+   * alone — which loses the race against the restore pass in the real client.
+   */
+  recovery?: { userId: string };
   /** email -> auth uid. Defaults to the profiles' own ids. */
   authUsers?: Record<string, string>;
 }): FakeSupabase {
@@ -102,9 +118,16 @@ export function createFakeSupabase(options: {
       Object.fromEntries(options.profiles.map((p) => [p.email, p.id])),
     factors: options.factors ?? [],
     validCode: "123456",
-    session: options.signedInAs ? { user: { id: options.signedInAs } } : null,
+    session:
+      options.recovery
+        ? { user: { id: options.recovery.userId } }
+        : options.signedInAs
+          ? { user: { id: options.signedInAs } }
+          : null,
     assurance: "none",
     signInCalls: 0,
+    resetRequests: [],
+    resetFailure: null,
     signOutCalls: 0,
     enrollCalls: 0,
     requirementWrites: [],
@@ -113,6 +136,13 @@ export function createFakeSupabase(options: {
     failRequirementWrites: false,
     enrollFailure: null,
   };
+
+  if (options.recovery && typeof window !== "undefined") {
+    window.location.hash =
+      "#access_token=fake-access&refresh_token=fake-refresh&expires_in=3600" +
+      "&token_type=bearer&type=recovery";
+    fake.assurance = "aal1";
+  }
 
   let nextFactor = fake.factors.length + 1;
   const emit = (event: string) => {
@@ -126,7 +156,10 @@ export function createFakeSupabase(options: {
       listeners.push(callback);
       // supabase-js delivers INITIAL_SESSION just after subscribing, which is
       // exactly the race the provider's `initialised` guard exists for.
-      setTimeout(() => callback("INITIAL_SESSION", fake.session), 0);
+      setTimeout(() => {
+      callback("INITIAL_SESSION", fake.session);
+      if (options.recovery) callback("PASSWORD_RECOVERY", fake.session);
+    }, 0);
       return {
         data: {
           subscription: {
@@ -185,6 +218,22 @@ export function createFakeSupabase(options: {
         }
       }
       return { data: { user: fake.session?.user ?? null }, error: null };
+    },
+
+    /**
+     * Requesting a reset.
+     *
+     * SUCCEEDS FOR AN ADDRESS WITH NO ACCOUNT, because that is what Supabase
+     * does — answering differently would make the form an account-enumeration
+     * oracle. A fake that distinguished would let a screen with exactly that
+     * leak pass its tests, which is the one thing this method exists to stop.
+     */
+    resetPasswordForEmail: async (email: string, opts?: { redirectTo?: string }) => {
+      if (fake.resetFailure) {
+        return { data: null, error: { message: fake.resetFailure } };
+      }
+      fake.resetRequests.push({ email, redirectTo: opts?.redirectTo });
+      return { data: {}, error: null };
     },
 
     signOut: async () => {

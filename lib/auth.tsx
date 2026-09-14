@@ -69,6 +69,15 @@ export type LoginOutcome =
    */
   | { step: "password" }
   /**
+   * Go back to the sign-in form, optionally saying why.
+   *
+   * The one outcome that is neither a gate nor a failure: "your password was
+   * updated, now use it". Without it, the only channel back to the screen was
+   * `error`, and reporting a success through a red `role="alert"` would be a
+   * lie told in the accessible layer as well as the visible one.
+   */
+  | { step: "credentials"; notice?: string }
+  /**
    * `field` says which input the refusal is about, so the screen can mark
    * that one `aria-invalid` and move focus to it. Left unset for the server's
    * generic refusal, which is deliberately about both — telling them apart
@@ -101,6 +110,23 @@ export interface AuthValue {
   submitEnrollment: (code: string) => Promise<LoginOutcome>;
   /** Replace the handed-out password, as the last step of signing in. */
   submitFirstPassword: (next: string) => Promise<LoginOutcome>;
+
+  /**
+   * Ask for a reset email.
+   *
+   * Resolves `null` when the request was ACCEPTED — which is not the same
+   * claim as "the email was sent", and the screen must not upgrade it. On the
+   * free tier the mailer is capped at roughly two messages an hour and the
+   * shared sender lands in spam; neither failure is visible from here.
+   *
+   * Supabase answers the same way for an address with no account, by design.
+   * So a non-null return is never about whether the account exists.
+   */
+  forgotPassword: (email: string) => Promise<string | null>;
+  /** True while a session that arrived from a reset link is being held back. */
+  recovering: boolean;
+  /** Set a new password on a recovery session, then sign out. */
+  submitRecoveryPassword: (next: string) => Promise<LoginOutcome>;
   cancelPendingLogin: () => void;
   /** Live enrollment draft during a forced-enrollment login. */
   loginEnrollment: EnrollmentDraft | null;
@@ -374,6 +400,13 @@ function LocalAuthProvider({ children }: React.PropsWithChildren) {
         step: "error" as const,
         message: "The demo signs everyone in with one shared password, so there is nothing to replace.",
       }),
+      forgotPassword: async () =>
+        "The demo signs everyone in with one shared password, so there is nothing to reset.",
+      recovering: false,
+      submitRecoveryPassword: async () => ({
+        step: "error" as const,
+        message: "The demo signs everyone in with one shared password, so there is nothing to reset.",
+      }),
       cancelPendingLogin: () => {
         setPendingLogin(null);
         setLoginEnrollment(null);
@@ -609,6 +642,25 @@ function SupabaseAuthProvider({
    *  the listener stays quiet rather than racing it. */
   const initialised = React.useRef(false);
 
+  /**
+   * Did this page load land on a password-reset link?
+   *
+   * Read during the FIRST RENDER, before any effect runs and therefore before
+   * `browserClient()` is even called. That ordering is the whole point:
+   * supabase-js consumes the fragment while it initialises, and `getSession()`
+   * awaits that initialisation — so by the time the restore pass or the
+   * `PASSWORD_RECOVERY` event sees a session, `window.location.hash` is
+   * already empty. Keying on the event alone loses that race.
+   *
+   * Matched on `type=recovery` as a whole parameter, not a substring: a token
+   * that happened to contain the text would otherwise put somebody into the
+   * recovery gate for no reason.
+   */
+  const arrivedByRecovery = React.useRef(
+    typeof window !== "undefined" && /[#&]type=recovery(?:&|$)/.test(window.location.hash)
+  );
+  const [recovering, setRecovering] = React.useState(false);
+
   React.useEffect(() => {
     if (injected) {
       setClient(injected);
@@ -648,9 +700,36 @@ function SupabaseAuthProvider({
       setSession(profile ? profile.id : null);
     };
 
+    /**
+     * Hold a reset-link session back instead of restoring it.
+     *
+     * Everything below this point assumes a session it can either admit or
+     * discard, and a recovery session is neither. Left to the restore pass it
+     * would be admitted outright for an ordinary account — a reset link acting
+     * as a magic link, letting somebody in without ever setting a password —
+     * and discarded for a `must_change_password` account, spending the link in
+     * silence for exactly the person most likely to be using one.
+     *
+     * Gated the same way a half-finished sign-in is: `gated` stops `publish`,
+     * `pending` carries the id that `submitRecoveryPassword` will need, and
+     * `factorId: ""` is the sentinel the first-password gate already uses for
+     * "held on something that is not a factor".
+     */
+    const holdForRecovery = (uid: string) => {
+      gated.current = true;
+      setPending({ profileId: uid, factorId: "" });
+      setRecovering(true);
+    };
+
     void (async () => {
       const { data } = await client.auth.getSession();
       const uid = data.session?.user.id ?? null;
+      if (uid && arrivedByRecovery.current) {
+        holdForRecovery(uid);
+        initialised.current = true;
+        if (!cancelled) setReady(true);
+        return;
+      }
       if (uid) {
         const profile = await fetchProfile(client, uid);
         const factorId = await verifiedFactorId(client);
@@ -674,10 +753,22 @@ function SupabaseAuthProvider({
       if (!cancelled) setReady(true);
     })();
 
-    const { data: sub } = client.auth.onAuthStateChange((_event, next) => {
+    const { data: sub } = client.auth.onAuthStateChange((event, next) => {
       // Deferred: supabase-js holds an internal lock across this callback, and
       // calling back into the client from inside it can deadlock.
       const uid = next?.user.id ?? null;
+      // The second of the two signals, and the weaker one — it arrives after
+      // the fragment has been consumed, so it cannot be the only guard. Kept
+      // because the hash is gone on any later navigation within the same page
+      // load, and because `holdForRecovery` is idempotent: whichever signal
+      // lands first, the second changes nothing.
+      if (event === "PASSWORD_RECOVERY" && uid) {
+        arrivedByRecovery.current = true;
+        setTimeout(() => {
+          if (!cancelled) holdForRecovery(uid);
+        }, 0);
+        return;
+      }
       setTimeout(() => void publish(uid), 0);
     });
 
@@ -885,6 +976,55 @@ function SupabaseAuthProvider({
       return admit(pending.profileId);
     };
 
+    const forgotPassword: AuthValue["forgotPassword"] = async (address) => {
+      if (!client) return "Still connecting — try again.";
+      const email = address.trim();
+      if (!email.includes("@")) return "Enter your work email address.";
+      const { error } = await client.auth.resetPasswordForEmail(email, {
+        // Derived rather than configured. The login screen IS the site root on
+        // both dev and production, so this is correct in each without a fourth
+        // build secret and a fourth gate in deploy.yml to prove it was set.
+        redirectTo: `${window.location.origin}${window.location.pathname}`,
+      });
+      if (!error) return null;
+      // The one failure worth its own sentence, because it is the one that has
+      // actually happened here: the free tier's mailer caps at about two an
+      // hour, and it ran out on the day the Owner was locked out.
+      if (/rate limit/i.test(error.message)) {
+        return "Too many reset emails have been sent recently. Try again in an hour, or ask an admin to reset it for you.";
+      }
+      return error.message;
+    };
+
+    /**
+     * Set a new password from a reset link, then sign out.
+     *
+     * SIGNING OUT IS THE POINT, not tidiness. A recovery session is aal1 and
+     * proves only that somebody reads that inbox — it is not a second factor
+     * and it is not a password. Admitting it here would walk straight past
+     * two-factor for an enrolled account. Signing out sends them through
+     * `login()`, where every gate runs in order.
+     *
+     * It also settles the `must_change_password` case without a special path:
+     * `updateUser` moves `auth.users.encrypted_password`, the trigger from
+     * 20260911000100 clears the flag, and the next sign-in is ordinary.
+     */
+    const submitRecoveryPassword = async (next: string): Promise<LoginOutcome> => {
+      if (!client) return { step: "error", message: "Still connecting — try again." };
+      if (next.length < 8) {
+        return { step: "error", message: "Use a password of at least 8 characters." };
+      }
+      const { error } = await client.auth.updateUser({ password: next });
+      if (error) return { step: "error", message: error.message };
+      await signOutQuietly(client);
+      arrivedByRecovery.current = false;
+      gated.current = false;
+      setPending(null);
+      setRecovering(false);
+      setSession(null);
+      return { step: "credentials", notice: "Password updated. Sign in with it." };
+    };
+
     const cancelPendingLogin = () => {
       const abandoned = loginEnrollment?.factorId;
       const c = client;
@@ -950,6 +1090,9 @@ function SupabaseAuthProvider({
       submitLoginTotp: finishGatedLogin,
       submitEnrollment: finishGatedLogin,
       submitFirstPassword,
+      forgotPassword,
+      recovering,
+      submitRecoveryPassword,
       cancelPendingLogin,
       loginEnrollment,
       logout,
@@ -1016,7 +1159,16 @@ function SupabaseAuthProvider({
         return ok;
       },
     };
-  }, [client, ready, session, pending, loginEnrollment, mfaRequired, selfEnrolled]);
+  }, [
+    client,
+    ready,
+    session,
+    pending,
+    loginEnrollment,
+    mfaRequired,
+    selfEnrolled,
+    recovering,
+  ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -7,6 +7,7 @@ import {
   KeyRound,
   Loader2,
   Lock,
+  Mail,
   ShieldCheck,
   Smartphone,
   Sparkles,
@@ -21,7 +22,7 @@ import { DEMO_PASSWORD, useAuth, type LoginOutcome } from "@/lib/auth";
 import { backendKind } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
-type Step = "credentials" | "totp" | "enroll" | "password";
+type Step = "credentials" | "totp" | "enroll" | "password" | "forgot" | "recover";
 
 // Owner first: it is the top role, and the demo is the only place it can be
 // signed into without a runbook. `findUserId` already matched it by handle —
@@ -45,6 +46,9 @@ export function LoginScreen() {
     submitLoginTotp,
     submitEnrollment,
     submitFirstPassword,
+    forgotPassword,
+    recovering,
+    submitRecoveryPassword,
     cancelPendingLogin,
     loginEnrollment,
   } = useAuth();
@@ -58,10 +62,22 @@ export function LoginScreen() {
   const [nextPassword, setNextPassword] = React.useState("");
   const [nextAgain, setNextAgain] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  /** A non-failure message, e.g. after a password was updated. Kept apart from
+   *  `error` because the two are announced differently and styled oppositely. */
+  const [notice, setNotice] = React.useState<string | null>(null);
+  /** The reset request was accepted. Deliberately not "the email was sent" —
+   *  nothing in the browser can know that. */
+  const [resetRequested, setResetRequested] = React.useState(false);
   /** Which field the current error is about, or null for a refusal about
    *  both. Drives `aria-invalid` and where focus lands. */
   const [errorField, setErrorField] = React.useState<"email" | "password" | null>(null);
   const [busy, setBusy] = React.useState(false);
+
+  // A reset link puts the provider into `recovering` before this screen ever
+  // renders, so the step is derived rather than set by an effect — there is no
+  // frame in which the credentials form is shown to somebody who arrived by
+  // link, and no effect ordering to get wrong.
+  const effectiveStep: Step = recovering && step === "credentials" ? "recover" : step;
 
   const emailRef = React.useRef<HTMLInputElement>(null);
   const passwordRef = React.useRef<HTMLInputElement>(null);
@@ -74,7 +90,7 @@ export function LoginScreen() {
       // appear; a keyboard or screen-reader user was left on the button, or —
       // after an async refusal — on the page body, with no signal at all.
       // `role="alert"` announces the text; this is what makes it actionable.
-      if (step === "credentials") {
+      if (effectiveStep === "credentials") {
         const target = outcome.field === "password" ? passwordRef : emailRef;
         target.current?.focus();
       }
@@ -83,6 +99,17 @@ export function LoginScreen() {
     setErrorField(null);
     setError(null);
     setCode("");
+    if (outcome.step === "credentials") {
+      // Back to the form, carrying a notice rather than a refusal. Clearing
+      // the password matters: the one just replaced is stale.
+      setNotice(outcome.notice ?? null);
+      setPassword("");
+      setNextPassword("");
+      setNextAgain("");
+      setStep("credentials");
+      return;
+    }
+    setNotice(null);
     if (outcome.step === "totp") setStep("totp");
     else if (outcome.step === "enroll") setStep("enroll");
     else if (outcome.step === "password") {
@@ -127,6 +154,48 @@ export function LoginScreen() {
     setBusy(false);
   };
 
+  const requestReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const failure = await forgotPassword(identifier);
+    if (failure) {
+      setError(failure);
+      setErrorField("email");
+    } else {
+      // Shown for any accepted request, including an address with no account.
+      // Supabase answers identically for both and so must this screen: a
+      // different message would turn the form into an account-enumeration
+      // oracle for anybody who can load the page.
+      setResetRequested(true);
+    }
+    setBusy(false);
+  };
+
+  const setNewPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    if (nextPassword !== nextAgain) {
+      setError("The two passwords don't match.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    apply(await submitRecoveryPassword(nextPassword));
+    setBusy(false);
+  };
+
+  const backToSignIn = () => {
+    cancelPendingLogin();
+    setStep("credentials");
+    setResetRequested(false);
+    setError(null);
+    setErrorField(null);
+    setNextPassword("");
+    setNextAgain("");
+  };
+
   const back = () => {
     cancelPendingLogin();
     setStep("credentials");
@@ -159,22 +228,27 @@ export function LoginScreen() {
             <Sparkles className="size-6" />
           </div>
           <h1 className="text-xl font-semibold tracking-tight">
-            {step === "credentials" && "Welcome to Lumina"}
-            {step === "totp" && "Two-factor verification"}
-            {step === "enroll" && "Secure your account"}
-            {step === "password" && "Choose your own password"}
+            {effectiveStep === "credentials" && "Welcome to Lumina"}
+            {effectiveStep === "totp" && "Two-factor verification"}
+            {effectiveStep === "enroll" && "Secure your account"}
+            {effectiveStep === "password" && "Choose your own password"}
+            {effectiveStep === "forgot" && "Reset your password"}
+            {effectiveStep === "recover" && "Choose a new password"}
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            {step === "credentials" && "Sign in to Northlight Studio"}
-            {step === "totp" && "Enter the code from your authenticator app"}
-            {step === "enroll" && "Two-factor is required for your role"}
-            {step === "password" &&
+            {effectiveStep === "credentials" && "Sign in to Northlight Studio"}
+            {effectiveStep === "totp" && "Enter the code from your authenticator app"}
+            {effectiveStep === "enroll" && "Two-factor is required for your role"}
+            {effectiveStep === "password" &&
               "The one you were given was shared with you — replace it to continue"}
+            {effectiveStep === "forgot" &&
+              "We'll email you a link to set a new one"}
+            {effectiveStep === "recover" && "You got here from a reset link"}
           </p>
         </div>
 
         <div className="rounded-2xl border bg-card p-6 shadow-sm">
-          {step === "credentials" && (
+          {effectiveStep === "credentials" && (
             <form onSubmit={submitCredentials} className="flex flex-col gap-4">
               <div className="grid gap-1.5">
                 <Label htmlFor="login-id">
@@ -213,6 +287,7 @@ export function LoginScreen() {
                 </div>
               </div>
 
+              {notice && <FormNotice message={notice} />}
               {error && <FormError message={error} />}
 
               <Button type="submit" className="mt-1 w-full" disabled={busy}>
@@ -223,12 +298,135 @@ export function LoginScreen() {
                 )}
                 Sign in
               </Button>
+
+              {/* Not offered on the demo: one shared password is printed on
+                  this very screen, so there is nothing to reset and the link
+                  would lead to a refusal. */}
+              {!isDemo && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep("forgot");
+                    setError(null);
+                    setErrorField(null);
+                    setNotice(null);
+                  }}
+                  className="text-center text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Forgot your password?
+                </button>
+              )}
             </form>
           )}
 
-          {(step === "totp" || step === "enroll") && (
+          {effectiveStep === "forgot" && (
             <div className="flex flex-col gap-4">
-              {step === "enroll" && loginEnrollment && (
+              {resetRequested ? (
+                <>
+                  {/* The same sentence whether or not the address has an
+                      account, and it promises a REQUEST rather than a
+                      delivery. On the free tier the mailer caps at about two
+                      an hour and the shared sender lands in spam — neither is
+                      visible from here, so neither is claimed. */}
+                  <p role="status" className="rounded-lg bg-muted/50 px-3 py-2.5 text-[13px]">
+                    If that address has an account, a reset link is on its way. It&apos;s
+                    valid for an hour. If nothing arrives in a few minutes, check your spam
+                    folder — or ask an admin to reset it for you.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={backToSignIn}
+                    className="flex items-center justify-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <ArrowLeft className="size-3.5" />
+                    Back to sign in
+                  </button>
+                </>
+              ) : (
+                <form onSubmit={requestReset} className="flex flex-col gap-4">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="forgot-email">Work email</Label>
+                    <Input
+                      id="forgot-email"
+                      // Deliberately NOT `type="email"`, matching the sign-in
+                      // field above. That type turns on native constraint
+                      // validation, which blocks submit and shows the
+                      // browser's own bubble — unstyled, inconsistent between
+                      // browsers, and not reliably announced. Our refusal is
+                      // `role="alert"` and wired to `aria-describedby`, which
+                      // is the whole point of LUM-QA-001. `inputMode` still
+                      // gives the right mobile keyboard.
+                      inputMode="email"
+                      autoFocus
+                      autoComplete="email"
+                      placeholder="you@company.com"
+                      value={identifier}
+                      onChange={(e) => setIdentifier(e.target.value)}
+                      aria-invalid={!!error}
+                      aria-describedby={error ? ERROR_ID : undefined}
+                    />
+                  </div>
+
+                  {error && <FormError message={error} />}
+
+                  <Button type="submit" className="w-full" disabled={busy}>
+                    {busy ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Mail className="size-4" />
+                    )}
+                    Email me a reset link
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={backToSignIn}
+                    className="flex items-center justify-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <ArrowLeft className="size-3.5" />
+                    Back to sign in
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {effectiveStep === "recover" && (
+            <form onSubmit={setNewPassword} className="flex flex-col gap-4">
+              <NewPasswordFields
+                idPrefix="recover"
+                next={nextPassword}
+                again={nextAgain}
+                onNext={setNextPassword}
+                onAgain={setNextAgain}
+              />
+
+              {error && <FormError message={error} />}
+
+              <Button type="submit" className="w-full" disabled={busy}>
+                {busy ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <KeyRound className="size-4" />
+                )}
+                Set password
+              </Button>
+              {/* Leaving spends the link, which is survivable — another can be
+                  requested — and is better than trapping somebody on a screen
+                  they reached by accident. */}
+              <button
+                type="button"
+                onClick={backToSignIn}
+                className="flex items-center justify-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ArrowLeft className="size-3.5" />
+                Back to sign in
+              </button>
+            </form>
+          )}
+
+          {(effectiveStep === "totp" || effectiveStep === "enroll") && (
+            <div className="flex flex-col gap-4">
+              {effectiveStep === "enroll" && loginEnrollment && (
                 <div className="flex flex-col items-center gap-3">
                   <ol className="w-full space-y-1.5 text-[13px] text-muted-foreground">
                     <li className="flex gap-2">
@@ -244,7 +442,7 @@ export function LoginScreen() {
                 </div>
               )}
 
-              {step === "totp" && (
+              {effectiveStep === "totp" && (
                 <div className="flex items-center justify-center gap-2 rounded-xl bg-muted/40 py-3 text-[13px] text-muted-foreground">
                   <ShieldCheck className="size-4 text-emerald-500" />
                   Protected by two-factor authentication
@@ -253,7 +451,7 @@ export function LoginScreen() {
 
               <div className="grid gap-1.5">
                 <Label htmlFor="otp">
-                  {step === "enroll" ? "Enter the 6-digit code to confirm" : "6-digit code"}
+                  {effectiveStep === "enroll" ? "Enter the 6-digit code to confirm" : "6-digit code"}
                 </Label>
                 <OtpInput
                   value={code}
@@ -277,7 +475,7 @@ export function LoginScreen() {
                 ) : (
                   <ShieldCheck className="size-4" />
                 )}
-                {step === "enroll" ? "Verify & enable" : "Verify"}
+                {effectiveStep === "enroll" ? "Verify & enable" : "Verify"}
               </Button>
               <button
                 type="button"
@@ -293,34 +491,15 @@ export function LoginScreen() {
           {/* The last gate. Two-factor runs first, so by now they are as
               authenticated as the workspace asks — what is left is that the
               password they hold was chosen by somebody else. */}
-          {step === "password" && (
+          {effectiveStep === "password" && (
             <form onSubmit={choosePassword} className="flex flex-col gap-4">
-              <div className="grid gap-1.5">
-                <Label htmlFor="first-pw">New password</Label>
-                <div className="relative">
-                  <Lock className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="first-pw"
-                    type="password"
-                    autoFocus
-                    autoComplete="new-password"
-                    placeholder="At least 8 characters"
-                    className="pl-8"
-                    value={nextPassword}
-                    onChange={(e) => setNextPassword(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="first-pw-again">Type it again</Label>
-                <Input
-                  id="first-pw-again"
-                  type="password"
-                  autoComplete="new-password"
-                  value={nextAgain}
-                  onChange={(e) => setNextAgain(e.target.value)}
-                />
-              </div>
+              <NewPasswordFields
+                idPrefix="first"
+                next={nextPassword}
+                again={nextAgain}
+                onNext={setNextPassword}
+                onAgain={setNextAgain}
+              />
 
               {error && <FormError message={error} />}
 
@@ -341,7 +520,7 @@ export function LoginScreen() {
           )}
         </div>
 
-        {isDemo && step === "credentials" && (
+        {isDemo && effectiveStep === "credentials" && (
           <div className="mt-4 rounded-xl border border-dashed bg-muted/30 p-3">
             <p className="mb-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
               Demo accounts · password{" "}
@@ -387,6 +566,80 @@ export function LoginScreen() {
  * the screen, so interrupting is the correct behaviour rather than rudeness.
  */
 const ERROR_ID = "login-error";
+
+/**
+ * The two "choose a password" steps, which are the same form.
+ *
+ * Shared so they cannot drift: one is the gate for a handed-out first
+ * password, the other the end of a reset link, and a rule that held on one
+ * but not the other would be found by whichever person hit the wrong one.
+ */
+function NewPasswordFields({
+  idPrefix,
+  next,
+  again,
+  onNext,
+  onAgain,
+}: {
+  idPrefix: string;
+  next: string;
+  again: string;
+  onNext: (value: string) => void;
+  onAgain: (value: string) => void;
+}) {
+  return (
+    <>
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${idPrefix}-pw`}>New password</Label>
+        <div className="relative">
+          <Lock className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id={`${idPrefix}-pw`}
+            type="password"
+            autoFocus
+            autoComplete="new-password"
+            placeholder="At least 8 characters"
+            className="pl-8"
+            value={next}
+            onChange={(e) => onNext(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${idPrefix}-pw-again`}>Type it again</Label>
+        <Input
+          id={`${idPrefix}-pw-again`}
+          type="password"
+          autoComplete="new-password"
+          value={again}
+          onChange={(e) => onAgain(e.target.value)}
+        />
+      </div>
+    </>
+  );
+}
+
+/**
+ * A message that is not a refusal.
+ *
+ * `role="status"` is implicitly `aria-live="polite"`, which is the difference
+ * that matters: "your password was updated" should be read when the reader
+ * reaches a pause, not interrupt whatever it is saying. `FormError` is
+ * `role="alert"` and red, and routing a success through it would be wrong in
+ * the accessible layer as well as the visible one.
+ */
+function FormNotice({ message }: { message: string }) {
+  return (
+    <motion.p
+      role="status"
+      initial={{ opacity: 0, y: -4 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="rounded-lg bg-emerald-500/10 px-3 py-2 text-[13px] text-emerald-700 dark:text-emerald-400"
+    >
+      {message}
+    </motion.p>
+  );
+}
 
 function FormError({ message }: { message: string }) {
   return (
