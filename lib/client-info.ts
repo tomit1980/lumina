@@ -166,6 +166,49 @@ export function formatIsoDate(iso: string | null): string {
   return `${Number(day)} ${name} ${year}`;
 }
 
+/**
+ * A stored date as the date boxes show it: "1968-03-05" → "05/03/1968".
+ *
+ * Zero-padded and day-first, always, because the format is now ours rather than
+ * the viewer's. `<input type="date">` rendered in the reader's operating-system
+ * locale and could not be told otherwise, so the same record read day-first in
+ * Melbourne and month-first on a US-configured laptop with nothing on screen to
+ * say which.
+ *
+ * Splits the string. No `Date` is constructed — see `formatIsoDate` above.
+ */
+export function formatDayFirst(iso: string | null): string {
+  if (!iso) return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!match) return iso;
+  const [, year, month, day] = match;
+  return `${day}/${month}/${year}`;
+}
+
+/**
+ * A typed date, read day-first: "02/03/1968" → "1968-03-02", the **2nd of
+ * March**. Returns null for anything that is not a real calendar date.
+ *
+ * DAY FIRST IS A DECISION, NOT A GUESS, and it is the point of the function.
+ * That exact string is why the native picker was used before it: typed into a
+ * month-first field it silently becomes 3 February, a birthday wrong by a month
+ * that nothing downstream could detect. Fixing the order to day-first makes the
+ * answer knowable instead of environmental.
+ *
+ * A TWO-DIGIT YEAR IS REFUSED rather than completed. "15/03/68" could be 1968 or
+ * 2068, and for a date of birth on a super claim a century is not a detail worth
+ * inferring.
+ */
+export function parseDayFirst(text: string): string | null {
+  const match = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(text.trim());
+  if (!match) return null;
+  const [, day, month, year] = match;
+  const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  // Calendar validity is `isIsoDate`'s job and it already does it properly,
+  // including leap years. Restating the rule here is how the two drift apart.
+  return isIsoDate(iso) ? iso : null;
+}
+
 /** Whether a string is a date the `date` column will take. `<input type="date">`
  *  produces exactly this or "", but the store must not assume its only caller
  *  is that input. */

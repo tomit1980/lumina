@@ -51,12 +51,27 @@ what was submitted and what is current.
 
 ### Dates
 
-Use the date picker. Typing `02/03/1968` into a date field somewhere else in the
-system would be read **month first** — 3 February, not 2 March — and stored
-silently wrong. The app refuses anything that is not a real calendar date in
-year-month-day order, which is what the picker produces. See the test named
-"ACCEPTS '02/03/1968' AND READS IT MONTH-FIRST" in
-`tests/rls/client-password.test.ts`'s sibling file for the demonstration.
+Type them **DD/MM/YYYY**: `02/03/1968` is the 2nd of March. Day first, always,
+for everyone, whatever machine they are on. Slashes, dashes and dots all work,
+and a leading zero is optional, so `2/3/1968` is the same date.
+
+**A two-digit year is refused**, not completed. `15/03/68` could be 1968 or 2068,
+and on a claim built around a date of birth a century is not worth guessing at.
+So is any date the calendar does not have: `31/02/1968` gets a message rather
+than a silent correction to the 2nd of March.
+
+Leave it empty for "not known". That is a real answer and always allowed.
+
+**Why this is typed rather than picked.** It used to be a native date picker,
+which sounds safer and was not: that control renders in the **viewer's**
+operating-system locale and cannot be told otherwise. The same date of birth
+read day-first here and month-first on a US-configured laptop, with nothing on
+screen to say which you were looking at. Owning the format is what makes
+`02/03/1968` mean one thing. The case that proves it is "READS 02/03/1968 AS 2
+MARCH, never 3 February" in `tests/qa/client-info-dates.test.ts`.
+
+Dates are still **stored** as `YYYY-MM-DD` in a real `date` column. Only the
+typing and the display changed; nothing in the database moved.
 
 ### Amount
 

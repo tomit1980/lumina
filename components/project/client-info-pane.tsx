@@ -36,9 +36,11 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CLIENT_DOCUMENT_TYPES,
   DEFAULT_CURRENCY,
+  formatDayFirst,
   formatIsoDate,
   formatMoney,
   moneyInputValue,
+  parseDayFirst,
   parseMoney,
   receivedCount,
 } from "@/lib/client-info";
@@ -218,6 +220,26 @@ export function ClientInfoPane({
   );
 
   /**
+   * A refusal describes the value that was sent. The moment the box holds
+   * something else it is a statement about nothing, so typing retires it.
+   *
+   * FOUND IN THE LIVE APP, and it cost an investigation: a half-typed address
+   * was blurred and refused, the label stuck, the finished address was typed
+   * into the same box, and "Couldn't save" was still sitting beside it. It read
+   * as the database rejecting a perfectly good address. Nothing had been sent.
+   *
+   * Only `failed` is cleared. "Saved" is a claim about something that really
+   * did happen and it fades on its own; clearing it here would take away the
+   * confirmation the moment somebody corrected a typo.
+   */
+  const clearRefusal = React.useCallback(
+    (field: string) => {
+      setSaves((s) => (s[field] === "failed" ? { ...s, [field]: "idle" } : s));
+    },
+    []
+  );
+
+  /**
    * Puts `previous` back into an input whose write was refused - but ONLY if
    * the box still holds exactly what was sent.
    *
@@ -273,6 +295,7 @@ export function ClientInfoPane({
             defaultValue={current}
             placeholder={opts.placeholder}
             className="h-8 text-[13px]"
+            onInput={() => clearRefusal(field)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.currentTarget.blur();
@@ -294,34 +317,36 @@ export function ClientInfoPane({
     );
   };
 
-  /** A date-only field. The value is a "YYYY-MM-DD" string in both directions
-   *  and no `Date` is ever built from it — see lib/client-info.ts. */
-  const date = (field: "dateOfBirth" | "lastDayOfWork", label: string) => {
-    const current = client[field];
-    return (
-      <Field key={field} label={label} htmlFor={id(field)} state={state(field)}>
-        {canEdit ? (
-          <Input
-            id={id(field)}
-            key={`${field}-${fieldKey}`}
-            type="date"
-            defaultValue={current ?? ""}
-            className="h-8 text-[13px]"
-            // Committed on change rather than blur: a date picker is closed by
-            // clicking a day, and a person who then navigates away without
-            // tabbing out would otherwise lose it.
-            onChange={(e) => {
-              const value = e.target.value === "" ? null : e.target.value;
-              if (value === current) return;
-              save(field, value);
-            }}
-          />
-        ) : (
-          <ReadOnly value={formatIsoDate(current)} />
-        )}
-      </Field>
-    );
-  };
+  /**
+   * A date, typed as DD/MM/YYYY.
+   *
+   * NOT `<input type="date">`, which this used to be. That control renders in
+   * the VIEWER'S operating-system locale and cannot be told otherwise, so the
+   * same date of birth read day-first in Melbourne and month-first on a
+   * US-configured laptop, with nothing on screen to say which you were looking
+   * at. For identifying information on a super claim that is not cosmetic.
+   *
+   * Stored and sent as "YYYY-MM-DD" exactly as before; only the typing and the
+   * display changed. No `Date` is built from a string — see lib/client-info.ts.
+   *
+   * Shaped like `AmountField`: parses on blur, shows its own message, and does
+   * NOT revert what was typed, because the text is wrong but it is what the
+   * person meant and retyping from memory is worse than fixing it in place.
+   */
+  const date = (field: "dateOfBirth" | "lastDayOfWork", label: string) => (
+    <DateField
+      key={field}
+      id={id(field)}
+      label={label}
+      fieldKey={fieldKey}
+      value={client[field]}
+      canEdit={canEdit}
+      state={state(field)}
+      onCommit={(value) => save(field, value)}
+      onRefuse={() => mark(field, "failed")}
+      onEdit={() => clearRefusal(field)}
+    />
+  );
 
   const documents = client.documents;
   const received = receivedCount(documents);
@@ -352,6 +377,7 @@ export function ClientInfoPane({
               state={state("amount")}
               onCommit={(value, revert) => save("amount", value, revert)}
               onRefuse={() => mark("amount", "failed")}
+              onEdit={() => clearRefusal("amount")}
             />
             {text("diagnosis", "Diagnosis")}
             {date("lastDayOfWork", "Last day of work")}
@@ -482,6 +508,103 @@ function ReadOnly({ value }: { value: string }) {
 }
 
 /**
+ * A date typed as DD/MM/YYYY, stored as "YYYY-MM-DD".
+ *
+ * Its own component for the same reason as `AmountField`: the string somebody
+ * types and the string the record holds are different, so it needs a piece of
+ * state of its own for the message between them.
+ */
+function DateField({
+  id,
+  label,
+  fieldKey,
+  value,
+  canEdit,
+  state,
+  onCommit,
+  onRefuse,
+  onEdit,
+}: {
+  id: string;
+  label: string;
+  fieldKey: number;
+  value: string | null;
+  canEdit: boolean;
+  state: SaveState;
+  onCommit: (value: string | null) => void;
+  onRefuse: () => void;
+  onEdit: () => void;
+}) {
+  const [error, setError] = React.useState<string | null>(null);
+  const current = formatDayFirst(value);
+
+  const commit = (el: HTMLInputElement) => {
+    const typed = el.value.trim();
+    if (typed === current) return;
+
+    // Empty is "not known", which is a real answer and always allowed.
+    if (typed === "") {
+      setError(null);
+      if (value !== null) onCommit(null);
+      return;
+    }
+
+    const iso = parseDayFirst(typed);
+    if (!iso) {
+      // Deliberately not reverted, and deliberately specific: "not a date" is
+      // useless next to 31/02/1968, where the shape is right and the day is
+      // not.
+      setError("Use DD/MM/YYYY, and a date the calendar has.");
+      onRefuse();
+      return;
+    }
+    setError(null);
+    onCommit(iso);
+  };
+
+  return (
+    <Field label={label} htmlFor={id} state={state}>
+      {canEdit ? (
+        <>
+          <Input
+            id={id}
+            key={`${id}-${fieldKey}`}
+            inputMode="numeric"
+            autoComplete="off"
+            defaultValue={current}
+            placeholder="DD/MM/YYYY"
+            aria-invalid={error !== null}
+            aria-describedby={error ? `${id}-error` : undefined}
+            className="h-8 text-[13px]"
+            onInput={() => {
+              setError(null);
+              onEdit();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                e.currentTarget.value = current;
+                setError(null);
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={(e) => commit(e.currentTarget)}
+          />
+          {error && (
+            <p id={`${id}-error`} role="alert" className="text-[11px] text-destructive">
+              {error}
+            </p>
+          )}
+        </>
+      ) : (
+        <ReadOnly value={formatIsoDate(value)} />
+      )}
+    </Field>
+  );
+}
+
+/**
  * The amount, in its own component because it is the one field whose input and
  * its resting display are different strings.
  *
@@ -498,6 +621,7 @@ function AmountField({
   state,
   onCommit,
   onRefuse,
+  onEdit,
 }: {
   id: string;
   fieldKey: number;
@@ -507,6 +631,8 @@ function AmountField({
   state: SaveState;
   onCommit: (value: number | null, revert: () => void) => void;
   onRefuse: () => void;
+  /** Retire a previous refusal: the person is editing the value it was about. */
+  onEdit: () => void;
 }) {
   const [error, setError] = React.useState<string | null>(null);
   const current = moneyInputValue(amount);
@@ -528,6 +654,12 @@ function AmountField({
               aria-invalid={error !== null}
               aria-describedby={error ? `${id}-error` : undefined}
               className="h-8 pl-6 text-[13px]"
+              onInput={() => {
+                // Both, and for the same reason: each describes the text that
+                // was rejected, and the box no longer holds it.
+                setError(null);
+                onEdit();
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.currentTarget.blur();

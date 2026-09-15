@@ -58,6 +58,32 @@ async function selectTab(name: string) {
   });
 }
 
+/** The date of birth on whichever project holds a client record, read straight
+ *  out of the persisted workspace — so a test asserts what was STORED rather
+ *  than what the box happens to be displaying. */
+function storedDateOfBirth(): string | null {
+  const stored = JSON.parse(localStorage.getItem("lumina:v1") ?? "{}") as {
+    projects?: { client?: { dateOfBirth?: string | null } | null }[];
+  };
+  for (const project of stored.projects ?? []) {
+    const dob = project.client?.dateOfBirth;
+    if (dob) return dob;
+  }
+  return null;
+}
+
+/** Same, for the last day of work. */
+function storedLastDayOfWork(): string | null {
+  const stored = JSON.parse(localStorage.getItem("lumina:v1") ?? "{}") as {
+    projects?: { client?: { lastDayOfWork?: string | null } | null }[];
+  };
+  for (const project of stored.projects ?? []) {
+    const value = project.client?.lastDayOfWork;
+    if (value) return value;
+  }
+  return null;
+}
+
 async function renderProject(state: AppState) {
   localStorage.setItem("lumina:v1", JSON.stringify(state));
   return renderHydrated(
@@ -239,6 +265,84 @@ describe("a refused save does not leave the rejected text in the box", () => {
 
     expect(screen.getByText("Couldn't save")).toBeInTheDocument();
     expect(email.value).toBe("dana@example.com");
+  });
+
+  it("takes dates as DD/MM/YYYY, day-first, and refuses ones the calendar lacks", async () => {
+    // TWO FIELDS, ONE RENDER. Each full-page render here costs seconds, and
+    // this repo has already had a build fail because a suite of small render
+    // tests starved the reporter. The combinations live in
+    // ./client-info-dates.test.ts and run in milliseconds; this proves the box
+    // is wired to them.
+    //
+    // `02/03/1968` is the string the whole change is about: the 2nd of March,
+    // never the 3rd of February, on anybody's machine.
+    await openClientInfo();
+    const dob = screen.getByLabelText("Date of birth") as HTMLInputElement;
+    const lastDay = screen.getByLabelText("Last day of work") as HTMLInputElement;
+
+    await act(async () => {
+      fireEvent.change(dob, { target: { value: "02/03/1968" } });
+      fireEvent.blur(dob);
+    });
+    expect(storedDateOfBirth()).toBe("1968-03-02");
+
+    await act(async () => {
+      fireEvent.change(lastDay, { target: { value: "31/02/1968" } });
+      fireEvent.blur(lastDay);
+    });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    // Not merely "not the 31st of February" — nothing was written at all.
+    expect(storedLastDayOfWork()).toBeNull();
+    // And the text is left alone, so the correction is an edit rather than a
+    // retype from memory.
+    expect(lastDay.value).toBe("31/02/1968");
+  });
+
+  it("retires a refusal when the person edits the value it was about", async () => {
+    // FOUND IN THE LIVE APP. A half-typed address was blurred, refused, and the
+    // label stuck; the finished address was then typed into the same box and
+    // "Couldn't save" was still sitting beside it. It read exactly like the
+    // database rejecting a good address, and nothing had been sent.
+    //
+    // Same defect class as the box that kept the rejected text, one level up: a
+    // field asserting something it does not know.
+    await openClientInfo();
+    const email = screen.getByLabelText("New email") as HTMLInputElement;
+    const notes = screen.getByLabelText("Notes") as HTMLTextAreaElement;
+    const amount = screen.getByLabelText("Amount") as HTMLInputElement;
+
+    await act(async () => {
+      fireEvent.change(email, { target: { value: "Rodneywayne@proton" } });
+      fireEvent.blur(email);
+    });
+
+    // CONTROL: the refusal really happened and really is on screen. Without it
+    // the disappearance below would pass against a pane that never showed it.
+    expect(screen.getByText("Couldn't save")).toBeInTheDocument();
+
+    // Typing in a DIFFERENT field must not clear it — each field owns its own
+    // message, and a blanket reset would hide a refusal nobody had read yet.
+    await act(async () => {
+      fireEvent.input(notes, { target: { value: "Called, left a message." } });
+    });
+    expect(screen.getByText("Couldn't save")).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.input(email, { target: { value: "Rodneywayne@proton.me" } });
+    });
+    expect(screen.queryByText("Couldn't save")).not.toBeInTheDocument();
+
+    // The amount keeps its own inline message beside the save state, and it
+    // retires on the same rule.
+    await act(async () => {
+      fireEvent.change(amount, { target: { value: "about a hundred grand" } });
+      fireEvent.blur(amount);
+    });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.input(amount, { target: { value: "100000" } });
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("clears the box back to empty when the very first value is refused", async () => {
