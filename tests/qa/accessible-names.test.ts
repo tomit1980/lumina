@@ -51,6 +51,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import HomePage from "@/app/page";
 import { AppShell } from "@/components/app-shell";
 import { MessageItem } from "@/components/chat/message-item";
+import { Composer } from "@/components/chat/conversation";
+import { Board } from "@/components/kanban/board";
+import { WorkspacePeople } from "@/components/settings/workspace-people";
 import { STORAGE_KEY, asUser, baseState, renderHydrated } from "./_support";
 
 afterEach(() => {
@@ -158,5 +161,155 @@ describe("components/chat/message-item.tsx — hover toolbar (QA-010)", () => {
     expect(names).toEqual(
       expect.arrayContaining(["Add reaction", "Edit message", "Delete message"])
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The three surfaces this file never rendered.
+//
+// FOUND BY A QA SWEEP OF THE RUNNING APP, not by this suite — which is the
+// point. Twelve icon-only buttons across the composer, the board and the
+// members list had no accessible name at all, and every one of them sat on a
+// screen no test here mounted. The file's own header lists the three surfaces
+// it covers; these are the three it did not.
+//
+// Two different causes, both represented below:
+//   - a bare icon button with neither label nor tooltip (the board)
+//   - a button whose only name was a Radix <TooltipContent>, which DESCRIBES
+//     its trigger while open and never NAMES it (the composer, the members
+//     list). The Attach button one element away from Send had the aria-label
+//     the Send button was missing.
+// ---------------------------------------------------------------------------
+
+describe("components/chat/conversation.tsx — the composer (QA sweep)", () => {
+  it("names the Send button, which a tooltip does not do", async () => {
+    const state = baseState();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    await renderHydrated(
+      React.createElement(
+        StoreProvider,
+        null,
+        React.createElement(
+          TooltipProvider,
+          null,
+          React.createElement(UIProvider, null,
+            React.createElement(Composer, {
+              conversationId: "c_general",
+              placeholder: "Message #general",
+            })
+          )
+        )
+      )
+    );
+
+    const buttons = iconOnlyButtons();
+    // Attach files and Send.
+    expect(buttons.length).toBeGreaterThanOrEqual(2);
+    for (const b of buttons) {
+      expect(b).toHaveAccessibleName();
+    }
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(
+      expect.arrayContaining(["Attach files", "Send message"])
+    );
+  });
+
+  it("labels the message box rather than leaving it to a placeholder", async () => {
+    // The repo's own rule, applied everywhere else: a placeholder is a hint,
+    // not a label. It disappears the moment somebody types.
+    const state = baseState();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    await renderHydrated(
+      React.createElement(
+        StoreProvider,
+        null,
+        React.createElement(
+          TooltipProvider,
+          null,
+          React.createElement(UIProvider, null,
+            React.createElement(Composer, {
+              conversationId: "c_general",
+              placeholder: "Message #general",
+            })
+          )
+        )
+      )
+    );
+
+    expect(screen.getByRole("textbox")).toHaveAccessibleName();
+  });
+});
+
+describe("components/kanban/board.tsx — per-column add buttons (QA sweep)", () => {
+  it("each add-task button says WHICH column it adds to", async () => {
+    // Five identical bare buttons, one per column. Naming them all "Add task"
+    // would satisfy toHaveAccessibleName and still leave a screen-reader user
+    // unable to tell them apart, so the column name is the assertion.
+    const state = asUser(baseState(), "u_vlad");
+    const project = state.projects[0];
+    const tasks = state.tasks.filter((t) => t.projectId === project.id);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+    await renderHydrated(
+      React.createElement(
+        StoreProvider,
+        null,
+        React.createElement(
+          TooltipProvider,
+          null,
+          React.createElement(UIProvider, null,
+            React.createElement(Board, { project, tasks })
+          )
+        )
+      )
+    );
+
+    const buttons = iconOnlyButtons();
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) {
+      expect(b).toHaveAccessibleName();
+    }
+
+    const names = buttons.map((b) => b.getAttribute("aria-label") ?? "");
+    for (const status of state.statuses) {
+      expect(names).toContain(`Add a task to ${status.name}`);
+    }
+    // Distinct among THEMSELVES, which is the whole reason the column name is
+    // in there. Scoped to these: the board also renders a per-task menu button
+    // on every card, and those legitimately share a name.
+    const addButtons = names.filter((n) => n.startsWith("Add a task to"));
+    expect(addButtons.length).toBe(state.statuses.length);
+    expect(new Set(addButtons).size).toBe(addButtons.length);
+  });
+});
+
+describe("components/settings/workspace-people.tsx — member rows (QA sweep)", () => {
+  it("names the message button on each row, and says who it messages", async () => {
+    const state = asUser(baseState(), "u_vlad");
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+    await renderHydrated(
+      React.createElement(
+        StoreProvider,
+        null,
+        React.createElement(
+          TooltipProvider,
+          null,
+          React.createElement(UIProvider, null,
+            React.createElement(WorkspacePeople, { section: "members" })
+          )
+        )
+      )
+    );
+
+    const buttons = iconOnlyButtons();
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) {
+      expect(b).toHaveAccessibleName();
+    }
+
+    const names = buttons.map((b) => b.getAttribute("aria-label") ?? "");
+    const messageButtons = names.filter((n) => n.startsWith("Message "));
+    expect(messageButtons.length).toBeGreaterThan(0);
+    expect(new Set(messageButtons).size).toBe(messageButtons.length);
   });
 });

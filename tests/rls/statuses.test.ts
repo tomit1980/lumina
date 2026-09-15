@@ -70,14 +70,17 @@ describe("who may write a status", () => {
     const admin = await signInAs(emails.admin, TEST_PASSWORD);
     const id = `s_admin_${stamp}`;
     createdStatuses.push(id);
-    const { data, error } = await admin
+    const { data } = await admin
       .from("statuses")
       .insert({ id, name: `Nope ${stamp}`, color: "#000000", position: 91, is_done: false })
       .select("id");
-    // RLS filters rather than raising, so "no error and no rows" is the
-    // refusal — asserting only on `error` would pass on a silent no-op.
+    // RLS filters rather than raising, so "no rows, and the row really is not
+    // there" is the refusal. There is deliberately NO assertion on `error`:
+    // this used to read `expect(error ?? { message: "filtered" }).toBeTruthy()`,
+    // which is true when the write was refused, true when it succeeded, and
+    // true for every other input — an assertion that cannot fail, sitting
+    // between the two that can and looking exactly like a third check.
     expect(data ?? []).toHaveLength(0);
-    expect(error ?? { message: "filtered" }).toBeTruthy();
     expect(await rowExists(id)).toBe(false);
   });
 

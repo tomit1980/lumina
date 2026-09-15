@@ -255,6 +255,9 @@ export function Composer({
             }}
             rows={1}
             placeholder={disabled ? disabledPlaceholder : placeholder}
+            // A placeholder is a hint, not a label: it disappears the moment
+            // somebody types. The same string serves as the name.
+            aria-label={disabled ? disabledPlaceholder : placeholder}
             className="max-h-40 min-h-8 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <Tooltip>
@@ -264,6 +267,10 @@ export function Composer({
                 className="size-8 rounded-lg"
                 disabled={!canSend || uploading}
                 onClick={send}
+                // The tooltip below DESCRIBES this button while it is open; it
+                // never names it. Without this the primary action of the
+                // composer announced as just "button".
+                aria-label="Send message"
               >
                 <SendHorizonal className="size-4" />
               </Button>

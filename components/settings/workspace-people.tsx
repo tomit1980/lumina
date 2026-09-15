@@ -390,6 +390,10 @@ export function WorkspacePeople({ section }: { section: "members" | "roles" }) {
                         size="icon"
                         className="size-8 text-muted-foreground hover:text-foreground"
                         onClick={() => void messageUser(user.id)}
+                        // Full name rather than the tooltip's first name: two
+                        // colleagues can share one, and these buttons are
+                        // distinguished by nothing else.
+                        aria-label={`Message ${user.name}`}
                       >
                         <MessageCircle className="size-4" />
                       </Button>

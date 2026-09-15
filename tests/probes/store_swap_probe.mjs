@@ -406,6 +406,23 @@ try {
   check("a colliding handle is made unique rather than failing the sign-up",
     twinProfile != null && twinProfile.handle !== freshProfile?.handle,
     `first=${freshProfile?.handle} second=${twinProfile?.handle}`);
+} catch (err) {
+  // THE ONE PROBE IN THIS DIRECTORY THAT LOST THIS BLOCK, and the omission was
+  // worse here than anywhere else: this file runs 45 checks, so the
+  // `checks === 0` guard below — which only fires on a throw before the FIRST
+  // check — could never catch a failure in the other 44.
+  //
+  // `process.exit` in `finally` runs while the exception is still pending and
+  // terminates before it can propagate. So a mid-run throw printed
+  // "ALL STORE-SWAP PROBES PASSED" and exited 0, with the remaining checks
+  // never executed and the error invisible.
+  //
+  // Not hypothetical. On 2026-09-15 a transient `fetch failed` hit
+  // `revocation_probe.mjs` during setup and was reported correctly *because
+  // that probe has this block*. The same failure here would have been
+  // laundered into a pass.
+  failures++;
+  console.log(`*** SETUP/RUN ERROR *** ${err && err.message ? err.message : err}`);
 } finally {
   await svc.from("projects").delete().in("id", [OPEN, SECRET]);
   await svc.from("conversations").delete().in("id", [PUB, PRIV, ...madeDms]);

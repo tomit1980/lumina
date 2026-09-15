@@ -72,6 +72,11 @@ function Column({
             size="icon"
             className="ml-auto size-6 text-muted-foreground hover:text-foreground"
             onClick={() => openTaskDialog({ projectId: project.id, status: status.id })}
+            // The column name, not just "Add task": there is one of these per
+            // column and they are otherwise identical, so a name without it
+            // passes an accessible-name check and still leaves a screen-reader
+            // user unable to tell which column they are adding to.
+            aria-label={`Add a task to ${status.name}`}
           >
             <Plus className="size-3.5" />
           </Button>

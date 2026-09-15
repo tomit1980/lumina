@@ -29,8 +29,11 @@ afterAll(async () => {
 
 describe("identity RLS", () => {
   it("denies a signed-out client any profile", async () => {
-    const { data, error } = await anonClient().from("profiles").select("id");
-    expect(error ?? data).toBeTruthy();
+    // No assertion on `error`: `expect(error ?? data).toBeTruthy()` used to sit
+    // here, and `data` is `[]` on a filtered read — which is truthy. It passed
+    // whether the read was refused, succeeded, or returned the whole table.
+    // Getting nothing back is the refusal, however the server phrases it.
+    const { data } = await anonClient().from("profiles").select("id");
     expect(data ?? []).toHaveLength(0);
   });
 

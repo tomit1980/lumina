@@ -6,12 +6,20 @@
 //
 // Two genuine defects were found while writing this (see
 // docs/superpowers/qa/layer1-findings.md, L1-004 and L1-005): updateProject
-// only re-checks project-viewer status when the patch touches
-// `attachments`, and setProjectAccess doesn't check project-viewer status
-// (or even project membership) at all — both are reachable by any custom
-// role holding `project.create` without `members.manage`. Those cases are
-// encoded below as `it.fails` with the correct (currently failing)
-// assertion.
+// only re-checked project-viewer status when the patch touched
+// `attachments`, and setProjectAccess checked neither project-viewer status
+// nor project membership at all — both reachable by any custom role holding
+// `project.create` without `members.manage`.
+//
+// BOTH ARE FIXED, and the two cases below are now ordinary passing tests
+// guarding the fix: `lib/store.tsx` runs `projectIsManageable` on every
+// `updateProject` patch, and `setProjectAccess` runs it too.
+//
+// They were once written as `it.fails`, which passes while broken and fails
+// once fixed. That is a good way to encode a known defect and a bad thing to
+// leave behind: the names went on reading "...but does not" long after it
+// did, so a green run advertised a High and a Critical defect as still open.
+// A test name is read far more often than the code under it.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 
@@ -393,14 +401,14 @@ describe("restricted projects", () => {
 
   // --- Findings: incomplete / missing viewer-only enforcement -------------
 
-  // L1-004 (High): updateProject only re-checks projectIsViewerOnly when the
-  // patch includes `attachments`. A custom role holding only `project.create`
-  // (no members.manage) that is merely a *viewer* on a restricted project can
-  // rename/recolor/reprioritize that project freely — the viewer gate never
-  // runs because `patch.attachments` is undefined. Expected: denied and
-  // unchanged, like the attachments case above. Actual: the rename succeeds.
+  // L1-004 (High), FIXED. updateProject used to re-check project-viewer
+  // status only when the patch included `attachments`, so a custom role
+  // holding just `project.create` that was merely a *viewer* on a restricted
+  // project could rename or reprioritise it freely — the gate never ran,
+  // because `patch.attachments` was undefined. Every patch now goes through
+  // `projectIsManageable` (lib/store.tsx).
   it(
-    "L1-004: updateProject should deny a non-attachments patch from a project viewer, but does not",
+    "L1-004: updateProject denies a non-attachments patch from a project viewer",
     async () => {
       let state = addRole(baseState(), {
         id: "r_pm2",
@@ -424,14 +432,13 @@ describe("restricted projects", () => {
     }
   );
 
-  // L1-005 (Critical): setProjectAccess is gated solely by `project.create`
-  // with no projectIsViewerOnly check and no membership check at all. A
-  // custom role holding only `project.create` can rewrite the access list —
-  // including granting itself "editor" — of ANY restricted project, even one
-  // it has no relationship to whatsoever. Expected: denied (not a member /
-  // not an editor of this project). Actual: succeeds unconditionally.
+  // L1-005 (Critical), FIXED. setProjectAccess was gated solely by
+  // `project.create`, with no viewer check and no membership check at all, so
+  // a custom role holding just that permission could rewrite the access list
+  // of ANY restricted project — including granting itself "editor" — with no
+  // relationship to it whatsoever. It now runs `projectIsManageable` first.
   it(
-    "L1-005: setProjectAccess should deny a caller with no relationship to the target project, but does not",
+    "L1-005: setProjectAccess denies a caller with no relationship to the target project",
     async () => {
       let state = addRole(baseState(), {
         id: "r_pm3",

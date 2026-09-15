@@ -541,9 +541,33 @@ describe("the ciphertext's lifetime", () => {
     // the vault must still be pointed at by a live record. An orphan is
     // ciphertext that outlived the case it belonged to, and the two tests
     // above only check the ids they happen to know about.
-    const { data, error } = await serviceClient.rpc("client_secret_ids");
+    //
+    // A LIVE SECRET IS PLANTED FIRST, and that is not decoration. The earlier
+    // tests in this file clear every password they set, so by the time this
+    // runs the vault can legitimately hold nothing — and `[].filter(...)` is
+    // `[]`, so the sweep reported "no orphans" having examined nothing at all.
+    // Same shape as the PGRST106 trap the helper above was written to avoid:
+    // an empty answer read as a clean one.
+    const them = await signInAs(emails.editor, TEST_PASSWORD);
+    const planted = await them.rpc("set_client_password", {
+      p_project_id: projects.locked, p_value: SECRET,
+    });
+    expect(planted.error).toBeNull();
 
+    const { data, error } = await serviceClient.rpc("client_secret_ids");
     expect(error).toBeNull();
-    expect((data ?? []).filter((r) => !r.referenced)).toEqual([]);
+
+    // The sweep can see at least the one just planted, and sees it as
+    // referenced. Without this the assertion below cannot fail.
+    const rows = data ?? [];
+    const live = await secretIdOf(projects.locked);
+    expect(rows.some((r) => r.secret_id === live && r.referenced)).toBe(true);
+
+    expect(rows.filter((r) => !r.referenced)).toEqual([]);
+
+    // Put the vault back as it was found.
+    await them.rpc("set_client_password", {
+      p_project_id: projects.locked, p_value: "",
+    });
   });
 });
