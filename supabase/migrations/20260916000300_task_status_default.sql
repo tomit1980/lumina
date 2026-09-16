@@ -1,0 +1,32 @@
+-- `tasks.status` still defaulted to a column that no longer exists.
+--
+-- 20260906000300 created the column as `not null default 'backlog'`, back
+-- when the five status ids were a `check` constraint on the row itself.
+-- 20260910005000 turned statuses into a table and made `tasks.status` a
+-- foreign key to it, but left the default string alone — harmless, because
+-- a `backlog` row existed for it to point at.
+--
+-- 20260916000100 deletes that row. From that moment every insert into
+-- `tasks` that does not name a status resolves the default to `'backlog'`
+-- and is refused by `tasks_status_fkey`, with an error that talks about a
+-- foreign key and never mentions the word "default":
+--
+--   insert or update on table "tasks" violates foreign key constraint
+--   "tasks_status_fkey"
+--
+-- The app itself always sends a status — a card is created in a column, so
+-- there is always one to send — which is exactly why this survived the
+-- feature's own tests and only surfaced when the whole live RLS suite ran
+-- (5 files, on fixtures that insert a task the short way). Anything that
+-- inserts a task without naming a column hits it: a direct PostgREST call,
+-- a SQL console, a future import, a fixture.
+--
+-- `to_do` is the first column and the one 20260916000100 moves the old
+-- Backlog work into, so it is the same answer this feature already gives.
+--
+-- Deliberately NOT tied to `statuses.position = 0`: a default has to be a
+-- constant, and an Owner reordering their columns in Settings should not
+-- silently change where API-created tasks land.
+
+alter table public.tasks
+  alter column status set default 'todo';
