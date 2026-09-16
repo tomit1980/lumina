@@ -271,6 +271,7 @@ describe("hydrateWorkspace — the query plan", () => {
     // fetchable from here at all.
     "project_client_info",
     "project_client_documents",
+    "project_client_notes",
     "tasks",
     "task_collaborators",
     "task_attachments",

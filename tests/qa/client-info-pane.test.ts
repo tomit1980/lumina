@@ -222,7 +222,7 @@ describe("the pane, for an editor", () => {
                 address: "", superCompany: "", memberId: "", amount: null,
                 currency: "AUD", diagnosis: "", lastDayOfWork: null,
                 employerName: "", contractSigned: false, newPhone: "",
-                newEmail: "", notes: "",
+                newEmail: "", notes: [],
                 documents: {
                   photo_id_front: true,
                   photo_id_back: true,

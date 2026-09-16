@@ -173,7 +173,6 @@ describe("every field saves and is readable back", () => {
     ["contractSigned", true],
     ["newPhone", "(03) 9876 5432"],
     ["newEmail", "d.reed.new@example.com"],
-    ["notes", "Prefers calls after 4pm. Daughter Alex is the contact."],
   ] as const;
 
   for (const [field, value] of FIELDS) {

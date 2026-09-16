@@ -82,6 +82,7 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     projectAttachments,
     clientInfo,
     clientDocuments,
+    clientNotes,
     tasks,
     taskCollaborators,
     taskAttachments,
@@ -112,6 +113,7 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     // reveal_client_password(), for one person who asked and was logged.
     client.from("project_client_info").select("*"),
     client.from("project_client_documents").select("*"),
+    client.from("project_client_notes").select("*"),
     client.from("tasks").select("*").order("position"),
     client.from("task_collaborators").select("*"),
     client.from("task_attachments").select("*"),
@@ -154,6 +156,7 @@ export async function hydrateWorkspace(client: LuminaClient): Promise<AppState> 
     projectAttachments: unwrap("project_attachments", projectAttachments),
     clientInfo: unwrap("project_client_info", clientInfo),
     clientDocuments: unwrap("project_client_documents", clientDocuments),
+    clientNotes: unwrap("project_client_notes", clientNotes),
     tasks: unwrap("tasks", tasks),
     taskCollaborators: unwrap("task_collaborators", taskCollaborators),
     taskAttachments: unwrap("task_attachments", taskAttachments),

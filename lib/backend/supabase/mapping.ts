@@ -61,6 +61,7 @@ import {
   type Attachment,
   type Channel,
   type ClientInfo,
+  type ClientNote,
   type DM,
   type Message,
   type MessageAttachment,
@@ -102,6 +103,7 @@ export type ProjectMemberRow = Row<"project_members">;
 export type ProjectAttachmentRow = Row<"project_attachments">;
 export type ClientInfoRow = Row<"project_client_info">;
 export type ClientDocumentRow = Row<"project_client_documents">;
+export type ClientNoteRow = Row<"project_client_notes">;
 export type TaskRow = Row<"tasks">;
 export type TaskCollaboratorRow = Row<"task_collaborators">;
 export type TaskAttachmentRow = Row<"task_attachments">;
@@ -130,6 +132,7 @@ export interface HydrateRows {
   projectAttachments: ProjectAttachmentRow[];
   clientInfo: ClientInfoRow[];
   clientDocuments: ClientDocumentRow[];
+  clientNotes: ClientNoteRow[];
   tasks: TaskRow[];
   taskCollaborators: TaskCollaboratorRow[];
   taskAttachments: TaskAttachmentRow[];
@@ -297,9 +300,10 @@ export function toTaskSet(row: TaskSetRow, items: TaskSetItem[]): TaskSet {
  * pane renders the same empty form for both, so the distinction costs the UI
  * nothing and keeps `updatedAt` from claiming a write that never happened.
  *
- * DOCUMENT ROWS CAN ARRIVE WITHOUT AN INFO ROW: ticking a checkbox first
- * writes only to `project_client_documents`. So the record is built whenever
- * either side has something, and the info half falls back to column defaults.
+ * DOCUMENT AND NOTE ROWS CAN ARRIVE WITHOUT AN INFO ROW: ticking a checkbox
+ * first writes only to `project_client_documents`, and a note is its own
+ * table entirely. So the record is built whenever any of the three has
+ * something, and the info half falls back to column defaults.
  *
  * `amount` comes back from PostgREST as a JS number for `numeric` columns
  * within double precision, which 14,2 is — but `String(...)` and `Number(...)`
@@ -312,19 +316,25 @@ export function toTaskSet(row: TaskSetRow, items: TaskSetItem[]): TaskSet {
  */
 export function toClientInfo(
   row: ClientInfoRow | undefined,
-  documentRows: ClientDocumentRow[]
+  documentRows: ClientDocumentRow[],
+  noteRows: ClientNoteRow[]
 ): ClientInfo | null {
-  if (!row && documentRows.length === 0) return null;
+  if (!row && documentRows.length === 0 && noteRows.length === 0) return null;
 
   const documents: Record<string, boolean> = {};
   for (const d of documentRows) documents[d.document_type] = d.received;
 
-  // The newest write on either table. A document tick and a field edit both
-  // count as "when this record last changed", and the pane re-keys its inputs
-  // off this value.
+  const notes: ClientNote[] = noteRows
+    .map((n) => ({ id: n.id, body: n.body, createdAt: toEpoch(n.created_at), createdBy: n.created_by }))
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  // The newest write across all three tables. A document tick, a field edit
+  // and a new note all count as "when this record last changed", and the pane
+  // re-keys its inputs off this value.
   const stamps = [
     ...(row ? [toEpoch(row.updated_at)] : []),
     ...documentRows.map((d) => toEpoch(d.updated_at)),
+    ...notes.map((n) => n.createdAt),
   ];
 
   const amount =
@@ -349,7 +359,7 @@ export function toClientInfo(
     contractSigned: row?.contract_signed ?? false,
     newPhone: row?.new_phone ?? "",
     newEmail: row?.new_email ?? "",
-    notes: row?.notes ?? "",
+    notes,
     documents,
     hasPassword: row?.password_secret_id !== null && row?.password_secret_id !== undefined,
     updatedAt: stamps.length > 0 ? Math.max(...stamps) : 0,
@@ -490,6 +500,7 @@ export function toAppState(rows: HydrateRows): AppState {
   const projectAttachmentsByProject = groupBy(rows.projectAttachments, (r) => r.project_id);
   const clientInfoByProject = new Map(rows.clientInfo.map((r) => [r.project_id, r]));
   const clientDocumentsByProject = groupBy(rows.clientDocuments, (r) => r.project_id);
+  const clientNotesByProject = groupBy(rows.clientNotes, (r) => r.project_id);
   const taskAttachmentsByTask = groupBy(rows.taskAttachments, (r) => r.task_id);
   const collaboratorsByTask = groupBy(rows.taskCollaborators, (r) => r.task_id);
 
@@ -565,7 +576,8 @@ export function toAppState(rows: HydrateRows): AppState {
         createdFromTaskSetId: p.created_from_task_set_id,
         client: toClientInfo(
           clientInfoByProject.get(p.id),
-          clientDocumentsByProject.get(p.id) ?? []
+          clientDocumentsByProject.get(p.id) ?? [],
+          clientNotesByProject.get(p.id) ?? []
         ),
       })
     ),

@@ -64,6 +64,7 @@ function empty(): HydrateRows {
     projectAttachments: [],
   clientInfo: [],
   clientDocuments: [],
+  clientNotes: [],
     tasks: [],
     taskCollaborators: [],
     taskAttachments: [],
@@ -458,6 +459,54 @@ describe("attachments", () => {
       ],
     });
     expect(state.projects[0].attachments.map((a) => a.id)).toEqual(["a_visible"]);
+  });
+});
+
+describe("client notes", () => {
+  it("folds note rows into the client record, oldest first, and counts them in updatedAt", () => {
+    const rows = empty();
+    rows.projects = [project({ id: "p_website" })];
+    rows.clientNotes = [
+      {
+        id: "n_2",
+        project_id: "p_website",
+        body: "Second",
+        created_at: "2026-09-16T09:10:00Z",
+        created_by: "u_raz",
+      },
+      {
+        id: "n_1",
+        project_id: "p_website",
+        body: "First",
+        created_at: "2026-09-15T14:32:00Z",
+        created_by: null,
+      },
+    ];
+    const state = toAppState(rows);
+    const client = state.projects.find((p) => p.id === "p_website")!.client!;
+    expect(client.notes.map((n) => n.id)).toEqual(["n_1", "n_2"]);
+    expect(client.notes[0]).toEqual({
+      id: "n_1",
+      body: "First",
+      createdAt: Date.parse("2026-09-15T14:32:00Z"),
+      createdBy: null,
+    });
+    expect(client.updatedAt).toBe(Date.parse("2026-09-16T09:10:00Z"));
+  });
+
+  it("CONTROL: a project with notes but no info row still gets a client record", () => {
+    const rows = empty();
+    rows.projects = [project({ id: "p_website" })];
+    rows.clientNotes = [
+      {
+        id: "n_1",
+        project_id: "p_website",
+        body: "Only a note",
+        created_at: "2026-09-15T14:32:00Z",
+        created_by: null,
+      },
+    ];
+    expect(toAppState(rows).projects.find((p) => p.id === "p_website")!.client).not.toBeNull();
   });
 });
 

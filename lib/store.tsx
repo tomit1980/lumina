@@ -2554,7 +2554,7 @@ export function StoreProvider({
       contractSigned: false,
       newPhone: "",
       newEmail: "",
-      notes: "",
+      notes: [],
       documents: {},
       hasPassword: false,
       updatedAt: 0,

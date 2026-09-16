@@ -22,11 +22,13 @@ import { fail, requireRows } from "./result";
 import type { LuminaClient } from "./client";
 import type { Database } from "../../database.types";
 import type { ClientInfoPatch } from "../types";
+import type { ClientNote } from "../../types";
 
 /** The row shape PostgREST will accept, straight from the generated types —
  *  so a column renamed in a migration is a compile error here rather than a
  *  field that silently stops being written. */
 type ClientInfoInsert = Database["public"]["Tables"]["project_client_info"]["Insert"];
+type ClientNoteInsert = Database["public"]["Tables"]["project_client_notes"]["Insert"];
 
 /** Model field → column. Written out rather than derived from a case
  *  transform, so a renamed field is a compile error here instead of a column
@@ -47,7 +49,6 @@ const COLUMNS: Record<keyof ClientInfoPatch, string> = {
   contractSigned: "contract_signed",
   newPhone: "new_phone",
   newEmail: "new_email",
-  notes: "notes",
 };
 
 /**
@@ -102,6 +103,18 @@ export async function setClientDocument(
     "you may only view this project",
     result
   );
+}
+
+/** Appends a note. `.select()` + `requireRows`, like every write here: a
+ *  policy-filtered insert comes back as `error: null` with no rows. */
+export async function addClientNote(
+  client: LuminaClient,
+  projectId: string,
+  note: ClientNote
+): Promise<void> {
+  const row: ClientNoteInsert = { id: note.id, project_id: projectId, body: note.body };
+  const result = await client.from("project_client_notes").insert(row).select("id");
+  requireRows("adding that note", "you may only view this project", result);
 }
 
 /**

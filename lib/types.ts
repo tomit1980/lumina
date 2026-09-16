@@ -226,6 +226,16 @@ export interface Task {
  * same empty fields either way, so absence never has to be special-cased in
  * the UI — only in the knowledge that there is nothing to show.
  */
+/** One dated entry in a client's notes. Author and time are set by the
+ *  database; nothing edits or removes an entry afterwards. */
+export interface ClientNote {
+  id: string;
+  body: string;
+  createdAt: number;
+  /** Null when that account has since been removed. */
+  createdBy: string | null;
+}
+
 export interface ClientInfo {
   fullName: string;
   /** "YYYY-MM-DD" or null. A STRING, NOT epoch milliseconds, and that is the
@@ -256,7 +266,7 @@ export interface ClientInfo {
   newPhone: string;
   newEmail: string;
 
-  notes: string;
+  notes: ClientNote[];
 
   /** Document type id → received. A missing key is "not received", the same as
    *  `false`, because a row is only written once somebody touches the box. */

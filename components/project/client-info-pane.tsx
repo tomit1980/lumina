@@ -32,7 +32,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import {
   CLIENT_DOCUMENT_TYPES,
   DEFAULT_CURRENCY,
@@ -70,7 +69,7 @@ const EMPTY: ClientInfo = {
   contractSigned: false,
   newPhone: "",
   newEmail: "",
-  notes: "",
+  notes: [],
   documents: {},
   hasPassword: false,
   updatedAt: 0,
@@ -131,7 +130,7 @@ function Section({
 }: {
   title: string;
   aside?: React.ReactNode;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <section className="border-t pt-5 first:border-t-0 first:pt-0">
@@ -467,31 +466,11 @@ export function ClientInfoPane({
           />
         </Section>
 
-        <Section title="Notes">
-          <Field label="Notes" htmlFor={id("notes")} state={state("notes")}>
-            {canEdit ? (
-              <Textarea
-                id={id("notes")}
-                key={`notes-${fieldKey}`}
-                defaultValue={client.notes}
-                className="min-h-48 text-[13px]"
-                placeholder="Anything worth knowing about this case."
-                onBlur={(e) => {
-                  // No Enter-to-commit here: Enter is a new line in a
-                  // textarea, and stealing it would make the one field meant
-                  // for paragraphs the one field that cannot hold one.
-                  const value = e.target.value;
-                  if (value === client.notes) return;
-                  save("notes", value, restore(e.target, value, client.notes));
-                }}
-              />
-            ) : (
-              <p className="min-h-24 whitespace-pre-wrap rounded-lg border bg-muted/40 px-3 py-2 text-[13px]">
-                {client.notes || <span className="text-muted-foreground">—</span>}
-              </p>
-            )}
-          </Field>
-        </Section>
+        {/* `notes` is now a dated log (ClientNote[]) rather than a single
+         *  string a textarea can bind to — see lib/types.ts. The log UI that
+         *  reads and appends to it is the next task; this section is left
+         *  empty on purpose so the tree still typechecks and renders. */}
+        <Section title="Notes" />
       </div>
     </div>
   );

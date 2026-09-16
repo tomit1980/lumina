@@ -23,6 +23,7 @@ import type {
   Attachment,
   Channel,
   ClientInfo,
+  ClientNote,
   DM,
   Message,
   Permission,
@@ -73,11 +74,13 @@ export type ProjectPatch = Partial<
 /**
  * The editable fields of a client record, as `updateClientInfo` receives them.
  *
- * THREE THINGS ARE ABSENT AND EACH IS A DECISION, not an omission:
+ * FOUR THINGS ARE ABSENT AND EACH IS A DECISION, not an omission:
  *
  * - `documents` has its own method. A patch carrying the whole map would make
  *   two people ticking two different boxes a last-write-wins race over both;
  *   one row per document means each write touches only what was clicked.
+ * - `notes` has its own method: a patch carrying the list would make two
+ *   people adding notes a last-write-wins race.
  * - `hasPassword` is derived, never sent. The password goes through
  *   `setClientPassword`, which is the only thing that may change it.
  * - `updatedAt` / `updatedBy` are written by a database trigger from
@@ -102,7 +105,6 @@ export type ClientInfoPatch = Partial<
     | "contractSigned"
     | "newPhone"
     | "newEmail"
-    | "notes"
   >
 >;
 
@@ -367,6 +369,9 @@ export interface Backend {
     documentType: string,
     received: boolean
   ): Promise<void>;
+  /** Appends one note. The row's time and author are stamped by the
+   *  database; the entry passed in carries the client's optimistic values. */
+  addClientNote(projectId: string, note: ClientNote): Promise<void>;
   /**
    * Stores, replaces or (with `null`) clears the client's account password.
    *

@@ -496,6 +496,10 @@ export class LocalBackend implements Backend {
     return Promise.resolve();
   }
 
+  addClientNote(): Promise<void> {
+    return Promise.resolve();
+  }
+
   /**
    * The demo has no Vault and no server, so there is nowhere to put a client's
    * password that is not the same localStorage blob everything else lives in.

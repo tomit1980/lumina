@@ -53,6 +53,7 @@ import type {
   Activity,
   Attachment,
   Channel,
+  ClientNote,
   DM,
   Message,
   Permission,
@@ -381,6 +382,9 @@ export class SupabaseBackend implements Backend {
       documentType,
       received
     );
+  }
+  async addClientNote(projectId: string, note: ClientNote): Promise<void> {
+    return clientInfo.addClientNote(await this.client(), projectId, note);
   }
   async setClientPassword(projectId: string, value: string | null): Promise<void> {
     return clientInfo.setClientPassword(await this.client(), projectId, value);
