@@ -643,9 +643,13 @@ describe("adding a note", () => {
 
   it("refuses a viewer", async () => {
     // Same fixture the other viewer refusals in this file use: a restricted
-    // project where u_maya is listed as a viewer.
-    const { result } = await mount(withViewerProject("u_maya"));
+    // project where u_maya is listed as a viewer, and a FailingBackend so
+    // the refusal can be shown to happen BEFORE any network call, not just
+    // to have returned false.
+    const backend = new FailingBackend("addClientNote");
+    const { result } = await mount(withViewerProject("u_maya"), backend);
     expect(await run(() => result.current.addClientNote("p_locked", "Nope"))).toBe(false);
+    expect(backend.attempted).toEqual([]);
   });
 
   it("keeps one project's notes off another", async () => {
