@@ -104,7 +104,7 @@ function ProjectPageInner() {
   const [newFile, setNewFile] = React.useState<"markdown" | "spreadsheet" | null>(null);
   const [prefs, setPrefs] = React.useState<TabPrefs>(DEFAULT_TAB_PREFS);
   React.useEffect(() => { setPrefs(loadTabPrefs()); }, []);
-  const tabs = visibleTabs(prefs);
+  const tabs = React.useMemo(() => visibleTabs(prefs), [prefs]);
   // If the current tab has just been hidden, move to the first one shown
   // rather than showing a selected tab that is not in the row.
   React.useEffect(() => {
