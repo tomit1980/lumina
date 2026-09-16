@@ -24,6 +24,7 @@
  */
 
 import * as React from "react";
+import { format } from "date-fns";
 import { EyeIcon, EyeOffIcon, LockPasswordIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
@@ -32,6 +33,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { UserAvatar } from "@/components/user-avatar";
 import {
   CLIENT_DOCUMENT_TYPES,
   DEFAULT_CURRENCY,
@@ -151,7 +154,9 @@ export function ClientInfoPane({
   canEdit: boolean;
 }) {
   const {
+    state: appState,
     updateClientInfo,
+    addClientNote,
     setClientDocument,
     setClientPassword,
     revealClientPassword,
@@ -466,11 +471,64 @@ export function ClientInfoPane({
           />
         </Section>
 
-        {/* `notes` is now a dated log (ClientNote[]) rather than a single
-         *  string a textarea can bind to — see lib/types.ts. The log UI that
-         *  reads and appends to it is the next task; this section is left
-         *  empty on purpose so the tree still typechecks and renders. */}
-        <Section title="Notes" />
+        <Section
+          title="Notes"
+          aside={
+            client.notes.length > 0
+              ? `${client.notes.length} ${client.notes.length === 1 ? "entry" : "entries"}`
+              : undefined
+          }
+        >
+          <ol className="flex flex-col gap-3">
+            {/* Append-only log, and the array's own order is not trusted:
+             *  the store appends on write, but a rehydrate or a fixture can
+             *  hand this component notes in any order, and the one promise
+             *  this list makes is oldest first. */}
+            {[...client.notes]
+              .sort((a, b) => a.createdAt - b.createdAt)
+              .map((note) => {
+                const author = note.createdBy
+                  ? appState.users.find((u) => u.id === note.createdBy)
+                  : undefined;
+                return (
+                  <li key={note.id} className="flex items-start gap-2.5">
+                    {author ? (
+                      <UserAvatar user={author} size="sm" className="mt-0.5" />
+                    ) : (
+                      <span
+                        className="mt-0.5 size-6 shrink-0 rounded-full bg-muted"
+                        aria-hidden
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] text-muted-foreground">
+                        <span className="font-medium text-foreground">
+                          {author?.name ?? "Someone"}
+                        </span>
+                        {" · "}
+                        <time dateTime={new Date(note.createdAt).toISOString()}>
+                          {format(note.createdAt, "d MMM yyyy, HH:mm")}
+                        </time>
+                      </p>
+                      <p className="whitespace-pre-wrap text-[13px]">{note.body}</p>
+                    </div>
+                  </li>
+                );
+              })}
+            {client.notes.length === 0 && (
+              <li className="text-[13px] text-muted-foreground">No notes yet.</li>
+            )}
+          </ol>
+          {canEdit && (
+            <NoteComposer
+              id={id("notes")}
+              state={state("notes")}
+              onSubmit={(body, keep) =>
+                run("notes", () => addClientNote(project.id, body), keep)
+              }
+            />
+          )}
+        </Section>
       </div>
     </div>
   );
@@ -678,6 +736,45 @@ function AmountField({
       ) : (
         <ReadOnly value={formatMoney(amount, currency)} />
       )}
+    </Field>
+  );
+}
+
+/**
+ * The box a new note is typed into. Enter is a newline — this is the one
+ * field meant for paragraphs — and Ctrl/Cmd+Enter or the button submits.
+ * A refused note keeps its draft: wiping what somebody typed is the failure
+ * the password field had, and this must not repeat it.
+ */
+function NoteComposer({
+  id, state, onSubmit,
+}: {
+  id: string;
+  state: SaveState;
+  onSubmit: (body: string, keepDraft: () => void) => void;
+}) {
+  const ref = React.useRef<HTMLTextAreaElement>(null);
+  const submit = () => {
+    const el = ref.current;
+    if (!el) return;
+    const body = el.value;
+    onSubmit(body, () => { if (el.value === "") el.value = body; });
+    if (body.trim()) el.value = "";
+  };
+  return (
+    <Field label="New note" htmlFor={id} state={state} className="mt-4">
+      <Textarea
+        ref={ref}
+        id={id}
+        className="min-h-24 text-[13px]"
+        placeholder="What happened, and when."
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+        }}
+      />
+      <div className="mt-1.5 flex justify-end">
+        <Button size="sm" onClick={submit}>Add note</Button>
+      </div>
     </Field>
   );
 }

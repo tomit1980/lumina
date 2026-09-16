@@ -184,7 +184,7 @@ describe("the pane, for an editor", () => {
     for (const label of [
       "Full name", "Date of birth", "Phone", "Email", "Address",
       "Super company", "Member ID", "Amount", "Diagnosis",
-      "Last day of work", "Employer", "New phone", "New email", "Notes",
+      "Last day of work", "Employer", "New phone", "New email", "New note",
     ]) {
       const field = screen.getByLabelText(label);
       expect(field).toBeInTheDocument();
@@ -321,7 +321,7 @@ describe("a refused save does not leave the rejected text in the box", () => {
     // field asserting something it does not know.
     await openClientInfo();
     const email = screen.getByLabelText("New email") as HTMLInputElement;
-    const notes = screen.getByLabelText("Notes") as HTMLTextAreaElement;
+    const notes = screen.getByLabelText("New note") as HTMLTextAreaElement;
     const amount = screen.getByLabelText("Amount") as HTMLInputElement;
 
     await act(async () => {
@@ -464,5 +464,78 @@ describe("the pane, for a viewer", () => {
     expect(screen.queryByRole("button", { name: /reveal/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /password/i })).not.toBeInTheDocument();
     expect(screen.getByText("No password stored.")).toBeInTheDocument();
+  });
+});
+
+describe("notes as a log", () => {
+  it("shows each entry with who wrote it and when, oldest first", async () => {
+    const state = asUser(baseState(), "u_vlad");
+    const withNotes: AppState = {
+      ...state,
+      projects: state.projects.map((p) => p.id !== "p_website" ? p : {
+        ...p,
+        client: {
+          fullName: "", dateOfBirth: null, phone: "", email: "", address: "",
+          superCompany: "", memberId: "", amount: null, currency: "AUD",
+          diagnosis: "", lastDayOfWork: null, employerName: "", contractSigned: false,
+          newPhone: "", newEmail: "", documents: {}, hasPassword: false,
+          updatedAt: 0, updatedBy: null,
+          notes: [
+            { id: "n_2", body: "Bank statement received.", createdAt: Date.UTC(2026, 8, 16, 9, 10), createdBy: "u_maya" },
+            { id: "n_1", body: "Called, left a message.", createdAt: Date.UTC(2026, 8, 15, 14, 32), createdBy: null },
+          ],
+        },
+      }),
+    };
+    await renderProject(withNotes);
+    await selectTab("Client Info");
+
+    const entries = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(entries[0]).toContain("Called, left a message.");
+    expect(entries[0]).toContain("Someone");           // unknown author is never a real colleague
+    expect(entries[1]).toContain("Maya Chen");
+    expect(entries[1]).toMatch(/16 Sep 2026/);
+  });
+
+  it("adds a note from the box and keeps the draft if the store refuses", async () => {
+    await renderProject(asUser(baseState(), "u_vlad"));
+    await selectTab("Client Info");
+    const box = screen.getByLabelText("New note") as HTMLTextAreaElement;
+
+    await act(async () => {
+      fireEvent.change(box, { target: { value: "   " } });
+      fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    });
+    expect(screen.getByText("Couldn't save")).toBeInTheDocument();
+    expect(box.value).toBe("   ");                     // not wiped
+
+    await act(async () => {
+      fireEvent.change(box, { target: { value: "Spoke to the fund." } });
+      fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+    });
+    expect(screen.getByRole("listitem")).toHaveTextContent("Spoke to the fund.");
+    expect(box.value).toBe("");
+  });
+
+  it("gives a viewer the entries and no box", async () => {
+    // Same viewer fixture the existing "shows the record with no inputs at
+    // all" test uses: p_website, restricted, u_maya as a viewer.
+    const state = addProject(asUser(baseState(), "u_maya"), {
+      id: "p_website2",
+      name: "Other",
+      createdBy: "u_sam",
+    });
+    const restricted: AppState = {
+      ...state,
+      projects: state.projects.map((p) =>
+        p.id !== "p_website"
+          ? p
+          : { ...p, restricted: true, members: [{ userId: "u_maya", level: "viewer" as const }] }
+      ),
+    };
+    await renderProject(restricted);
+    await selectTab("Client Info");
+
+    expect(screen.queryByLabelText("New note")).not.toBeInTheDocument();
   });
 });
