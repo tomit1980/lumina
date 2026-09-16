@@ -505,7 +505,6 @@ export type Database = {
           member_id: string
           new_email: string
           new_phone: string
-          notes: string
           password_secret_id: string | null
           phone: string
           project_id: string
@@ -528,7 +527,6 @@ export type Database = {
           member_id?: string
           new_email?: string
           new_phone?: string
-          notes?: string
           password_secret_id?: string | null
           phone?: string
           project_id: string
@@ -551,7 +549,6 @@ export type Database = {
           member_id?: string
           new_email?: string
           new_phone?: string
-          notes?: string
           password_secret_id?: string | null
           phone?: string
           project_id?: string
@@ -572,6 +569,45 @@ export type Database = {
             columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_client_notes: {
+        Row: {
+          body: string
+          created_at: string
+          created_by: string | null
+          id: string
+          project_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          created_by?: string | null
+          id: string
+          project_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_client_notes_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_client_notes_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           },
         ]
