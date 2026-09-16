@@ -93,7 +93,7 @@ const ourTasks = (state: AppState) =>
   state.tasks.filter((t) => t.projectId === "p_a" || t.projectId === "p_b");
 
 describe("onDragOver on a cross-project board", () => {
-  it("sends the RAW merged-column index before the fix (documents the pre-fix defect)", async () => {
+  it("drops a card in front of its own project's slice, not at the merged position", async () => {
     // Alpha (p_a) has two in-progress cards, Beta (p_b) one, and — grouped
     // by project name the way `orderColumn` groups a cross-project column —
     // the merged display order is [a_ip1, a_ip2, b_ip1]. Hovering b_ip1
