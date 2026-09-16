@@ -24,25 +24,18 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AttachmentsField } from "@/components/attachments";
 import { DocumentPage } from "@/components/documents/document-page";
 import { Board } from "@/components/kanban/board";
 import { ListView } from "@/components/kanban/list-view";
+import { applyTaskFilters, TaskFilters } from "@/components/kanban/task-filters";
 import { ClientInfoPane } from "@/components/project/client-info-pane";
 import { TabPreferences } from "@/components/project/tab-preferences";
 import { useUI } from "@/components/ui-context";
 import { createAttachmentFromDataUrl } from "@/lib/attachments";
 import { emptySpreadsheetDataUrl, MIME, textToDataUrl, withExtension } from "@/lib/documents";
-import { isMine } from "@/lib/permissions";
 import {
   DEFAULT_TAB_PREFS, loadTabPrefs, saveTabPrefs, visibleTabs,
   type ProjectView, type TabPrefs,
@@ -50,7 +43,7 @@ import {
 import { fileHref } from "@/lib/routes";
 import { useStore } from "@/lib/store";
 import { isDone } from "@/lib/statuses";
-import { PRIORITIES, PRIORITY_META, type Priority } from "@/lib/types";
+import { PRIORITY_META } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function EmptyState({
@@ -174,14 +167,7 @@ function ProjectPageInner() {
     router.push(fileHref(project.id, attachment.id));
   };
   const allTasks = state.tasks.filter((t) => t.projectId === project.id);
-  const tasks = allTasks.filter(
-    (t) =>
-      (assigneeFilter === "all" ||
-        (assigneeFilter === "unassigned"
-          ? t.assigneeId === null
-          : isMine(t, assigneeFilter))) &&
-      (priorityFilter === "all" || t.priority === priorityFilter)
-  );
+  const tasks = applyTaskFilters(allTasks, assigneeFilter, priorityFilter);
 
   const done = allTasks.filter((t) => isDone(state, t.status)).length;
   const progress = allTasks.length > 0 ? Math.round((done / allTasks.length) * 100) : 0;
@@ -328,33 +314,12 @@ function ProjectPageInner() {
                   filtering ? "text-primary" : "text-muted-foreground"
                 )}
               />
-              <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
-                <SelectTrigger size="sm" className="h-8 w-36 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Everyone</SelectItem>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {state.users.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-                <SelectTrigger size="sm" className="h-8 w-32 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All priorities</SelectItem>
-                  {PRIORITIES.map((p: Priority) => (
-                    <SelectItem key={p} value={p}>
-                      {PRIORITY_META[p].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <TaskFilters
+                assignee={assigneeFilter}
+                onAssignee={setAssigneeFilter}
+                priority={priorityFilter}
+                onPriority={setPriorityFilter}
+              />
               {filtering && (
                 <Button
                   variant="ghost"
