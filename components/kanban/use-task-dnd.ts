@@ -18,9 +18,38 @@ import type { Task, TaskStatus } from "@/lib/types";
 
 export const COLUMN_PREFIX = "column:";
 
+/** A column's cards in display order. Within one project that is `order`;
+ *  across projects it is project name, then `order`, so a client's cards sit
+ *  together and no two projects' 0,1,2… interleave. */
+export function orderColumn(
+  tasks: Task[],
+  crossProject: boolean,
+  projectName: (t: Task) => string
+): Task[] {
+  const byOrder = (a: Task, b: Task) => a.order - b.order;
+  if (!crossProject) return [...tasks].sort(byOrder);
+  return [...tasks].sort((a, b) => projectName(a).localeCompare(projectName(b)) || byOrder(a, b));
+}
+
+/** The index `moveTask` applies is within the task's own project's slice of
+ *  the destination column. A drop index computed over a merged column is not
+ *  that number. */
+export function indexWithinProject(destination: Task[], task: Task, dropIndex: number): number {
+  return destination
+    .slice(0, Math.max(0, dropIndex))
+    .filter((t) => t.projectId === task.projectId && t.id !== task.id).length;
+}
+
 /** Shared drag & drop behavior for task collections (board and list views).
- *  Droppable containers must use the id `column:<status>`; draggables use task ids. */
-export function useTaskDnd(tasks: Task[]) {
+ *  Droppable containers must use the id `column:<status>`; draggables use task ids.
+ *  `crossProject` groups a merged column by `projectName` for display, and
+ *  converts a drop index measured over that merged column into the index
+ *  `moveTask` needs — the position within the dragged task's own project. */
+export function useTaskDnd(
+  tasks: Task[],
+  opts: { crossProject?: boolean; projectName?: (t: Task) => string } = {}
+) {
+  const { crossProject = false, projectName = () => "" } = opts;
   const { state, moveTask } = useStore();
   // The workspace's columns, not a module constant — an Owner can rename,
   // add, remove and reorder them, and a drag has to be against the set that
@@ -37,7 +66,7 @@ export function useTaskDnd(tasks: Task[]) {
     const map = Object.fromEntries(
       statuses.map((s) => [s.id, [] as Task[]])
     ) as Record<TaskStatus, Task[]>;
-    for (const t of [...tasks].sort((a, b) => a.order - b.order)) {
+    for (const t of orderColumn(tasks, crossProject, projectName)) {
       // A task whose status no longer exists has no column to sit in. It is
       // skipped here rather than crashing on `map[undefined].push`; the
       // database refuses to delete a status that still holds work, so this
@@ -45,7 +74,7 @@ export function useTaskDnd(tasks: Task[]) {
       map[t.status]?.push(t);
     }
     return map;
-  }, [tasks, statuses]);
+  }, [tasks, statuses, crossProject, projectName]);
 
   /**
    * Moves issued by this drag, in order, with repeats dropped (QA-118).
@@ -135,8 +164,17 @@ export function useTaskDnd(tasks: Task[]) {
 
     // Reorder within the same status.
     const column = byStatus[overStatus];
-    const overIndex = column.findIndex((t) => t.id === overId);
-    if (overIndex >= 0) enqueueMove(activeId, overStatus, overIndex);
+    const rawIndex = column.findIndex((t) => t.id === overId);
+    if (rawIndex < 0) return;
+    // `rawIndex` is a position in the merged, display-ordered column. On a
+    // single-project board that IS the index `moveTask` needs. On a
+    // cross-project board the column interleaves several projects' dense
+    // 0..n-1 runs, so it has to be converted down to the position among just
+    // this task's own project's cards before it means anything to `moveTask`.
+    const task = tasks.find((t) => t.id === activeId);
+    const index =
+      crossProject && task ? indexWithinProject(column, task, rawIndex) : rawIndex;
+    enqueueMove(activeId, overStatus, index);
   };
 
   const onDragCancel = () => {

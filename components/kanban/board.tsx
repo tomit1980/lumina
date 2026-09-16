@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import {
   DndContext,
   DragOverlay,
@@ -142,16 +143,18 @@ export function Board({
   readOnly?: (task: Task) => boolean;
   /** The task's project name, rendered as "label - title" on the card. */
   label?: (task: Task) => string | undefined;
-  /** Not yet consumed here — `useTaskDnd` gains its own `crossProject` option
-   *  in task D3, which will thread this through for cross-project ordering. */
+  /** A board spanning several projects: columns group by project (via
+   *  `label`) instead of interleaving each project's own dense order. */
   crossProject?: boolean;
 }) {
   const { state, can, moveTask } = useStore();
   const { openTaskDialog } = useUI();
-  const dnd = useTaskDnd(tasks);
-  // Accepted now so callers don't split ownership of this prop shape across
-  // two tasks; wired into `useTaskDnd`'s own `crossProject` option in D3.
-  void crossProject;
+  // `label` already carries the project name for card display; ordering
+  // reuses it rather than taking a second, separately-maintained accessor.
+  // Tasks whose project has no label sort together under "" rather than
+  // throwing — this only matters when `crossProject` is set.
+  const projectName = React.useCallback((task: Task) => label?.(task) ?? "", [label]);
+  const dnd = useTaskDnd(tasks, { crossProject, projectName });
 
   const canMove = can("task.move") && !viewerOnly;
   const canCreate = can("task.create") && !viewerOnly;
