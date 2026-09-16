@@ -319,10 +319,12 @@ describe("who the database says wrote last", () => {
 
     // Was `{ notes: "..." }` — that column is gone (44de001, replaced by the
     // append-only `project_client_notes` table, whose own tests belong to
-    // the notes-log task). The trigger this test pins does not care which
-    // column moved, so an empty patch still exercises it.
+    // the notes-log task). `super_company` is free on this project's record
+    // (no other test in this file reads it back for `projects.locked`), and
+    // an actual column write is required: an empty patch is a no-op to
+    // PostgREST — no columns, no row touched, no trigger fired.
     await them
-      .from("project_client_info").update({})
+      .from("project_client_info").update({ super_company: "Moved The Timestamp Fund" })
       .eq("project_id", projects.locked);
 
     const after = (await recordOf(projects.locked))!.updated_at;
