@@ -19,12 +19,15 @@ export function TaskCardContent({
   assignee,
   className,
   onClose,
+  label,
 }: {
   task: Task;
   assignee: User | undefined;
   className?: string;
   /** Quick complete/reopen toggle. Omitted on read-only cards and the drag overlay. */
   onClose?: () => void;
+  /** The task's project name, for a board that spans more than one project. */
+  label?: string;
 }) {
   const { state: workspace } = useStore();
   // Whichever column carries `isDone`, not a literal — a team that renamed
@@ -100,7 +103,13 @@ export function TaskCardContent({
             isDone && "text-muted-foreground line-through decoration-muted-foreground/50"
           )}
         >
-          {task.title}
+          {/* One string, not a label <span> plus a separate title child: split
+              across two elements, "Project - Title" is unrecoverable from a
+              plain `getByText` regex — @testing-library/dom's `getNodeText`
+              only reads an element's OWN direct text-node children, so
+              neither the wrapping <p> nor the label <span> would ever carry
+              the full string. */}
+          {label ? `${label} - ${task.title}` : task.title}
         </p>
       </div>
 
@@ -136,6 +145,7 @@ export function SortableTaskCard({
   disabled,
   onOpen,
   onClose,
+  label,
 }: {
   task: Task;
   assignee: User | undefined;
@@ -143,6 +153,8 @@ export function SortableTaskCard({
   onOpen: (taskId: string) => void;
   /** Quick complete/reopen. Only offered when the card is interactive. */
   onClose?: (taskId: string) => void;
+  /** The task's project name, for a board that spans more than one project. */
+  label?: string;
 }) {
   const {
     attributes,
@@ -176,6 +188,7 @@ export function SortableTaskCard({
         assignee={assignee}
         className={cn(isDragging && "border-dashed border-primary/40 bg-primary/5")}
         onClose={!disabled && onClose ? () => onClose(task.id) : undefined}
+        label={label}
       />
     </div>
   );

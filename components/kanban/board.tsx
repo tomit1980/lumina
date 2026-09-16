@@ -33,16 +33,23 @@ function Column({
   tasks,
   canCreate,
   canMove,
+  readOnly,
+  label,
   onOpen,
   onClose,
 }: {
-  project: Project;
+  /** Omitted on a board that spans more than one project — there is then no
+   *  single project id for the add-task button to carry, so it renders none. */
+  project?: Project;
   /** The whole column, not its id: the header needs its name and colour, and
    *  both are workspace-editable now. */
   status: StatusDef;
   tasks: Task[];
   canCreate: boolean;
   canMove: boolean;
+  /** Per-task override, for a mixed board where drag rights vary by project. */
+  readOnly?: (task: Task) => boolean;
+  label?: (task: Task) => string | undefined;
   onOpen: (taskId: string) => void;
   onClose: (taskId: string) => void;
 }) {
@@ -66,7 +73,7 @@ function Column({
         <span className="rounded-full bg-muted px-1.5 py-px text-[11px] font-medium text-muted-foreground">
           {tasks.length}
         </span>
-        {canCreate && (
+        {project && canCreate && (
           <Button
             variant="ghost"
             size="icon"
@@ -99,9 +106,10 @@ function Column({
               key={task.id}
               task={task}
               assignee={state.users.find((u) => u.id === task.assigneeId)}
-              disabled={!canMove}
+              disabled={!canMove || readOnly?.(task) === true}
               onOpen={onOpen}
               onClose={onClose}
+              label={label?.(task)}
             />
           ))}
           {tasks.length === 0 && (
@@ -119,15 +127,31 @@ export function Board({
   project,
   tasks,
   viewerOnly = false,
+  readOnly,
+  label,
+  crossProject,
 }: {
-  project: Project;
+  /** Omitted for a board spanning more than one project — see `Column`. */
+  project?: Project;
   tasks: Task[];
   /** Read-only override — e.g. the current user only has viewer access to this project. */
   viewerOnly?: boolean;
+  /** Per-task read-only override, for a mixed board where drag rights vary by
+   *  project. A card is undraggable when EITHER this is true OR `viewerOnly`
+   *  is — the store's `moveTask` still re-checks permissions independently. */
+  readOnly?: (task: Task) => boolean;
+  /** The task's project name, rendered as "label - title" on the card. */
+  label?: (task: Task) => string | undefined;
+  /** Not yet consumed here — `useTaskDnd` gains its own `crossProject` option
+   *  in task D3, which will thread this through for cross-project ordering. */
+  crossProject?: boolean;
 }) {
   const { state, can, moveTask } = useStore();
   const { openTaskDialog } = useUI();
   const dnd = useTaskDnd(tasks);
+  // Accepted now so callers don't split ownership of this prop shape across
+  // two tasks; wired into `useTaskDnd`'s own `crossProject` option in D3.
+  void crossProject;
 
   const canMove = can("task.move") && !viewerOnly;
   const canCreate = can("task.create") && !viewerOnly;
@@ -175,6 +199,8 @@ export function Board({
             tasks={dnd.byStatus[status.id] ?? []}
             canCreate={canCreate}
             canMove={canMove}
+            readOnly={readOnly}
+            label={label}
             onOpen={(taskId) => openTaskDialog({ taskId })}
             onClose={closeTask}
           />
@@ -187,6 +213,7 @@ export function Board({
             task={dnd.activeTask}
             assignee={state.users.find((u) => u.id === dnd.activeTask?.assigneeId)}
             className="rotate-2 shadow-xl ring-1 ring-primary/30"
+            label={label?.(dnd.activeTask)}
           />
         )}
       </DragOverlay>
