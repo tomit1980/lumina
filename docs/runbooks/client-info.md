@@ -79,6 +79,22 @@ Type digits. `12500`, `12500.50`, `$12,500` all work; anything else is refused
 with a note rather than quietly rounded. Amounts are stored to the cent in
 Australian dollars.
 
+### Notes
+
+Notes are a log, not a text box. Type what happened in **New note** and press
+**Add note** (or Ctrl/Cmd+Enter); the entry appears with your name and the time,
+both set by the database rather than typed. Enter is a new line.
+
+**An entry cannot be edited or deleted once added — by anyone, through the app
+or the API.** That is enforced by the database having no update and no delete
+rule for notes at all, and it is what makes the log a record of what was known
+when. Mistyped something? Add a correcting note.
+
+Text that was in the old single Notes box became each client's first entry,
+carrying the date it was last saved and who saved it.
+
+Viewers see the log and have no box.
+
 ## The client's password
 
 **Where it is.** Not in the project, not in the record, and not in your browser.
