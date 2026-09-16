@@ -144,10 +144,23 @@ export function useTaskDnd(
     // Crossing into another status: insert at the hovered task's slot,
     // or at the end when hovering the container itself.
     const overColumn = byStatus[overStatus];
-    const overIndex = overId.startsWith(COLUMN_PREFIX)
+    const rawIndex = overId.startsWith(COLUMN_PREFIX)
       ? overColumn.length
       : overColumn.findIndex((t) => t.id === overId);
-    enqueueMove(activeId, overStatus, overIndex < 0 ? overColumn.length : overIndex);
+    const clampedIndex = rawIndex < 0 ? overColumn.length : rawIndex;
+    // `overColumn` is the same merged, `orderColumn`-sorted column
+    // `onDragEnd` reorders within, so it needs the same conversion: on a
+    // cross-project board it interleaves several projects' own dense runs,
+    // and the raw position within that merged sequence is not the index
+    // `moveTask` applies. Without this, every cross-column drag on a
+    // cross-project board (this handler is the one that fires for those —
+    // `onDragEnd` only handles a same-status reorder) landed the card at the
+    // wrong slot within its own project, in practice usually clamped to the
+    // end of the whole merged column rather than the end of its own slice.
+    const task = tasks.find((t) => t.id === activeId);
+    const index =
+      crossProject && task ? indexWithinProject(overColumn, task, clampedIndex) : clampedIndex;
+    enqueueMove(activeId, overStatus, index);
   };
 
   const onDragEnd = (event: DragEndEvent) => {
