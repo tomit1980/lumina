@@ -604,3 +604,53 @@ describe("what reaches the activity feed", () => {
     expect(result.current.state.activities).toHaveLength(before);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Notes
+// ---------------------------------------------------------------------------
+
+describe("adding a note", () => {
+  it("appends an entry carrying the caller as author and a time", async () => {
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
+    const before = Date.now();
+    expect(await run(() => result.current.addClientNote("p_website", "Called, left a message."))).toBe(true);
+    const notes = result.current.state.projects.find((p) => p.id === "p_website")!.client!.notes;
+    expect(notes).toHaveLength(1);
+    expect(notes[0].body).toBe("Called, left a message.");
+    expect(notes[0].createdBy).toBe("u_vlad");
+    expect(notes[0].createdAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("refuses a blank note before any network call", async () => {
+    const backend = new FailingBackend("addClientNote");
+    const { result } = await mount(asUser(baseState(), "u_vlad"), backend);
+    expect(await run(() => result.current.addClientNote("p_website", "   "))).toBe(false);
+    expect(backend.attempted).toEqual([]);
+  });
+
+  it("CONTROL: a real note does reach the backend", async () => {
+    const backend = new FailingBackend("addClientNote");
+    const { result } = await mount(asUser(baseState(), "u_vlad"), backend);
+    await run(() => result.current.addClientNote("p_website", "Real"));
+    expect(backend.attempted).toContain("addClientNote");
+  });
+
+  it("rolls the entry back when the backend refuses", async () => {
+    const { result } = await mount(asUser(baseState(), "u_vlad"), new FailingBackend("addClientNote"));
+    expect(await run(() => result.current.addClientNote("p_website", "Lost?"))).toBe(false);
+    expect(result.current.state.projects.find((p) => p.id === "p_website")!.client?.notes ?? []).toEqual([]);
+  });
+
+  it("refuses a viewer", async () => {
+    // Same fixture the other viewer refusals in this file use: a restricted
+    // project where u_maya is listed as a viewer.
+    const { result } = await mount(withViewerProject("u_maya"));
+    expect(await run(() => result.current.addClientNote("p_locked", "Nope"))).toBe(false);
+  });
+
+  it("keeps one project's notes off another", async () => {
+    const { result } = await mount(asUser(baseState(), "u_vlad"));
+    await run(() => result.current.addClientNote("p_website", "Only here"));
+    expect(result.current.state.projects.find((p) => p.id === "p_mobile")!.client).toBeNull();
+  });
+});

@@ -41,6 +41,7 @@ import type {
   Attachment,
   Channel,
   ClientInfo,
+  ClientNote,
   DM,
   Message,
   MessageAttachment,
@@ -364,6 +365,10 @@ interface StoreValue {
    *  project's feed by the database. Resolves null when there is none stored
    *  or the request was refused. */
   revealClientPassword: (projectId: string) => Promise<string | null>;
+  /** Appends a dated note to the client record. Refused for viewers and for
+   *  blank text; the entry's author and time are the caller's, then the
+   *  database's on the next reload. */
+  addClientNote: (projectId: string, body: string) => Promise<boolean>;
   /** Sets restriction + the per-member access list in one go. The project's
    *  creator is always kept as an editor so they can't lock themselves out. */
   setProjectAccess: (
@@ -2694,6 +2699,26 @@ export function StoreProvider({
       );
     };
 
+    const addClientNote: StoreValue["addClientNote"] = (projectId, body) => {
+      if (!clientEditGuard(projectId)) return Promise.resolve(false);
+      const text = body.trim();
+      if (!text) {
+        deny("Write something before adding a note.");
+        return Promise.resolve(false);
+      }
+      const note: ClientNote = {
+        id: uid("n"),
+        body: text,
+        createdAt: Date.now(),
+        createdBy: stateRef.current?.currentUserId ?? null,
+      };
+      return commit(
+        (s) => patchClient(s, projectId, (client) => ({ ...client, notes: [...client.notes, note] })),
+        () => backend.addClientNote(projectId, note),
+        { ok: () => true, failed: false, describe: "add that note" }
+      );
+    };
+
     /**
      * Stores or clears the client's account password.
      *
@@ -3112,6 +3137,7 @@ export function StoreProvider({
       setClientDocument,
       setClientPassword,
       revealClientPassword,
+      addClientNote,
       deleteProject,
       setProjectAccess,
       createTask,

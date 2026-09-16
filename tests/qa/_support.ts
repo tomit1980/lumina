@@ -451,6 +451,10 @@ export class FailingBackend extends EventBackend {
     return this.run("setClientDocument", undefined);
   }
 
+  override addClientNote(): Promise<void> {
+    return this.run("addClientNote", undefined);
+  }
+
   override setClientPassword(): Promise<void> {
     return this.run("setClientPassword", undefined);
   }
@@ -589,6 +593,7 @@ export type FailingOp =
   | "setProjectAccess"
   | "updateClientInfo"
   | "setClientDocument"
+  | "addClientNote"
   | "setClientPassword"
   | "revealClientPassword"
   | "createRole"
