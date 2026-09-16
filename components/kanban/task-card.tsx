@@ -103,13 +103,13 @@ export function TaskCardContent({
             isDone && "text-muted-foreground line-through decoration-muted-foreground/50"
           )}
         >
-          {/* One string, not a label <span> plus a separate title child: split
-              across two elements, "Project - Title" is unrecoverable from a
-              plain `getByText` regex — @testing-library/dom's `getNodeText`
-              only reads an element's OWN direct text-node children, so
-              neither the wrapping <p> nor the label <span> would ever carry
-              the full string. */}
-          {label ? `${label} - ${task.title}` : task.title}
+          {/* The label sits in its own <span> so it can be muted separately
+              from the title. A plain-string `getByText` regex can't see
+              across this split (see the note in board-cross-project.test.ts)
+              — that's a test-query concern, not a reason to flatten the
+              production markup. */}
+          {label && <span className="text-muted-foreground">{label} - </span>}
+          {task.title}
         </p>
       </div>
 

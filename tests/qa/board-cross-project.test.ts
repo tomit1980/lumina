@@ -28,7 +28,9 @@ describe("a board with no single project", () => {
     );
     // Every card carries "Project - Title".
     const first = state.tasks[0];
-    expect(screen.getByText(new RegExp(`${nameOf(first)} - ${first.title}`))).toBeInTheDocument();
+    expect(
+      screen.getByText((_, el) => el?.tagName === "P" && el?.textContent === `${nameOf(first)} - ${first.title}`)
+    ).toBeInTheDocument();
     // No project, no "Add a task to …".
     expect(screen.queryAllByRole("button", { name: /^Add a task to/ })).toHaveLength(0);
     // Read-only cards are not draggable (dnd-kit sets aria-disabled on the handle).
