@@ -138,6 +138,19 @@ describe("the tab row", () => {
 
     expect(screen.getByRole("tab", { name: "Client Info" })).toBeInTheDocument();
   });
+
+  it("honours a saved preference: List hidden, Client Info first", async () => {
+    localStorage.setItem(
+      "lumina:project-tabs",
+      JSON.stringify({ order: ["client", "board", "files", "list"], hidden: ["list"] })
+    );
+    await renderProject(asUser(baseState(), "u_vlad"));
+
+    const tabs = screen.getAllByRole("tab").map((t) => t.textContent?.trim());
+    expect(tabs).toEqual(["Client Info", "Board", "Files"]);
+    // The way to change it is on the row, and it is named.
+    expect(screen.getByRole("button", { name: "Customise tabs" })).toBeInTheDocument();
+  });
 });
 
 describe("the pane, for an editor", () => {

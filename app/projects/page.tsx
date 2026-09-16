@@ -38,20 +38,20 @@ import { DocumentPage } from "@/components/documents/document-page";
 import { Board } from "@/components/kanban/board";
 import { ListView } from "@/components/kanban/list-view";
 import { ClientInfoPane } from "@/components/project/client-info-pane";
+import { TabPreferences } from "@/components/project/tab-preferences";
 import { useUI } from "@/components/ui-context";
 import { createAttachmentFromDataUrl } from "@/lib/attachments";
 import { emptySpreadsheetDataUrl, MIME, textToDataUrl, withExtension } from "@/lib/documents";
 import { isMine } from "@/lib/permissions";
+import {
+  DEFAULT_TAB_PREFS, loadTabPrefs, saveTabPrefs, visibleTabs,
+  type ProjectView, type TabPrefs,
+} from "@/lib/project-tabs";
 import { fileHref } from "@/lib/routes";
 import { useStore } from "@/lib/store";
 import { isDone } from "@/lib/statuses";
 import { PRIORITIES, PRIORITY_META, type Priority } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-/** The tabs a project has, in the order they appear. Named rather than
- *  written inline twice: the state and the Tabs callback had drifted into two
- *  copies of the same union, and a third tab meant remembering both. */
-type ProjectView = "board" | "list" | "client" | "files";
 
 function EmptyState({
   icon,
@@ -102,6 +102,15 @@ function ProjectPageInner() {
   const [assigneeFilter, setAssigneeFilter] = React.useState("all");
   const [priorityFilter, setPriorityFilter] = React.useState("all");
   const [newFile, setNewFile] = React.useState<"markdown" | "spreadsheet" | null>(null);
+  const [prefs, setPrefs] = React.useState<TabPrefs>(DEFAULT_TAB_PREFS);
+  React.useEffect(() => { setPrefs(loadTabPrefs()); }, []);
+  const tabs = visibleTabs(prefs);
+  // If the current tab has just been hidden, move to the first one shown
+  // rather than showing a selected tab that is not in the row.
+  React.useEffect(() => {
+    if (!tabs.some((t) => t.id === view)) setView(tabs[0].id);
+  }, [tabs, view]);
+  const changePrefs = (next: TabPrefs) => { setPrefs(next); saveTabPrefs(next); };
 
   const project = state.projects.find((p) => p.id === projectId);
 
@@ -292,25 +301,19 @@ function ProjectPageInner() {
         <div className="mt-3 flex flex-wrap items-center gap-2 pb-3">
           <Tabs value={view} onValueChange={(v) => setView(v as ProjectView)}>
             <TabsList className="h-8">
-              <TabsTrigger value="board" className="text-xs">
-                Board
-              </TabsTrigger>
-              <TabsTrigger value="list" className="text-xs">
-                List
-              </TabsTrigger>
-              <TabsTrigger value="client" className="text-xs">
-                Client Info
-              </TabsTrigger>
-              <TabsTrigger value="files" className="gap-1.5 text-xs">
-                Files
-                {project.attachments.length > 0 && (
-                  <Badge className="h-4 min-w-4 rounded-full px-1 text-[10px] tabular-nums">
-                    {project.attachments.length}
-                  </Badge>
-                )}
-              </TabsTrigger>
+              {tabs.map((tab) => (
+                <TabsTrigger key={tab.id} value={tab.id} className="gap-1.5 text-xs">
+                  {tab.label}
+                  {tab.id === "files" && project.attachments.length > 0 && (
+                    <Badge className="h-4 min-w-4 rounded-full px-1 text-[10px] tabular-nums">
+                      {project.attachments.length}
+                    </Badge>
+                  )}
+                </TabsTrigger>
+              ))}
             </TabsList>
           </Tabs>
+          <TabPreferences prefs={prefs} onChange={changePrefs} />
 
           {/* The filters narrow a list of tasks, so they belong to the two
               views that show one. Written as "is this a task view" rather
