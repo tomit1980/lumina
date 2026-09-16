@@ -274,11 +274,8 @@ describe("who may write it", () => {
     expect(data ?? []).toHaveLength(1);
   });
 
-  // An outsider-write-is-filtered test lived here, written against the
-  // `notes` column. That column is gone (44de001) — notes are now an
-  // append-only `project_client_notes` table with no update path at all, so
-  // the scenario this test asserted no longer exists to test. Its RLS
-  // coverage belongs to the notes-log task, against that table.
+  // Coverage for this scenario now lives in "notes are a log" below, against
+  // `project_client_notes`.
 
   it("REFUSES everybody a delete, including the editor", async () => {
     // There is no delete policy on either table, deliberately: the record's
@@ -470,11 +467,14 @@ describe("notes are a log", () => {
 
   it("REFUSES a viewer an insert", async () => {
     const them = await signInAs(emails.viewer, TEST_PASSWORD);
+    const insertId = `n_v_${stamp}`;
     const { data } = await them
       .from("project_client_notes")
-      .insert({ id: `n_v_${stamp}`, project_id: projects.locked, body: "Nope" })
+      .insert({ id: insertId, project_id: projects.locked, body: "Nope" })
       .select("id");
     expect(data ?? []).toHaveLength(0);
+    const { data: row } = await serviceClient.from("project_client_notes").select("id").eq("id", insertId);
+    expect(row ?? []).toHaveLength(0);
   });
 
   it("REFUSES an outsider a read", async () => {
