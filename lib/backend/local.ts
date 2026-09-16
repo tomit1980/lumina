@@ -91,8 +91,25 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
   // carry the five seeded ids — which is exactly what `DEFAULT_STATUSES`
   // still defines, ids included. So the backfill is the seed, and every
   // existing task keeps resolving without being rewritten.
-  const statuses: StatusDef[] =
+  let statuses: StatusDef[] =
     parsed.statuses ?? DEFAULT_STATUSES.map((s) => ({ ...s }));
+  let tasks = parsed.tasks;
+  if (parsedVersion < 15) {
+    // Same reshape the SQL migration 20260916000100 performs on a real
+    // workspace: move work out of Backlog, drop it, add the two payout
+    // columns if absent, and pin the known ids to their default positions.
+    // Names are left alone — a column a person renamed in Settings (e.g.
+    // "To Do" -> "Renamed To Do") keeps that name across the bump.
+    const byDefault = new Map(DEFAULT_STATUSES.map((s) => [s.id, s]));
+    tasks = tasks.map((t) => (t.status === "backlog" ? { ...t, status: "todo" } : t));
+    let reshaped = statuses.filter((s) => s.id !== "backlog");
+    for (const def of DEFAULT_STATUSES) {
+      if (!reshaped.some((s) => s.id === def.id)) reshaped = [...reshaped, { ...def }];
+    }
+    statuses = reshaped.map((s) =>
+      byDefault.has(s.id) ? { ...s, position: byDefault.get(s.id)!.position } : s
+    );
+  }
   // Ranks and the Owner role arrived in SEED_VERSION 14. A workspace stored
   // before then has roles without a `rank`, and no owner at all: backfill the
   // rank from the seeded definition of the same id (so a renamed custom role
@@ -169,7 +186,7 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
       members: p.members ?? [],
       attachments: p.attachments ?? [],
     })),
-    tasks: parsed.tasks.map((t) => ({
+    tasks: tasks.map((t) => ({
       ...t,
       priority: t.priority === "urgent" ? "high" : t.priority,
       attachments: t.attachments ?? [],

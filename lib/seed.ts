@@ -4,7 +4,10 @@ import type { AppState, DM, Message, Task } from "./types";
 
 // 14: statuses became rows (`AppState.statuses`) instead of a hardcoded
 // union, and the Owner role joined the seeded three.
-export const SEED_VERSION = 14;
+// 15: the board's five columns (Backlog…Done) became six — Backlog dropped,
+// Pending Payout (From Super) and Pending Payment (From Client) added before
+// Done. See migrate() in lib/backend/local.ts.
+export const SEED_VERSION = 15;
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

@@ -13,6 +13,7 @@ import { cleanup } from "@testing-library/react";
 
 import { createSeed, SEED_VERSION } from "@/lib/seed";
 import { AuthProvider, DEMO_PASSWORD, useAuth } from "@/lib/auth";
+import { sortedStatuses } from "@/lib/statuses";
 import type { AppState } from "@/lib/types";
 import { mountFromExistingStorage, STORAGE_KEY } from "./_support";
 
@@ -461,5 +462,51 @@ describe("a workspace stored by a newer build is shown as a seed, but never over
     // test above while breaking the demo completely.
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!) as AppState;
     expect(stored.messages.some((m) => m.content === "an ordinary change")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEED_VERSION 15 — the board's five columns (Backlog…Done) became six
+// (To Do, In Progress, In Review, Pending Payout (From Super), Pending
+// Payment (From Client), Done). A workspace stored under 14 still has a
+// `backlog` column and tasks sitting in it; the bump must move that work to
+// `todo`, drop `backlog`, add the two payout columns, and pin every known id
+// to its default position — without undoing a rename a person made to a
+// column that survives (`todo` here), which is what task-A2's brief guards.
+// ---------------------------------------------------------------------------
+describe("v14 -> v15 reshapes the columns and moves Backlog work to To Do", () => {
+  it("drops backlog, adds the payout columns, and keeps a surviving column's rename", async () => {
+    const stored = createSeed() as AppState;
+    stored.version = 14;
+    stored.statuses = [
+      { id: "backlog", name: "Backlog", color: "#a1a1aa", position: 0, isDone: false },
+      { id: "todo", name: "Renamed To Do", color: "#0ea5e9", position: 1, isDone: false },
+      { id: "in-progress", name: "In Progress", color: "#f59e0b", position: 2, isDone: false },
+      { id: "in-review", name: "In Review", color: "#8b5cf6", position: 3, isDone: false },
+      { id: "done", name: "Done", color: "#10b981", position: 4, isDone: true },
+    ];
+    const movedTaskId = stored.tasks[0].id;
+    stored.tasks = stored.tasks.map((t) =>
+      t.id === movedTaskId ? { ...t, status: "backlog" } : t
+    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+
+    const { result } = await mountFromExistingStorage();
+
+    expect(sortedStatuses(result.current.state.statuses).map((s) => s.id)).toEqual([
+      "todo",
+      "in-progress",
+      "in-review",
+      "pending-payout",
+      "pending-payment",
+      "done",
+    ]);
+    const movedTask = result.current.state.tasks.find((t) => t.id === movedTaskId)!;
+    expect(movedTask.status).toBe("todo");
+    // A rename the person made is not undone by the bump.
+    expect(
+      result.current.state.statuses.find((s) => s.id === "todo")?.name
+    ).toBe("Renamed To Do");
+    expect(result.current.state.version).toBe(SEED_VERSION);
   });
 });
