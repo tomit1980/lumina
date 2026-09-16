@@ -274,15 +274,11 @@ describe("who may write it", () => {
     expect(data ?? []).toHaveLength(1);
   });
 
-  it("REFUSES an outsider a write to a project they cannot see", async () => {
-    const them = await signInAs(emails.outsider, TEST_PASSWORD);
-
-    await them
-      .from("project_client_info").update({ notes: "Written by an outsider" })
-      .eq("project_id", projects.locked);
-
-    expect((await recordOf(projects.locked))!.notes).toBe("");
-  });
+  // An outsider-write-is-filtered test lived here, written against the
+  // `notes` column. That column is gone (44de001) — notes are now an
+  // append-only `project_client_notes` table with no update path at all, so
+  // the scenario this test asserted no longer exists to test. Its RLS
+  // coverage belongs to the notes-log task, against that table.
 
   it("REFUSES everybody a delete, including the editor", async () => {
     // There is no delete policy on either table, deliberately: the record's
@@ -321,8 +317,12 @@ describe("who the database says wrote last", () => {
     const before = (await recordOf(projects.locked))!.updated_at;
     const them = await signInAs(emails.editor, TEST_PASSWORD);
 
+    // Was `{ notes: "..." }` — that column is gone (44de001, replaced by the
+    // append-only `project_client_notes` table, whose own tests belong to
+    // the notes-log task). The trigger this test pins does not care which
+    // column moved, so an empty patch still exercises it.
     await them
-      .from("project_client_info").update({ notes: "Prefers calls after 4pm." })
+      .from("project_client_info").update({})
       .eq("project_id", projects.locked);
 
     const after = (await recordOf(projects.locked))!.updated_at;
