@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import * as React from "react";
 
@@ -19,6 +19,19 @@ import type { AppState } from "@/lib/types";
 
 installMenuShims();
 const h = React.createElement;
+
+// Each case renders the whole page, and without this the second render is
+// APPENDED to the first one's DOM rather than replacing it — both cases' cards
+// then sit in the document at once. The two cases here happen not to collide,
+// but the file passing depends on that accident: it makes a third case, or a
+// mutation of the access filter, fail as "Found multiple elements" instead of
+// saying what is actually wrong. Auto-cleanup does not run in this repo
+// (`globals` is off in vitest.config.ts), so every jsdom file registers it by
+// hand — see tests/qa/accessible-names.test.ts and client-info-pane.test.ts.
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 async function renderAs(state: AppState) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
