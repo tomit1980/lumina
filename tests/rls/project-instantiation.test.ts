@@ -55,7 +55,7 @@ function taskRows(projectKey: string) {
     id: `t_${projectKey}_${i}_${stamp}`,
     title,
     description: "",
-    status: "backlog",
+    status: "todo",
     priority: "medium",
     labels: [] as string[],
     position: i,

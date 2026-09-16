@@ -89,11 +89,11 @@ describe("who may write a status", () => {
     const { data } = await admin
       .from("statuses")
       .update({ name: "Renamed by an admin" })
-      .eq("id", "backlog")
+      .eq("id", "todo")
       .select("id");
     expect(data ?? []).toHaveLength(0);
     const { data: after } = await serviceClient
-      .from("statuses").select("name").eq("id", "backlog").maybeSingle();
+      .from("statuses").select("name").eq("id", "todo").maybeSingle();
     expect(after?.name).not.toBe("Renamed by an admin");
   });
 
@@ -150,7 +150,7 @@ describe("the rules that are schema, not policy", () => {
     // A partial unique index. Without it, `isDone` would answer according to
     // whichever row came back first.
     const owner = await signInAs(emails.owner, TEST_PASSWORD);
-    const { error } = await owner.from("statuses").update({ is_done: true }).eq("id", "backlog");
+    const { error } = await owner.from("statuses").update({ is_done: true }).eq("id", "todo");
     expect(error).not.toBeNull();
     const { data } = await serviceClient.from("statuses").select("id").eq("is_done", true);
     expect(data ?? []).toHaveLength(1);
