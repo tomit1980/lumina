@@ -427,3 +427,65 @@ describe("the shapes the columns refuse", () => {
     expect(error?.code).toBe("23505");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The notes log — replacement coverage for the outsider-write test dropped
+// above (44de001): that scenario targeted the removed `notes` column, and its
+// equivalent now belongs here, against `project_client_notes`
+// (20260916000200). There is deliberately no update or delete policy on this
+// table at all — this block is what proves that absence actually refuses
+// everybody, editor included, rather than merely being unexercised.
+// ---------------------------------------------------------------------------
+
+describe("notes are a log", () => {
+  const noteId = `n_rls_${stamp}`;
+
+  it("CONTROL: the editor appends an entry, and the database names them as its author", async () => {
+    const them = await signInAs(emails.editor, TEST_PASSWORD);
+    const { data, error } = await them
+      .from("project_client_notes")
+      .insert({ id: noteId, project_id: projects.locked, body: "Called the fund.", created_by: ids.viewer })
+      .select("id, created_by");
+    expect(error).toBeNull();
+    expect(data).toHaveLength(1);
+    // The request claimed the viewer wrote it. The trigger disagrees.
+    expect(data![0].created_by).toBe(ids.editor);
+  });
+
+  it("REFUSES the editor an update of their own entry", async () => {
+    const them = await signInAs(emails.editor, TEST_PASSWORD);
+    const { data } = await them
+      .from("project_client_notes").update({ body: "Rewritten" }).eq("id", noteId).select("id");
+    expect(data ?? []).toHaveLength(0);
+    const { data: still } = await serviceClient.from("project_client_notes").select("body").eq("id", noteId).single();
+    expect(still?.body).toBe("Called the fund.");
+  });
+
+  it("REFUSES the editor a delete of their own entry", async () => {
+    const them = await signInAs(emails.editor, TEST_PASSWORD);
+    await them.from("project_client_notes").delete().eq("id", noteId);
+    const { data } = await serviceClient.from("project_client_notes").select("id").eq("id", noteId);
+    expect(data).toHaveLength(1);
+  });
+
+  it("REFUSES a viewer an insert", async () => {
+    const them = await signInAs(emails.viewer, TEST_PASSWORD);
+    const { data } = await them
+      .from("project_client_notes")
+      .insert({ id: `n_v_${stamp}`, project_id: projects.locked, body: "Nope" })
+      .select("id");
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  it("REFUSES an outsider a read", async () => {
+    const them = await signInAs(emails.outsider, TEST_PASSWORD);
+    const { data } = await them.from("project_client_notes").select("*").eq("project_id", projects.locked);
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  it("CONTROL: a viewer on the project reads the log", async () => {
+    const them = await signInAs(emails.viewer, TEST_PASSWORD);
+    const { data } = await them.from("project_client_notes").select("id").eq("project_id", projects.locked);
+    expect((data ?? []).map((r) => r.id)).toContain(noteId);
+  });
+});

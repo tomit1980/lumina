@@ -184,6 +184,21 @@ try {
     !JSON.stringify(docs.data ?? []).includes(PROJ),
     JSON.stringify(docs.data ?? []).includes(PROJ) ? "DOCUMENT STATUS LEAKED" : "hidden");
 
+  // Notes hold the client's circumstances; an outsider gets none of them.
+  const NOTE = `Case note ${stamp} - circumstances`;
+  must("seed note", await svc.from("project_client_notes").insert({
+    id: `n_probe_${stamp}`, project_id: PROJ, body: NOTE,
+  }));
+  const noteAsColleague = await colleague.from("project_client_notes").select("*").eq("project_id", PROJ);
+  check("a colleague on another case cannot read this client's notes",
+    (noteAsColleague.data ?? []).length === 0,
+    (noteAsColleague.data ?? []).length ? "LEAKED" : "hidden");
+  const noteAsEditor = await editor.from("project_client_notes").select("body").eq("project_id", PROJ);
+  check("CONTROL: the case's editor reads them",
+    (noteAsEditor.data ?? []).some((n) => n.body === NOTE));
+  const rewrite = await editor.from("project_client_notes").update({ body: "x" }).eq("id", `n_probe_${stamp}`).select("id");
+  check("nobody, editor included, can rewrite a note", (rewrite.data ?? []).length === 0);
+
   // The join route. `select("*, projects(*)")` and its reverse are how an
   // embedded resource sometimes escapes a policy that guards the base table.
   const embed = await colleague.from("projects").select("*, project_client_info(*)");
@@ -191,13 +206,17 @@ try {
     !JSON.stringify(embed.data ?? []).includes(DIAGNOSIS),
     JSON.stringify(embed.data ?? []).includes(DIAGNOSIS) ? "LEAKED VIA EMBED" : "hidden");
 
+  // Was `{ notes: "planted" }` against the now-dropped `notes` column
+  // (20260916000200 moved notes to the append-only `project_client_notes`
+  // table, covered above). `employer_name` is untouched until the realtime
+  // MARK further down, so it is free here for the same isolation check.
   const write = await colleague.from("project_client_info")
-    .update({ notes: "planted" }).eq("project_id", PROJ);
+    .update({ employer_name: "planted" }).eq("project_id", PROJ);
   const { data: afterWrite } = await svc.from("project_client_info")
-    .select("notes").eq("project_id", PROJ).single();
+    .select("employer_name").eq("project_id", PROJ).single();
   check("nor write to it",
-    afterWrite.notes !== "planted",
-    afterWrite.notes === "planted" ? "WROTE TO ANOTHER CASE'S RECORD" : `refused${write.error ? "" : " (silently)"}`);
+    afterWrite.employer_name !== "planted",
+    afterWrite.employer_name === "planted" ? "WROTE TO ANOTHER CASE'S RECORD" : `refused${write.error ? "" : " (silently)"}`);
 
   // -------------------------------------------------------------------
   // The viewer on this case: may read, may not change
