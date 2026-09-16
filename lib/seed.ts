@@ -367,13 +367,13 @@ export function createSeed(): AppState {
       assigneeId: "u_vlad", dueDate: midnightPlus(3), labels: ["frontend", "api"],
       startTime: "15:30", durationMinutes: 60, reminderMinutes: 15,
     }),
-    task("p_website", "Launch-day social & email assets", "backlog", "medium", {
+    task("p_website", "Launch-day social & email assets", "todo", "medium", {
       assigneeId: "u_elena", labels: ["brand", "marketing"],
     }),
-    task("p_website", "A/B test plan for new homepage", "backlog", "low", {
+    task("p_website", "A/B test plan for new homepage", "todo", "low", {
       assigneeId: "u_sam", labels: ["research", "marketing"],
     }),
-    task("p_website", "Dark mode for marketing site", "backlog", "low", {
+    task("p_website", "Dark mode for marketing site", "todo", "low", {
       labels: ["design", "frontend"],
     }),
 
@@ -402,10 +402,10 @@ export function createSeed(): AppState {
     task("p_mobile", "Beta program: recruit 50 external testers", "todo", "high", {
       assigneeId: "u_sam", dueDate: midnightPlus(10), labels: ["research"],
     }),
-    task("p_mobile", "App Store listing: screenshots & copy", "backlog", "low", {
+    task("p_mobile", "App Store listing: screenshots & copy", "todo", "low", {
       assigneeId: "u_elena", labels: ["brand", "marketing"],
     }),
-    task("p_mobile", "Accessibility audit (VoiceOver / TalkBack)", "backlog", "medium", {
+    task("p_mobile", "Accessibility audit (VoiceOver / TalkBack)", "todo", "medium", {
       labels: ["frontend"],
     }),
   ];

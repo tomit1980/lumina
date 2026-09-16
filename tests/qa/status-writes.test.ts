@@ -106,10 +106,10 @@ describe("removing a column", () => {
     // Without this, a `deleteStatus` that refused everything would pass both
     // negatives above while making the feature useless.
     const { result } = await mount(asOwner());
-    const ok = await run(() => result.current.deleteStatus("backlog"));
+    const ok = await run(() => result.current.deleteStatus("pending-payment"));
 
     expect(ok).toBe(true);
-    expect(result.current.state.statuses.some((s) => s.id === "backlog")).toBe(false);
+    expect(result.current.state.statuses.some((s) => s.id === "pending-payment")).toBe(false);
   });
 });
 

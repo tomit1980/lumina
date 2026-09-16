@@ -26,7 +26,7 @@ Built as a delightful daily driver for small-to-medium teams: fast, obvious, pre
 - Enter to send, Shift+Enter for newline, auto-growing composer
 
 ### 📋 Projects & Kanban
-- Per-project boards with 5 columns: Backlog → To Do → In Progress → In Review → Done
+- Per-project boards with 6 columns: To Do → In Progress → In Review → Pending Payout (From Super) → Pending Payment (From Client) → Done
 - Buttery **drag & drop** (dnd-kit) in **both views**: reorder within a status, drag across statuses (board columns or list sections), animated drag overlay, keyboard-accessible (Space to lift, arrows to move)
 - Task details: **priority (High/Medium/Low)**, assignee, due dates (overdue is called out), description
 - **Rename & edit projects** — click the project title (or the ⋯ menu / sidebar row → Edit) to change name, description, icon, accent, or **priority (High/Medium/Low)**, shown as a badge next to the project name

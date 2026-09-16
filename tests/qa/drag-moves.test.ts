@@ -156,12 +156,12 @@ describe("a drag across several columns (QA-118)", () => {
       backend.flush();
     });
     await act(async () => {
-      result.current.onDragOver(over("backlog"));
+      result.current.onDragOver(over("pending-payout"));
     });
     await act(async () => {
       backend.flush();
     });
 
-    expect(backend.started.map((c) => c.status)).toContain("backlog");
+    expect(backend.started.map((c) => c.status)).toContain("pending-payout");
   });
 });

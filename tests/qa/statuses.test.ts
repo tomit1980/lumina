@@ -40,16 +40,13 @@ function renamed(): StatusDef[] {
 }
 
 describe("the seeded columns", () => {
-  it("preserve the five ids exactly — the decision the whole change rests on", () => {
-    // Not cosmetic. ~160 status literals across 21 test files are still valid
-    // only because these ids did not move; if this fails, the change is a
-    // rewrite rather than a contained edit.
+  it("preserve the six ids exactly — the decision the whole change rests on", () => {
     expect(DEFAULT_STATUSES.map((s) => s.id)).toEqual([
-      "backlog",
-      "todo",
-      "in-progress",
-      "in-review",
-      "done",
+      "todo", "in-progress", "in-review", "pending-payout", "pending-payment", "done",
+    ]);
+    expect(DEFAULT_STATUSES.map((s) => s.name)).toEqual([
+      "To Do", "In Progress", "In Review",
+      "Pending Payout (From Super)", "Pending Payment (From Client)", "Done",
     ]);
   });
 
@@ -74,8 +71,8 @@ describe("renaming a column changes nothing but its name", () => {
     expect(statusById(after, "done")?.name).toBe("Shipped");
   });
 
-  it("still resolves a reopen target", () => {
-    expect(firstOpenStatus(renamed())).toBe("backlog");
+  it("land new work in To Do — the first open column — whatever it is called", () => {
+    expect(firstOpenStatus(renamed())).toBe("todo");
   });
 
   it("CONTROL: an open column is still open, so this is not just 'everything is done'", () => {
@@ -246,6 +243,6 @@ describe("a renamed column on the board itself", () => {
     expect(screen.queryByText("In Review")).toBeNull();
     // CONTROL: the columns nobody renamed are untouched, so this is not
     // passing because the board stopped rendering headers.
-    expect(screen.getByText("Backlog")).toBeTruthy();
+    expect(screen.getByText("Pending Payout (From Super)")).toBeTruthy();
   });
 });

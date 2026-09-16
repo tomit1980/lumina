@@ -19,15 +19,15 @@ import type { AppState, StatusDef, TaskStatus } from "./types";
  * over a stale copy is exactly the bug class this codebase keeps finding.
  */
 
-/** The seeded five, preserving their ids, their old `STATUS_META` labels and
- *  the hex equivalents of their old Tailwind dots. Preserving the ids is what
- *  keeps ~160 status literals across 21 test files valid. */
+/** The six pension-workflow columns. Preserving the ids across renames is
+ *  what keeps status literals across the test suite valid. */
 export const DEFAULT_STATUSES: StatusDef[] = [
-  { id: "backlog", name: "Backlog", color: "#a1a1aa", position: 0, isDone: false },
-  { id: "todo", name: "To Do", color: "#0ea5e9", position: 1, isDone: false },
-  { id: "in-progress", name: "In Progress", color: "#f59e0b", position: 2, isDone: false },
-  { id: "in-review", name: "In Review", color: "#8b5cf6", position: 3, isDone: false },
-  { id: "done", name: "Done", color: "#10b981", position: 4, isDone: true },
+  { id: "todo",            name: "To Do",                         color: "#0ea5e9", position: 0, isDone: false },
+  { id: "in-progress",     name: "In Progress",                   color: "#f59e0b", position: 1, isDone: false },
+  { id: "in-review",       name: "In Review",                     color: "#8b5cf6", position: 2, isDone: false },
+  { id: "pending-payout",  name: "Pending Payout (From Super)",   color: "#14b8a6", position: 3, isDone: false },
+  { id: "pending-payment", name: "Pending Payment (From Client)", color: "#f43f5e", position: 4, isDone: false },
+  { id: "done",            name: "Done",                          color: "#10b981", position: 5, isDone: true },
 ];
 
 /** Board order. `position` is the authority; ties fall back to id so the
