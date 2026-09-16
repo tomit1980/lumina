@@ -36,7 +36,7 @@ import { useUI } from "@/components/ui-context";
 import { useAuth } from "@/lib/auth";
 import { backendKind } from "@/lib/backend";
 import { useStore } from "@/lib/store";
-import { chatHref, dmHref, projectHref, settingsHref } from "@/lib/routes";
+import { allTasksHref, chatHref, dmHref, projectHref, settingsHref } from "@/lib/routes";
 
 export function CommandPalette() {
   // Read per render, not once at module load: `backendKind` is a build-time
@@ -94,6 +94,11 @@ export function CommandPalette() {
               <Users />
               Settings
               <CommandShortcut>G P</CommandShortcut>
+            </CommandItem>
+            <CommandItem onSelect={() => run(() => router.push(allTasksHref))}>
+              <CheckSquare />
+              All tasks
+              <CommandShortcut>G T</CommandShortcut>
             </CommandItem>
             {channels.map((c) =>
               c.isTeam ? (

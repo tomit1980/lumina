@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import {
   Bell,
   CalendarPlus,
+  CheckSquare,
   ChevronsUpDown,
   Command as CommandIcon,
   Hash,
@@ -62,7 +63,7 @@ import { isMineOrUnclaimed } from "@/lib/permissions";
 import { canUserSeeTaskProject, getUnreadCount, useStore } from "@/lib/store";
 import type { AppState, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { settingsHref, chatHref, dmHref, projectHref, useCurrentRoute, useIsViewing } from "@/lib/routes";
+import { allTasksHref, settingsHref, chatHref, dmHref, projectHref, useCurrentRoute, useIsViewing } from "@/lib/routes";
 
 /** Tasks eligible for the current user's schedule (.ics) export: has a due
  *  date, is theirs (owned, collaborated-on, or an unclaimed task they
@@ -363,6 +364,10 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <NavLink href="/" active={pathname === "/"} onNavigate={onNavigate}>
             <Home className="size-4" />
             Home
+          </NavLink>
+          <NavLink href={allTasksHref} active={pathname === "/tasks"} onNavigate={onNavigate}>
+            <CheckSquare className="size-4" />
+            All tasks
           </NavLink>
           {/* People became the Members section of Settings. `/people` still
               redirects, so it stays active here for anyone arriving by an old

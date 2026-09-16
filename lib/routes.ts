@@ -11,6 +11,8 @@ import { usePathname, useSearchParams } from "next/navigation";
 export const chatHref = (id: string) => `/chat?id=${encodeURIComponent(id)}`;
 export const dmHref = (id: string) => `/dm?id=${encodeURIComponent(id)}`;
 export const projectHref = (id: string) => `/projects?id=${encodeURIComponent(id)}`;
+/** Every task the person can see, across every project, on one board. */
+export const allTasksHref = "/tasks";
 /** Full-page editor/viewer for one of a project's files. */
 export const fileHref = (projectId: string, attachmentId: string) =>
   `${projectHref(projectId)}&file=${encodeURIComponent(attachmentId)}`;
