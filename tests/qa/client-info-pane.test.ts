@@ -480,9 +480,12 @@ describe("notes as a log", () => {
           diagnosis: "", lastDayOfWork: null, employerName: "", contractSigned: false,
           newPhone: "", newEmail: "", documents: {}, hasPassword: false,
           updatedAt: 0, updatedBy: null,
+          // Oldest first, matching the real invariant: hydrate sorts on read
+          // and the optimistic append pushes to the end, so this is the only
+          // order the array ever actually has.
           notes: [
-            { id: "n_2", body: "Bank statement received.", createdAt: Date.UTC(2026, 8, 16, 9, 10), createdBy: "u_maya" },
             { id: "n_1", body: "Called, left a message.", createdAt: Date.UTC(2026, 8, 15, 14, 32), createdBy: null },
+            { id: "n_2", body: "Bank statement received.", createdAt: Date.UTC(2026, 8, 16, 9, 10), createdBy: "u_maya" },
           ],
         },
       }),
@@ -519,7 +522,9 @@ describe("notes as a log", () => {
 
   it("gives a viewer the entries and no box", async () => {
     // Same viewer fixture the existing "shows the record with no inputs at
-    // all" test uses: p_website, restricted, u_maya as a viewer.
+    // all" test uses: p_website, restricted, u_maya as a viewer — plus a
+    // seeded note, so "sees the entries" is actually exercised rather than
+    // trivially true against an empty log.
     const state = addProject(asUser(baseState(), "u_maya"), {
       id: "p_website2",
       name: "Other",
@@ -530,12 +535,27 @@ describe("notes as a log", () => {
       projects: state.projects.map((p) =>
         p.id !== "p_website"
           ? p
-          : { ...p, restricted: true, members: [{ userId: "u_maya", level: "viewer" as const }] }
+          : {
+              ...p,
+              restricted: true,
+              members: [{ userId: "u_maya", level: "viewer" as const }],
+              client: {
+                fullName: "", dateOfBirth: null, phone: "", email: "", address: "",
+                superCompany: "", memberId: "", amount: null, currency: "AUD",
+                diagnosis: "", lastDayOfWork: null, employerName: "", contractSigned: false,
+                newPhone: "", newEmail: "", documents: {}, hasPassword: false,
+                updatedAt: 0, updatedBy: null,
+                notes: [
+                  { id: "n_1", body: "Viewer-visible note.", createdAt: Date.UTC(2026, 8, 15, 14, 32), createdBy: "u_maya" },
+                ],
+              },
+            }
       ),
     };
     await renderProject(restricted);
     await selectTab("Client Info");
 
+    expect(screen.getByText("Viewer-visible note.")).toBeInTheDocument();
     expect(screen.queryByLabelText("New note")).not.toBeInTheDocument();
   });
 });

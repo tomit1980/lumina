@@ -480,41 +480,39 @@ export function ClientInfoPane({
           }
         >
           <ol className="flex flex-col gap-3">
-            {/* Append-only log, and the array's own order is not trusted:
-             *  the store appends on write, but a rehydrate or a fixture can
-             *  hand this component notes in any order, and the one promise
-             *  this list makes is oldest first. */}
-            {[...client.notes]
-              .sort((a, b) => a.createdAt - b.createdAt)
-              .map((note) => {
-                const author = note.createdBy
-                  ? appState.users.find((u) => u.id === note.createdBy)
-                  : undefined;
-                return (
-                  <li key={note.id} className="flex items-start gap-2.5">
-                    {author ? (
-                      <UserAvatar user={author} size="sm" className="mt-0.5" />
-                    ) : (
-                      <span
-                        className="mt-0.5 size-6 shrink-0 rounded-full bg-muted"
-                        aria-hidden
-                      />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[11px] text-muted-foreground">
-                        <span className="font-medium text-foreground">
-                          {author?.name ?? "Someone"}
-                        </span>
-                        {" · "}
-                        <time dateTime={new Date(note.createdAt).toISOString()}>
-                          {format(note.createdAt, "d MMM yyyy, HH:mm")}
-                        </time>
-                      </p>
-                      <p className="whitespace-pre-wrap text-[13px]">{note.body}</p>
-                    </div>
-                  </li>
-                );
-              })}
+            {/* Oldest first, and that ordering is the array's own: hydrate
+             *  sorts on read (lib/backend/supabase/mapping.ts) and the
+             *  optimistic append does `[...client.notes, note]`, so nothing
+             *  here needs to re-sort a shape that cannot occur. */}
+            {client.notes.map((note) => {
+              const author = note.createdBy
+                ? appState.users.find((u) => u.id === note.createdBy)
+                : undefined;
+              return (
+                <li key={note.id} className="flex items-start gap-2.5">
+                  {author ? (
+                    <UserAvatar user={author} size="sm" className="mt-0.5" />
+                  ) : (
+                    <span
+                      className="mt-0.5 size-6 shrink-0 rounded-full bg-muted"
+                      aria-hidden
+                    />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {author?.name ?? "Someone"}
+                      </span>
+                      {" · "}
+                      <time dateTime={new Date(note.createdAt).toISOString()}>
+                        {format(note.createdAt, "d MMM yyyy, HH:mm")}
+                      </time>
+                    </p>
+                    <p className="whitespace-pre-wrap text-[13px]">{note.body}</p>
+                  </div>
+                </li>
+              );
+            })}
             {client.notes.length === 0 && (
               <li className="text-[13px] text-muted-foreground">No notes yet.</li>
             )}
