@@ -1091,6 +1091,15 @@ export type Database = {
           secret_name: string
         }[]
       }
+      complete_task_with_next: {
+        Args: { p_index: number; p_next_id: string; p_task_id: string }
+        Returns: {
+          created: boolean
+          next_assignee: string
+          next_due: string
+          next_position: number
+        }[]
+      }
       create_project_with_tasks: {
         Args: { p_project: Json; p_tasks: Json }
         Returns: undefined
