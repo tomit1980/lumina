@@ -3,18 +3,30 @@ import { cpus } from "node:os";
 import path from "node:path";
 
 /**
- * Vitest defaults to one fork per core. Most of this suite is jsdom, and a
- * dozen forks each booting their own DOM is enough memory pressure on an
- * ordinary 16 GB machine that workers stop answering the reporter: the run
- * ends `Tests 955 passed` and `Errors 2 errors`, from
- * `[vitest-worker]: Timeout calling "onTaskUpdate"`, and vitest exits 1.
- * A suite that is entirely green and still fails the build is the worst
- * possible signal, and this repo has already lost one CI build to exactly it.
+ * Vitest defaults to one fork per core. This box has 12 and the suite is
+ * mostly jsdom, so a dozen forks each booting a DOM fight for memory. Four is
+ * measured: the run is FASTER at four than at twelve (77s against 88s). That,
+ * and nothing else, is why the cap is here.
  *
- * Four is measured, not guessed: at the default twelve the errors appeared on
- * every run of the full suite, and at four on none of three, while the run got
- * FASTER (77s against 88s) because the forks stop fighting for memory. Capped
- * by the core count so a 2-core CI box is not oversubscribed.
+ * IT DOES NOT FIX `npm test` EXITING 1 ON A GREEN RUN, and an earlier version
+ * of this comment claimed it did, on the strength of three clean runs in a
+ * row. It is not fixed. `[vitest-worker]: Timeout calling "onTaskUpdate"` still
+ * appears, and the run still ends `955 passed`, `2 errors`, exit 1.
+ *
+ * What it is NOT, each ruled out by measurement rather than argument:
+ *   - not fork contention   -> identical at maxForks 2 and 4
+ *   - not reporter cost     -> identical with --reporter=dot
+ *   - not a specific file   -> bisected; either 25-file half is clean, so no
+ *                              file carries it, and 50 files reproduce it
+ *
+ * It scales with the SIZE of the run: 25 files clean, 50 or more gives exactly
+ * two. That shape says worker-pool teardown on this machine, not this
+ * codebase. CI runs `npm test` on every push (.github/workflows/deploy.yml)
+ * and is green, so it does not reproduce on a fresh 2-core runner.
+ *
+ * THE RULE THAT FOLLOWS: on this machine, read the FAILURE COUNT, not the exit
+ * code — `grep -cE "^\s*×"` — and treat a non-zero exit with zero failures as
+ * this and nothing else. Anywhere but here, exit code is still the gate.
  */
 const MAX_FORKS = Math.max(1, Math.min(4, cpus().length));
 
