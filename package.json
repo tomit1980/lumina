@@ -16,6 +16,7 @@
     "probes": "node tests/probes/leak_probe.mjs && node tests/probes/dm_probe.mjs && node tests/probes/project_probe.mjs && node tests/probes/takeover_probe.mjs && node tests/probes/attachment_probe.mjs && node tests/probes/revocation_probe.mjs && node tests/probes/invariant_probe.mjs && node tests/probes/collaborator_probe.mjs && node tests/probes/store_swap_probe.mjs && node tests/probes/storage_probe.mjs && node tests/probes/realtime_probe.mjs && node tests/probes/realtime_auth_probe.mjs && node tests/probes/client_probe.mjs && node tests/probes/definer_probe.mjs"
   },
   "dependencies": {
+    "@date-fns/tz": "^1.5.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",

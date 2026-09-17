@@ -971,7 +971,12 @@ export type Database = {
           position: number
           priority: string
           project_id: string
+          recurred_from: string | null
           reminder_minutes: number | null
+          repeat_anchor_day: number | null
+          repeat_interval: number | null
+          repeat_tz: string | null
+          repeat_unit: string | null
           start_time: string | null
           status: string
           title: string
@@ -988,7 +993,12 @@ export type Database = {
           position?: number
           priority?: string
           project_id: string
+          recurred_from?: string | null
           reminder_minutes?: number | null
+          repeat_anchor_day?: number | null
+          repeat_interval?: number | null
+          repeat_tz?: string | null
+          repeat_unit?: string | null
           start_time?: string | null
           status?: string
           title: string
@@ -1005,7 +1015,12 @@ export type Database = {
           position?: number
           priority?: string
           project_id?: string
+          recurred_from?: string | null
           reminder_minutes?: number | null
+          repeat_anchor_day?: number | null
+          repeat_interval?: number | null
+          repeat_tz?: string | null
+          repeat_unit?: string | null
           start_time?: string | null
           status?: string
           title?: string
@@ -1030,6 +1045,13 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_recurred_from_fkey"
+            columns: ["recurred_from"]
+            isOneToOne: false
+            referencedRelation: "tasks"
             referencedColumns: ["id"]
           },
           {
