@@ -182,6 +182,41 @@ export interface TaskSet {
 }
 
 export const PRIORITIES = ["high", "medium", "low"] as const;
+
+export const REPEAT_UNITS = ["day", "week", "month"] as const;
+export type RepeatUnit = (typeof REPEAT_UNITS)[number];
+
+/**
+ * How a task repeats. One shape covers all four patterns the workspace needs:
+ * daily is day/1, weekly week/1, monthly month/1, every-N-days day/N — and
+ * every-two-weeks and quarterly come free.
+ *
+ * The arithmetic lives in `lib/recurrence.ts`, which re-exports this so the
+ * calendar's vocabulary can be imported from either side. It sits here, beside
+ * `PRIORITIES`, because it is part of a task's shape rather than a behaviour.
+ */
+export interface RepeatRule {
+  unit: RepeatUnit;
+  /** Units between occurrences. An integer, 1–999. */
+  interval: number;
+  /**
+   * The day of the month the series intends, 1–31. Present for `month` and
+   * absent otherwise, because day and week arithmetic never clamps.
+   *
+   * It is why a task due the 31st lands on the 28th in February and then
+   * RETURNS to the 31st in March.
+   */
+  anchorDay: number | null;
+  /**
+   * The IANA zone the series' calendar is computed in — captured once, when
+   * the rule is created, and preserved through every later edit.
+   *
+   * `dueDate` is an instant carrying no zone, so "what date is this, and what
+   * is the next one" has no answer until one is named. Without this, each
+   * completion would re-anchor the series to whoever closed the card.
+   */
+  timeZone: string;
+}
 export type Priority = (typeof PRIORITIES)[number];
 
 export interface Task {
@@ -201,6 +236,16 @@ export interface Task {
   durationMinutes: number | null;
   /** Minutes before the start to fire an in-app reminder; null = no reminder. */
   reminderMinutes: number | null;
+  /**
+   * Repeats when completed: finishing it creates the next occurrence, dated
+   * from `dueDate` rather than from today. Null means it does not repeat.
+   *
+   * A rule is meaningless without a `dueDate` and is never stored with one
+   * absent — the database says so too (`tasks_repeat_needs_due_date`). One
+   * nested value rather than four flat columns, so there are exactly two valid
+   * states here instead of sixteen. See `lib/recurrence.ts`.
+   */
+  repeat: RepeatRule | null;
   labels: string[];
   attachments: Attachment[];
   /** Sort position within its status column. */

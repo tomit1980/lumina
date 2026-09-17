@@ -129,6 +129,10 @@ export async function createTask(client: LuminaClient, task: Task): Promise<Task
       start_time: task.startTime,
       duration_minutes: task.durationMinutes,
       reminder_minutes: task.reminderMinutes,
+      repeat_unit: task.repeat?.unit ?? null,
+      repeat_interval: task.repeat?.interval ?? null,
+      repeat_anchor_day: task.repeat?.anchorDay ?? null,
+      repeat_tz: task.repeat?.timeZone ?? null,
       labels: task.labels,
       created_by: task.createdBy,
       // Not `toTimestamp`: `created_at` is NOT NULL, and `Task.createdAt` is
@@ -254,6 +258,18 @@ export async function updateTask(
       : {}),
     ...(patch.reminderMinutes !== undefined
       ? { reminder_minutes: patch.reminderMinutes }
+      : {}),
+    // One model key, four columns. `repeat: null` must send four explicit
+    // nulls rather than omit the keys, or turning recurrence off would be
+    // indistinguishable from not mentioning it — the whole reason the model
+    // holds one nested value instead of four flat fields.
+    ...(patch.repeat !== undefined
+      ? {
+          repeat_unit: patch.repeat?.unit ?? null,
+          repeat_interval: patch.repeat?.interval ?? null,
+          repeat_anchor_day: patch.repeat?.anchorDay ?? null,
+          repeat_tz: patch.repeat?.timeZone ?? null,
+        }
       : {}),
     ...(patch.labels !== undefined ? { labels: patch.labels } : {}),
     ...(patch.assigneeId !== undefined && patch.assigneeId !== existing.data.assignee_id

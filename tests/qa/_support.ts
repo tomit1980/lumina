@@ -137,6 +137,7 @@ export function addTask(
     startTime: null,
     durationMinutes: null,
     reminderMinutes: null,
+    repeat: null,
     labels: [],
     attachments: [],
     order: 0,

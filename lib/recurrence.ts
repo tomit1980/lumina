@@ -1,7 +1,5 @@
 import { TZDate } from "@date-fns/tz";
 
-import type { Task } from "./types";
-
 /**
  * When a recurring task's next occurrence falls due.
  *
@@ -22,32 +20,13 @@ import type { Task } from "./types";
  *    countries completing the same task produce identical instants.
  */
 
-export const REPEAT_UNITS = ["day", "week", "month"] as const;
-export type RepeatUnit = (typeof REPEAT_UNITS)[number];
+// The vocabulary lives in ./types beside PRIORITIES, because it describes a
+// task's shape; the arithmetic lives here. Re-exported so callers can import
+// either from the module they already depend on.
+import { REPEAT_UNITS, type RepeatRule, type RepeatUnit } from "./types";
 
-export interface RepeatRule {
-  unit: RepeatUnit;
-  /** Units between occurrences. An integer, 1–999. */
-  interval: number;
-  /**
-   * The day of the month the series intends, 1–31. Present for `month` and
-   * absent otherwise, because `day` and `week` arithmetic never clamps.
-   *
-   * It exists so a task due the 31st lands on the 28th in February and then
-   * RETURNS to the 31st in March. Computing each occurrence from the previous
-   * one's date alone would clamp once and stay clamped for ever.
-   */
-  anchorDay: number | null;
-  /**
-   * The IANA zone the series' calendar is computed in — captured once, when
-   * the rule is created, and preserved through every later edit.
-   *
-   * `dueDate` is an instant and carries no zone, so "what date is this, and
-   * what is the next one" has no answer until one is named. Without this the
-   * series would re-anchor to whoever happened to close the card.
-   */
-  timeZone: string;
-}
+export { REPEAT_UNITS };
+export type { RepeatRule, RepeatUnit };
 
 /** Roughly 11 years of daily, 76 of weekly, 333 of monthly. A base older than
  *  that is a corrupt row rather than a schedule, and returning null beats
@@ -105,7 +84,7 @@ export function toRepeatRule(
 /** Whether completing this task should produce another one. The single
  *  predicate both of the store's completion detectors ask, so they cannot
  *  disagree about what repeats. */
-export function repeats(task: Pick<Task, "dueDate" | "repeat">): boolean {
+export function repeats(task: { dueDate: number | null; repeat: RepeatRule | null }): boolean {
   return task.dueDate !== null && isRepeatRule(task.repeat);
 }
 

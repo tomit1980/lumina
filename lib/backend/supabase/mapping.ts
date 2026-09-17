@@ -52,6 +52,7 @@ import { ALL_PERMISSIONS } from "../../permissions";
 import { DEFAULT_CURRENCY } from "../../client-info";
 import { SEED_VERSION } from "../../seed";
 import type { Database } from "../../database.types";
+import { toRepeatRule } from "../../recurrence";
 import {
   PRIORITIES,
   type AccessLevel,
@@ -594,6 +595,11 @@ export function toAppState(rows: HydrateRows): AppState {
         startTime: t.start_time,
         durationMinutes: t.duration_minutes,
         reminderMinutes: t.reminder_minutes,
+        // Four columns in, one value out — and `toRepeatRule` fails closed, so
+        // a half-written row (possible only by hand, since
+        // `tasks_repeat_shape` forbids it) reads as "does not repeat" rather
+        // than as a rule with a guessed interval.
+        repeat: toRepeatRule(t.repeat_unit, t.repeat_interval, t.repeat_anchor_day, t.repeat_tz),
         labels: t.labels,
         attachments: filesFor(
           (taskAttachmentsByTask.get(t.id) ?? []).map((l) => l.attachment_id)

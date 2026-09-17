@@ -58,7 +58,8 @@ function task(id: string, projectId: string, over: Partial<Task> = {}): Task {
     id, projectId, title: `TW ${id}`, description: "", status: "todo",
     priority: "medium", assigneeId: null, dueDate: null, startTime: null,
     durationMinutes: null, reminderMinutes: null, labels: [], attachments: [],
-    order: 999, createdAt: Date.now(), createdBy: ids.own, collaboratorIds: [],
+    order: 999, createdAt: Date.now(), createdBy: ids.own, repeat: null,
+    collaboratorIds: [],
     ...over,
   };
 }

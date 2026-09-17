@@ -317,6 +317,9 @@ export function createSeed(): AppState {
       startTime: opts.startTime ?? null,
       durationMinutes: opts.durationMinutes ?? null,
       reminderMinutes: opts.reminderMinutes ?? null,
+      // The demo ships no recurring tasks: a seeded workspace that quietly
+      // regenerated cards would be indistinguishable from a bug.
+      repeat: null,
       labels: opts.labels ?? [],
       attachments: [],
       order,

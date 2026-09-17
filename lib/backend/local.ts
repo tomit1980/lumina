@@ -33,6 +33,7 @@ import type {
   Task,
   User,
 } from "../types";
+import { toRepeatRule } from "../recurrence";
 import type {
   AttachmentOwner,
   Backend,
@@ -194,6 +195,15 @@ export function migrate(parsed: LegacyState, parsedVersion: number): AppState {
       startTime: t.startTime ?? null,
       durationMinutes: t.durationMinutes ?? null,
       reminderMinutes: t.reminderMinutes ?? null,
+      // Recurrence is new — older tasks do not repeat. `toRepeatRule` fails
+      // closed, so a blob hand-edited into a half-written rule reads as "no
+      // rule" rather than as a rule with a guessed interval.
+      repeat: toRepeatRule(
+        t.repeat?.unit,
+        t.repeat?.interval,
+        t.repeat?.anchorDay,
+        t.repeat?.timeZone
+      ),
       // Collaborators are new — older tasks have none.
       collaboratorIds: t.collaboratorIds ?? [],
     })),

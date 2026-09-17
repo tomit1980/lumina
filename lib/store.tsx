@@ -52,6 +52,7 @@ import type {
   RoleDef,
   StatusDef,
   Task,
+  RepeatRule,
   TaskSet,
   TaskSetItem,
   TaskStatus,
@@ -147,6 +148,10 @@ export interface TaskInput {
   startTime: string | null;
   durationMinutes: number | null;
   reminderMinutes: number | null;
+  /** A repeat rule, or null. Optional like `collaboratorIds` below: almost no
+   *  caller sets one, and `createTask` defaults it to null. Never set without
+   *  a `dueDate` — see lib/recurrence.ts and `tasks_repeat_needs_due_date`. */
+  repeat?: RepeatRule | null;
   labels: string[];
   attachments: Attachment[];
   collaboratorIds?: string[];
@@ -2433,6 +2438,10 @@ export function StoreProvider({
         .map((item, index) => ({
           id: uid("t"),
           projectId: project.id,
+          // A task set is a template for one project's work, not a schedule:
+          // instantiated tasks never carry a rule. Recurrence is set per task,
+          // afterwards, by someone who means it.
+          repeat: null,
           title: item.title,
           description: item.description,
           status: column as string,
@@ -2893,6 +2902,7 @@ export function StoreProvider({
       ).length;
       const task: Task = {
         id: uid("t"),
+        repeat: null,
         ...input,
         collaboratorIds,
         order: columnSize,
