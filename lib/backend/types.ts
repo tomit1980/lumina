@@ -111,6 +111,25 @@ export type ClientInfoPatch = Partial<
 /** The editable fields of a task, as `updateTask` receives them. */
 export type TaskPatch = Partial<Omit<Task, "id" | "projectId">> & AttachmentRemovals;
 
+/**
+ * What the database decided when it completed a recurring task.
+ *
+ * The store guesses all of these optimistically so the new card appears at
+ * once, then adopts these values — the server is authoritative about the date
+ * (it owns the calendar arithmetic), the position (a trigger assigns it) and
+ * the owner (it drops anyone who has lost sight of the project).
+ *
+ * `created` is false when a successor already existed: a retry, or a second
+ * completion of the same occurrence. The caller has not made a second one and
+ * must not act as though it had.
+ */
+export interface CompletedRecurrence {
+  position: number;
+  assigneeId: string | null;
+  dueDate: number;
+  created: boolean;
+}
+
 /** The editable fields of a status. `id` never changes — that is what keeps
  *  every existing task resolving and every status literal in the suite valid. */
 export interface StatusPatch {
@@ -398,6 +417,26 @@ export interface Backend {
   createTask(task: Task): Promise<Task>;
   updateTask(taskId: string, patch: TaskPatch): Promise<void>;
   moveTask(taskId: string, toStatus: TaskStatus, toIndex: number): Promise<void>;
+  /**
+   * Complete a RECURRING task and create its next occurrence, in one
+   * transaction. An ordinary completion still goes through `moveTask`, so the
+   * elevated path below is off the common case entirely.
+   *
+   * Three arguments and no more. The successor's title, description, priority,
+   * owner, collaborators, labels, rule AND due date are all read from the
+   * source row by the database — nothing describing the new task is sent from
+   * here. The done column is derived server-side too. See
+   * `supabase/migrations/20260917000200_complete_task_with_next.sql`.
+   *
+   * Resolves with what the server decided, so the store can adopt it over its
+   * optimistic guess, or `null` from a backend that has no server to ask — the
+   * demo, where the optimistic state IS the truth.
+   */
+  completeTask(
+    taskId: string,
+    toIndex: number,
+    nextId: string
+  ): Promise<CompletedRecurrence | null>;
   deleteTask(taskId: string): Promise<void>;
 
   // Attachment bytes — see `AttachmentOwner` above.

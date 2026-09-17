@@ -550,6 +550,13 @@ export class LocalBackend implements Backend {
     return Promise.resolve();
   }
 
+  /** Null, not a fabricated row: there is no server here to be authoritative,
+   *  and the store's optimistic state IS the demo's truth. Returning a made-up
+   *  position would have the store adopt it over the correct one. */
+  completeTask(): Promise<null> {
+    return Promise.resolve(null);
+  }
+
   deleteTask(): Promise<void> {
     return Promise.resolve();
   }

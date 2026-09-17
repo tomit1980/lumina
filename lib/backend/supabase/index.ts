@@ -35,6 +35,7 @@ import * as workspace from "./workspace";
 import type { AppState } from "../../types";
 import type {
   AttachmentOwner,
+  CompletedRecurrence,
   Backend,
   ChannelAccessPatch,
   ClientInfoPatch,
@@ -422,6 +423,13 @@ export class SupabaseBackend implements Backend {
   }
   async moveTask(taskId: string, toStatus: TaskStatus, toIndex: number): Promise<void> {
     return tasks.moveTask(await this.client(), taskId, toStatus, toIndex);
+  }
+  async completeTask(
+    taskId: string,
+    toIndex: number,
+    nextId: string
+  ): Promise<CompletedRecurrence> {
+    return tasks.completeTask(await this.client(), taskId, toIndex, nextId);
   }
   async deleteTask(taskId: string): Promise<void> {
     return tasks.deleteTask(await this.client(), taskId);

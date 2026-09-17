@@ -43,7 +43,7 @@
 import { fail, requireRows } from "./result";
 import { syncAttachmentLinks } from "./storage";
 import type { LuminaClient } from "./client";
-import type { TaskPatch } from "../types";
+import type { CompletedRecurrence, TaskPatch } from "../types";
 import type { Task, TaskStatus } from "../../types";
 
 /** Postgres `integer`, which is what `move_task(p_index)` takes. The board's
@@ -408,6 +408,55 @@ export async function moveTask(
   if (allowed.data !== true) {
     throw new Error(`${what} failed: your role can't edit tasks`);
   }
+}
+
+/**
+ * Complete a RECURRING task and create its next occurrence, in one transaction.
+ *
+ * Three arguments, and that is the security property rather than an economy:
+ * the successor's title, description, priority, owner, collaborators, labels,
+ * rule AND due date are all read from the source row by the database, and the
+ * done column is derived there too. Nothing describing the new task is sent
+ * from here, so the most this call can produce is a dated copy of a row the
+ * caller can already see and already edit.
+ *
+ * No `has_permission` pre-flight, unlike `moveTask` above. That one exists
+ * because `move_task` is `security invoker` and returns a clean void having
+ * moved nothing when the caller lacks `task.edit` — the false-success shape.
+ * `complete_task_with_next` re-makes every check by hand and RAISES, so the
+ * error is already the truth.
+ */
+export async function completeTask(
+  client: LuminaClient,
+  taskId: string,
+  toIndex: number,
+  nextId: string
+): Promise<CompletedRecurrence> {
+  const what = "completing that task";
+
+  const { data, error } = await client.rpc("complete_task_with_next", {
+    p_task_id: taskId,
+    // Only to fit int4 — the RPC hands it to `move_task`, which clamps to the
+    // real column length exactly as it does for every other caller.
+    p_index: Math.min(Math.max(0, Math.trunc(toIndex)), INT4_MAX),
+    p_next_id: nextId,
+  });
+
+  if (error) fail(what, error);
+
+  // A `returns table` function comes back as an array. An empty one would mean
+  // the function returned without a row, which it has no path to do — but
+  // reading `[0]` of nothing would hand the store `undefined` and it would
+  // adopt that over a correct optimistic value.
+  const row = data?.[0];
+  if (!row) throw new Error(`${what} failed: the server returned nothing`);
+
+  return {
+    position: row.next_position,
+    assigneeId: row.next_assignee,
+    dueDate: Date.parse(row.next_due as string),
+    created: row.created,
+  };
 }
 
 /**

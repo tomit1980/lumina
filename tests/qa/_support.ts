@@ -416,6 +416,14 @@ export class FailingBackend extends EventBackend {
     return this.run("moveTask", undefined);
   }
 
+  /** Null on success, the same as `LocalBackend`: the demo has no server to be
+   *  authoritative. What this exists for is the FAILURE — the store must refuse
+   *  a recurring completion rather than quietly downgrading it to an ordinary
+   *  one, and that is only observable by making this reject. */
+  override completeTask(): Promise<null> {
+    return this.run("completeTask", null);
+  }
+
   override deleteTask(): Promise<void> {
     return this.run("deleteTask", undefined);
   }
@@ -586,6 +594,7 @@ export type FailingOp =
   | "createTask"
   | "updateTask"
   | "moveTask"
+  | "completeTask"
   | "deleteTask"
   | "createChannel"
   | "setChannelAccess"
