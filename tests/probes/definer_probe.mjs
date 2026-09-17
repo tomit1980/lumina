@@ -69,6 +69,15 @@ const SHUT = [
  *  stronger for it: no dm row may appear. */
 const WRITER = "find_or_create_dm";
 
+/** `complete_task_with_next` (20260917000200) is the seventeenth, and the one
+ *  that matters most here: it is the only `security definer` function in this
+ *  schema that INSERTS past `tasks_insert`, deliberately, so that a recurring
+ *  task keeps recurring for somebody who cannot create tasks. A signed-out
+ *  caller must not reach its body at all. Its other hardening — definer,
+ *  empty search_path, one overload, the grant pair — is asserted in SQL by
+ *  20260917000300, because none of it is visible through PostgREST. */
+const RECURRENCE = "complete_task_with_next";
+
 let failures = 0;
 let checks = 0;
 const check = (label, pass, detail = "") => {
@@ -113,6 +122,26 @@ async function main() {
     after.data.length === before.data.length,
     `${before.data.length} -> ${after.data.length}`
   );
+
+  // The recurrence RPC, which can create a row. Refused at the door, and the
+  // consequence checked rather than only the error code.
+  {
+    const before = await svc.from("tasks").select("id");
+    must("count tasks before", before);
+    const { data, error } = await anon.rpc(RECURRENCE, {
+      p_task_id: "t_probe_nope",
+      p_index: 0,
+      p_next_id: `t_probe_${stamp}`,
+    });
+    check(`anon is refused at the door by ${RECURRENCE}()`, shutOut(error), describe(error, data));
+    const after = await svc.from("tasks").select("id");
+    must("count tasks after", after);
+    check(
+      `${RECURRENCE}() created no task for a signed-out caller`,
+      after.data.length === before.data.length,
+      `${before.data.length} -> ${after.data.length}`
+    );
+  }
 
   // CONTROL 1 — a function closed to anon in an EARLIER migration. If this
   // one ever reads as open, the detector is wrong about what "closed" looks
