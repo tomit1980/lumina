@@ -158,6 +158,46 @@ export function nextDueDate(
   return null;
 }
 
+/**
+ * The rule a save should write, given the rule the task already had.
+ *
+ * THE TIMEZONE IS CAPTURED ONCE AND THEN PRESERVED, and this branch is the
+ * whole of that policy. It reads `previous`, never the browser, for a task
+ * that already repeats: reading the browser on every save would silently move
+ * a colleague's series each time somebody edited a due date from another
+ * country. Turning recurrence off and on again is the explicit way to
+ * re-capture it, and the only way.
+ *
+ * THE ANCHOR DAY IS THE OPPOSITE, on purpose: re-derived on every save,
+ * because it tracks the due date a human typed. It is read in the SERIES'
+ * zone rather than the browser's, because that is the calendar the SQL does
+ * its month arithmetic in — a due date that is the 1st in London can be the
+ * 2nd in Sydney, and the anchor has to mean the same thing on both sides.
+ *
+ * It is never derived from a CLAMPED occurrence: the database copies the
+ * anchor to each successor rather than recomputing it, which is what lets a
+ * monthly task return to the 31st after a February.
+ */
+export function ruleForSave(opts: {
+  previous: RepeatRule | null;
+  unit: "never" | RepeatUnit;
+  interval: number | string;
+  dueDate: number | null;
+  browserZone: string;
+}): RepeatRule | null {
+  if (opts.unit === "never" || opts.dueDate === null) return null;
+  const timeZone = opts.previous?.timeZone ?? opts.browserZone;
+  if (!isZone(timeZone)) return null;
+  const interval = Math.min(
+    999,
+    Math.max(1, Math.trunc(Number(opts.interval)) || 1)
+  );
+  const anchorDay =
+    opts.unit === "month" ? new TZDate(opts.dueDate, timeZone).getDate() : null;
+  const candidate: RepeatRule = { unit: opts.unit, interval, anchorDay, timeZone };
+  return isRepeatRule(candidate) ? candidate : null;
+}
+
 const ORDINAL = (n: number): string => {
   const rem100 = n % 100;
   if (rem100 >= 11 && rem100 <= 13) return `${n}th`;

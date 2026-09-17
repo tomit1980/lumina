@@ -4,11 +4,12 @@ import * as React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { format, isPast, isToday } from "date-fns";
-import { CalendarDays, Circle, CircleCheck, Flag } from "lucide-react";
+import { CalendarDays, Circle, CircleCheck, Flag, Repeat } from "lucide-react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PeopleStack } from "@/components/kanban/people-stack";
 import { taskEvent } from "@/lib/calendar";
+import { describeRepeat } from "@/lib/recurrence";
 import { isDoneStatus } from "@/lib/statuses";
 import { useStore } from "@/lib/store";
 import { PRIORITY_META, type Task, type User } from "@/lib/types";
@@ -128,6 +129,17 @@ export function TaskCardContent({
               {isToday(task.dueDate) ? "Today" : format(task.dueDate, "MMM d")}
               {timeLabel && ` · ${timeLabel}`}
               {overdue && " · overdue"}
+              {/* No change to the row's condition above: a recurring task
+                  always has a due date (`tasks_repeat_needs_due_date`), so
+                  this chip is always inside an already-rendered row. The icon
+                  is decorative; the sentence beside it is what a screen reader
+                  reads. */}
+              {task.repeat && (
+                <>
+                  <Repeat className="size-3 shrink-0" aria-hidden="true" />
+                  <span className="sr-only">{describeRepeat(task.repeat)}</span>
+                </>
+              )}
             </span>
           ) : (
             <span />

@@ -42,9 +42,12 @@ import {
   PRIORITY_META,
   type Attachment,
   type Priority,
+  type RepeatRule,
+  type RepeatUnit,
   type Task,
   type TaskStatus,
 } from "@/lib/types";
+import { describeRepeat, ruleForSave } from "@/lib/recurrence";
 import { cn } from "@/lib/utils";
 
 interface FormState {
@@ -60,6 +63,8 @@ interface FormState {
   startTime: string;
   /** Minutes, as a Select string. */
   duration: string;
+  repeatUnit: "never" | RepeatUnit;
+  repeatEvery: string;
   /** "none" or minutes-before as a Select string. */
   reminder: string;
   labels: string[];
@@ -84,6 +89,13 @@ const DURATION_OPTIONS = [
   { value: "90", label: "1.5 hours" },
   { value: "120", label: "2 hours" },
 ];
+
+const REPEAT_OPTIONS = [
+  { value: "never", label: "Never", plural: "Never" },
+  { value: "day", label: "Day", plural: "Days" },
+  { value: "week", label: "Week", plural: "Weeks" },
+  { value: "month", label: "Month", plural: "Months" },
+] as const;
 
 const REMINDER_OPTIONS = [
   { value: "none", label: "No reminder" },
@@ -163,6 +175,8 @@ export function TaskDialog() {
         dueDate: editing.dueDate ? format(editing.dueDate, "yyyy-MM-dd") : "",
         startTime: editing.startTime ?? "",
         duration: String(editing.durationMinutes ?? 60),
+        repeatUnit: editing.repeat?.unit ?? "never",
+        repeatEvery: String(editing.repeat?.interval ?? 1),
         reminder:
           editing.reminderMinutes == null ? "none" : String(editing.reminderMinutes),
         labels: editing.labels,
@@ -185,6 +199,8 @@ export function TaskDialog() {
         dueDate: "",
         startTime: "",
         duration: "60",
+        repeatUnit: "never",
+        repeatEvery: "1",
         reminder: "none",
         labels: [],
         attachments: [],
@@ -218,6 +234,21 @@ export function TaskDialog() {
     setForm((f) => (f && !readOnly ? { ...f, [key]: value } : f));
 
   // Scheduling a time only makes sense with a date to hang it on.
+  // What the helper line describes — the rule as the form currently stands.
+  // Zone is irrelevant to the wording, so a placeholder keeps this off the
+  // capture path entirely.
+  const previewRule: RepeatRule | null =
+    form.repeatUnit === "never"
+      ? null
+      : {
+          unit: form.repeatUnit,
+          interval: Math.min(999, Math.max(1, Math.trunc(Number(form.repeatEvery)) || 1)),
+          anchorDay:
+            form.repeatUnit === "month" && form.dueDate
+              ? new Date(`${form.dueDate}T00:00:00`).getDate()
+              : null,
+          timeZone: "UTC",
+        };
   const canSchedule = !!form.dueDate;
   const hasTime = canSchedule && !!form.startTime;
 
@@ -310,6 +341,28 @@ export function TaskDialog() {
     ) {
       void Notification.requestPermission().catch(() => {});
     }
+    // THE TIMEZONE IS CAPTURED ONCE AND THEN PRESERVED. The branch is on the
+    // PREVIOUS rule, never on the browser: reading the zone here on every save
+    // would silently move a colleague's series every time somebody edited a
+    // due date from another country. Turning recurrence off and on again is
+    // the explicit way to re-capture it.
+    //
+    // The anchor day is the opposite, on purpose: it is re-derived from the
+    // due date on every save, because it tracks what a human typed. It is
+    // never derived from a clamped occurrence -- the RPC copies it rather than
+    // recomputing it, which is what lets a monthly task return to the 31st.
+    const dueMs = form.dueDate ? new Date(`${form.dueDate}T00:00:00`).getTime() : null;
+    // The capture-once-then-preserve policy lives in lib/recurrence.ts, where
+    // it is a pure function with tests that run the browser in a different
+    // zone from the series. Inline here it could not be tested without driving
+    // the whole dialog.
+    const repeat = ruleForSave({
+      previous: editing?.repeat ?? null,
+      unit: form.repeatUnit,
+      interval: form.repeatEvery,
+      dueDate: dueMs,
+      browserZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
     const payload = {
       title,
       description: form.description.trim(),
@@ -323,6 +376,7 @@ export function TaskDialog() {
       startTime,
       durationMinutes: startTime ? Number(form.duration) : null,
       reminderMinutes,
+      repeat,
       // Labels are disabled in the UI; preserve any existing values untouched.
       labels: form.labels,
       attachments: form.attachments,
@@ -648,15 +702,63 @@ export function TaskDialog() {
                 </Select>
               </div>
             </div>
+            {/* Repeats. Two controls rather than a preset list, because a
+                preset cannot round-trip "every 2 weeks" and would need a
+                hidden sixth state for "off". "Never" IS how you turn it off,
+                the same way `reminder: "none"` already works. */}
+            <div className="grid grid-cols-3 gap-3 border-t pt-2">
+              <div className="grid gap-1.5">
+                <Label
+                  htmlFor="task-repeat-every"
+                  className="text-[11px] text-muted-foreground"
+                >
+                  Repeats every
+                </Label>
+                <Input
+                  id="task-repeat-every"
+                  type="number"
+                  min={1}
+                  max={999}
+                  disabled={readOnly || !canSchedule || form.repeatUnit === "never"}
+                  value={form.repeatEvery}
+                  onChange={(e) => set("repeatEvery", e.target.value)}
+                />
+              </div>
+              <div className="col-span-2 grid gap-1.5">
+                <Label className="text-[11px] text-muted-foreground">Repeat unit</Label>
+                <Select
+                  value={form.repeatUnit}
+                  disabled={readOnly || !canSchedule}
+                  onValueChange={(v) => set("repeatUnit", v as "never" | RepeatUnit)}
+                >
+                  {/* Radix renders a <button>, which a neighbouring <Label>
+                      does not name. Without this the control is anonymous to a
+                      screen reader — see tests/qa/accessible-names.test.ts. */}
+                  <SelectTrigger aria-label="Repeat unit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {REPEAT_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {Number(form.repeatEvery) === 1 ? o.label : o.plural}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             {!canSchedule ? (
               <p className="text-[11px] text-muted-foreground">
-                Add a due date to schedule a time and reminder.
+                Add a due date to schedule a time, a reminder, or a repeat.
               </p>
             ) : (
               <p className="text-[11px] text-muted-foreground">
-                {hasTime
-                  ? "Reminders pop up in Lumina with a sound and a desktop notification."
-                  : "Set a start time to enable duration and reminders."}
+                {form.repeatUnit !== "never"
+                  ? `${describeRepeat(previewRule)}. Completing it creates the next one, dated from the due date.`
+                  : hasTime
+                    ? "Reminders pop up in Lumina with a sound and a desktop notification."
+                    : "Set a start time to enable duration and reminders."}
               </p>
             )}
 

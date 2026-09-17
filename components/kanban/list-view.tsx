@@ -13,12 +13,13 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { format, isPast, isToday } from "date-fns";
-import { CalendarDays, Circle, CircleCheck, Flag, GripVertical } from "lucide-react";
+import { CalendarDays, Circle, CircleCheck, Flag, GripVertical, Repeat } from "lucide-react";
 import { toast } from "sonner";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PeopleStack } from "@/components/kanban/people-stack";
 import { taskEvent } from "@/lib/calendar";
+import { describeRepeat } from "@/lib/recurrence";
 import { COLUMN_PREFIX, useTaskDnd } from "@/components/kanban/use-task-dnd";
 import { useUI } from "@/components/ui-context";
 import { firstOpenStatus, isDoneStatus, sortedStatuses } from "@/lib/statuses";
@@ -93,6 +94,12 @@ function TaskRowContent({
           <CalendarDays className="size-3" />
           {isToday(task.dueDate) ? "Today" : format(task.dueDate, "MMM d")}
           {timeLabel && ` · ${timeLabel}`}
+          {task.repeat && (
+            <>
+              <Repeat className="size-3 shrink-0" aria-hidden="true" />
+              <span className="sr-only">{describeRepeat(task.repeat)}</span>
+            </>
+          )}
         </span>
       )}
       {assignee || collaborators.length > 0 ? (

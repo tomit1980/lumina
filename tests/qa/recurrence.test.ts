@@ -16,6 +16,7 @@ import {
   isRepeatRule,
   nextDueDate,
   repeats,
+  ruleForSave,
   toRepeatRule,
   type RepeatRule,
 } from "@/lib/recurrence";
@@ -262,5 +263,92 @@ describe("the small helpers", () => {
     expect(describeRepeat(rule("week", 2))).toBe("Every 2 weeks");
     expect(describeRepeat(rule("month", 1, SYD, 31))).toBe("Every month on the 31st");
     expect(describeRepeat(rule("month", 3, SYD, 1))).toBe("Every 3 months on the 1st");
+  });
+});
+
+describe("ruleForSave — captured once, then preserved (D8)", () => {
+  // Every case here runs as though the browser were in London while the series
+  // was defined in Sydney. That is the whole point: somebody editing a task
+  // from another country must not move a colleague's series.
+  const LONDON = "Europe/London";
+  const existing: RepeatRule = { unit: "week", interval: 1, anchorDay: null, timeZone: SYD };
+
+  it("captures the browser's zone when recurrence is switched on", () => {
+    const r = ruleForSave({
+      previous: null, unit: "week", interval: 1,
+      dueDate: at(LONDON, "2026-06-10"), browserZone: LONDON,
+    });
+    expect(r!.timeZone).toBe(LONDON);
+  });
+
+  it("PRESERVES the zone when only the due date changes", () => {
+    const r = ruleForSave({
+      previous: existing, unit: "week", interval: 1,
+      dueDate: at(SYD, "2026-07-20"), browserZone: LONDON,
+    });
+    expect(r!.timeZone).toBe(SYD);
+  });
+
+  it("PRESERVES the zone when only the interval or unit changes", () => {
+    const r = ruleForSave({
+      previous: existing, unit: "day", interval: 3,
+      dueDate: at(SYD, "2026-06-10"), browserZone: LONDON,
+    });
+    expect(r).toEqual({ unit: "day", interval: 3, anchorDay: null, timeZone: SYD });
+  });
+
+  it("captures a NEW zone when recurrence is turned off and on again", () => {
+    const off = ruleForSave({
+      previous: existing, unit: "never", interval: 1,
+      dueDate: at(SYD, "2026-06-10"), browserZone: LONDON,
+    });
+    expect(off).toBeNull();
+    const back = ruleForSave({
+      previous: off, unit: "week", interval: 1,
+      dueDate: at(LONDON, "2026-06-10"), browserZone: LONDON,
+    });
+    expect(back!.timeZone).toBe(LONDON);
+  });
+
+  it("updates the monthly anchor when the due date changes, reading it in the SERIES' zone", () => {
+    const monthly: RepeatRule = { unit: "month", interval: 1, anchorDay: 5, timeZone: SYD };
+    const r = ruleForSave({
+      previous: monthly, unit: "month", interval: 1,
+      dueDate: at(SYD, "2026-08-31"), browserZone: LONDON,
+    });
+    expect(r).toEqual({ unit: "month", interval: 1, anchorDay: 31, timeZone: SYD });
+  });
+
+  it("clears the anchor when a monthly rule becomes weekly", () => {
+    const monthly: RepeatRule = { unit: "month", interval: 1, anchorDay: 31, timeZone: SYD };
+    const r = ruleForSave({
+      previous: monthly, unit: "week", interval: 1,
+      dueDate: at(SYD, "2026-08-31"), browserZone: LONDON,
+    });
+    expect(r!.anchorDay).toBeNull();
+  });
+
+  it("drops the rule when the due date is cleared", () => {
+    // The database's `tasks_repeat_needs_due_date` is a backstop; this is the
+    // write path honouring it rather than hitting it.
+    expect(
+      ruleForSave({ previous: existing, unit: "week", interval: 1, dueDate: null, browserZone: LONDON })
+    ).toBeNull();
+  });
+
+  it("and the preserved series still computes the same dates it always did", () => {
+    // The point of preserving the zone: after an edit from another country,
+    // the series is unchanged, so TS and SQL still agree about it.
+    const edited = ruleForSave({
+      previous: existing, unit: "week", interval: 1,
+      dueDate: at(SYD, "2026-06-01"), browserZone: LONDON,
+    })!;
+    const next = nextDueDate(at(SYD, "2026-06-01"), edited, at(SYD, "2026-06-22"));
+    expect(wall(next, SYD)).toBe("2026-06-29 00:00");
+  });
+
+  it("clamps an out-of-range interval to what the database accepts", () => {
+    expect(ruleForSave({ previous: null, unit: "day", interval: 0, dueDate: at(SYD, "2026-06-10"), browserZone: SYD })!.interval).toBe(1);
+    expect(ruleForSave({ previous: null, unit: "day", interval: 5000, dueDate: at(SYD, "2026-06-10"), browserZone: SYD })!.interval).toBe(999);
   });
 });
