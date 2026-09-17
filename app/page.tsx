@@ -55,6 +55,13 @@ export default function HomePage() {
 
   const firstName = currentUser.name.split(" ")[0];
   const mayEditTasks = can("task.edit");
+  // The done column, read from the workspace's own statuses rather than
+  // assumed to be the literal "done". This was the last hardcoded status id on
+  // a write path: a workspace that renamed or re-created its done column got
+  // either a foreign-key violation against `tasks_status_fkey` or a status
+  // change that completed nothing. `components/kanban/board.tsx` has done it
+  // this way since the statuses table landed; this is the straggler.
+  const doneStatusId = state.statuses.find((s) => s.isDone)?.id;
   const teamChannel = state.channels.find((c) => c.isTeam);
 
   // `isMine` alone doesn't ask whether the user can still see the task's
@@ -221,7 +228,7 @@ export default function HomePage() {
                         i > 0 && "border-t"
                       )}
                     >
-                      {mayEditTasks && (
+                      {mayEditTasks && doneStatusId && (
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
@@ -232,7 +239,7 @@ export default function HomePage() {
                                 // also refuses viewer-only members of a
                                 // restricted project — don't celebrate a write
                                 // that was turned down.
-                                if (!(await updateTask(task.id, { status: "done" }))) {
+                                if (!(await updateTask(task.id, { status: doneStatusId }))) {
                                   return;
                                 }
                                 toast.success("Nice — task completed!", {
