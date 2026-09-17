@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { backendKind, createBackend } from "./backend";
 import { fallbackStatus, firstOpenStatus, isDoneStatus } from "./statuses";
+import { nextDueDate, repeats } from "./recurrence";
 import {
   DEFAULT_CURRENCY,
   isIsoDate,
@@ -16,6 +17,7 @@ import type {
   Backend,
   ChannelAccessPatch,
   ClientInfoPatch,
+  CompletedRecurrence,
   ProjectAccessPatch,
   ProjectPatch,
   RealtimeEvent,
@@ -507,6 +509,60 @@ export function canUserSeeProject(
   if (project.createdBy === userId) return true;
   if (resourceMemberLevel(project.members, userId) !== null) return true;
   return roleHas(roleOfUser(s, userId), "members.manage");
+}
+
+/**
+ * The task that completing `task0` produces, or null if it produces none.
+ *
+ * THE ONE PLACE THAT DECIDES. `updateTask` and `moveTask` each detect
+ * completion separately — there is no single chokepoint in this store — so both
+ * ask this, and cannot drift into disagreeing about what repeats.
+ *
+ * It mirrors what `complete_task_with_next` does server-side so the optimistic
+ * card matches the row that lands. The server is authoritative about the date,
+ * the position and the owner, and `ok` adopts all three; this only has to be
+ * close enough that nothing visibly jumps.
+ *
+ * Deliberately does NOT consult `task.create`. The recurrence was authorised
+ * when the rule was set up, and the person closing the card is not the person
+ * being asked for permission. The database agrees — see the migration.
+ */
+export function nextOccurrenceOf(state: AppState, task0: Task): Task | null {
+  if (!repeats(task0)) return null;
+  const due = nextDueDate(task0.dueDate, task0.repeat);
+  if (due === null) return null;
+  const column = firstOpenStatus(state.statuses);
+  if (!column) return null;
+  const project = state.projects.find((p) => p.id === task0.projectId);
+  if (!project) return null;
+
+  // `tasks_check_assignee` fires on INSERT and refuses an owner who cannot see
+  // the project. Dropping them here and there is what stops somebody else's
+  // lost access from failing this user's own completion.
+  const assigneeId =
+    task0.assigneeId && canUserSeeProject(state, project, task0.assigneeId)
+      ? task0.assigneeId
+      : null;
+  const collaboratorIds = normaliseCollaborators(
+    assigneeId,
+    task0.collaboratorIds.filter((id) => canUserSeeProject(state, project, id))
+  );
+
+  return {
+    ...task0,
+    id: uid("t"),
+    status: column,
+    dueDate: due,
+    assigneeId,
+    collaboratorIds,
+    // Attachments are evidence of the occurrence that just finished.
+    attachments: [],
+    order: state.tasks.filter(
+      (t) => t.projectId === task0.projectId && t.status === column
+    ).length,
+    createdAt: Date.now(),
+    createdBy: state.currentUserId,
+  };
 }
 
 /** Drops the owner and any duplicates from a collaborator list, keeping
@@ -2996,6 +3052,19 @@ export function StoreProvider({
       // The collaborator list the guards just approved is part of the write,
       // so the backend gets the same resolved patch the optimistic copy did.
       const resolved: TaskPatch = { ...patch, collaboratorIds: resultingCollaborators };
+      // Lifted out of the patch closure so the feed line and the regeneration
+      // share ONE decision: inside, `prev.status` is read from whatever state
+      // holds at patch time, which in the window between this call and the
+      // update can differ from `task0`. Two different answers here would mean
+      // a "completed" line with no successor, or the reverse.
+      const completesNow =
+        patch.status !== undefined &&
+        isDoneStatus(s0.statuses, patch.status) &&
+        !isDoneStatus(s0.statuses, task0.status);
+      // Everything except the status; the status change is the completion, and
+      // the completion is the RPC's job.
+      const { status: _completedInto, ...editsOnly } = resolved;
+      const nextOccurrence = completesNow ? nextOccurrenceOf(s0, task0) : null;
       return commit(
         (s) => {
           const prev = s.tasks.find((t) => t.id === taskId);
@@ -3003,13 +3072,16 @@ export function StoreProvider({
           // The done column, whatever it is called — this used to test the
           // literal "done", so a renamed column silently stopped producing
           // the feed's "completed" line.
-          const completed =
-            patch.status !== undefined &&
-            isDoneStatus(s.statuses, patch.status) &&
-            !isDoneStatus(s.statuses, prev.status);
+          const completed = completesNow;
           // Same as `updateProject`: the removal list is an instruction to
           // the backend, not a field of the Task.
-          const next: Task = { ...prev, ...withoutRemovals(resolved) };
+          const next: Task = {
+            ...prev,
+            ...withoutRemovals(resolved),
+            // The rule leaves the finished occurrence with the same write that
+            // finishes it, exactly as the database does it.
+            ...(nextOccurrence ? { repeat: null } : {}),
+          };
           const assignmentTexts = assignmentActivityTexts(s, prev, next);
           let activities = completed
             ? activity(s, "task", `completed “${prev.title}”`, { projectId: next.projectId })
@@ -3017,14 +3089,53 @@ export function StoreProvider({
           for (const text of assignmentTexts) {
             activities = activity({ ...s, activities }, "task", text, { projectId: next.projectId });
           }
+          const mapped = s.tasks.map((t) => (t.id === taskId ? next : t));
           return {
             ...s,
-            tasks: s.tasks.map((t) => (t.id === taskId ? next : t)),
+            tasks: nextOccurrence ? [...mapped, nextOccurrence] : mapped,
             activities,
           };
         },
-        () => backend.updateTask(taskId, resolved),
-        { ok: () => true, failed: false, describe: `save “${task0.title}”` }
+        // TWO calls when this completes a recurring task, and the order is the
+        // point. The edits go first; the completion — which is the RPC, and
+        // which carries the successor with it in one transaction — goes
+        // second. So the reachable partial failure is "saved but not
+        // completed", which loses nothing and is fixed by clicking complete
+        // again. The dangerous one, "completed but not regenerated", has no
+        // path: those two share a transaction.
+        async (): Promise<CompletedRecurrence | null | void> => {
+          if (!nextOccurrence) return backend.updateTask(taskId, resolved);
+          if (Object.keys(withoutRemovals(editsOnly)).length > 0) {
+            await backend.updateTask(taskId, editsOnly);
+          }
+          return backend.completeTask(taskId, Number.MAX_SAFE_INTEGER, nextOccurrence.id);
+        },
+        {
+          ok: (result) => {
+            if (nextOccurrence && result) {
+              const landed = result as CompletedRecurrence;
+              updateLanded((st) => ({
+                ...st,
+                tasks: st.tasks.map((t) =>
+                  t.id === nextOccurrence.id
+                    ? {
+                        ...t,
+                        order: landed.position,
+                        dueDate: landed.dueDate,
+                        assigneeId: landed.assigneeId,
+                      }
+                    : t
+                ),
+              }));
+            }
+            return true;
+          },
+          failed: false,
+          describe: `save “${task0.title}”`,
+          ...(nextOccurrence
+            ? { undone: "The task was saved but not completed — try completing it again." }
+            : {}),
+        }
       );
     };
 
@@ -3038,6 +3149,13 @@ export function StoreProvider({
         return Promise.resolve(false);
       }
       if (!s0 || !task0) return Promise.resolve(false);
+      // Computed BEFORE `commit`, never inside the patch closure: the closure
+      // is a state updater that may run more than once, and `uid()` in there
+      // would mint a different id each time. `createProject` builds its tasks
+      // the same way, for the same reason.
+      const completesNow =
+        isDoneStatus(s0.statuses, toStatus) && !isDoneStatus(s0.statuses, task0.status);
+      const next = completesNow ? nextOccurrenceOf(s0, task0) : null;
       return commit(
         (s) => {
         const task = s.tasks.find((t) => t.id === taskId);
@@ -3069,18 +3187,54 @@ export function StoreProvider({
             .sort((a, b) => a.order - b.order);
           sourceColumn.forEach((t, i) => reordered.set(t.id, { ...t, order: i }));
         }
-        const completed =
-          isDoneStatus(s0.statuses, toStatus) && !isDoneStatus(s0.statuses, task0.status);
+        // The rule moves off the finished card and onto the new one, exactly
+        // as the database does it — a finished card is a record of work, not a
+        // schedule, and leaving the rule on it would let a reopen-and-
+        // recomplete mint a second occurrence.
+        const moved = s.tasks.map((t) => reordered.get(t.id) ?? t);
+        const withNext = next
+          ? [...moved.map((t) => (t.id === taskId ? { ...t, repeat: null } : t)), next]
+          : moved;
         return {
           ...s,
-          tasks: s.tasks.map((t) => reordered.get(t.id) ?? t),
-          activities: completed
+          tasks: withNext,
+          activities: completesNow
             ? activity(s, "task", `completed “${task.title}”`, { projectId: task.projectId })
             : s.activities,
         };
         },
-        () => backend.moveTask(taskId, toStatus, toIndex),
-        { ok: () => true, failed: false, describe: `move “${task0.title}”` }
+        (): Promise<CompletedRecurrence | null | void> =>
+          next
+            ? backend.completeTask(taskId, toIndex, next.id)
+            : backend.moveTask(taskId, toStatus, toIndex),
+        {
+          ok: (result) => {
+            // The server owns the date (it owns the calendar arithmetic), the
+            // position (a trigger assigns it) and the owner (it drops anyone
+            // who has lost sight of the project). `LocalBackend` returns null
+            // — there is no server there to be authoritative — and the
+            // optimistic values stand.
+            if (next && result) {
+              const landed = result as CompletedRecurrence;
+              updateLanded((st) => ({
+                ...st,
+                tasks: st.tasks.map((t) =>
+                  t.id === next.id
+                    ? {
+                        ...t,
+                        order: landed.position,
+                        dueDate: landed.dueDate,
+                        assigneeId: landed.assigneeId,
+                      }
+                    : t
+                ),
+              }));
+            }
+            return true;
+          },
+          failed: false,
+          describe: `move “${task0.title}”`,
+        }
       );
     };
 
